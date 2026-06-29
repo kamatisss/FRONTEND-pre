@@ -1,0 +1,96 @@
+@import "tailwindcss";
+
+/* ═══════════════════════════════════════════════════════════════════
+   Garden Studio Design Intelligence — Tailwind v4 @theme block
+   Source of truth: DesignIntelligence/design-config.json
+   These CSS custom properties auto-generate every utility class:
+     --color-brand-emerald → bg-brand-emerald / text-brand-emerald /
+                             border-brand-emerald / ring-brand-emerald
+     --text-gs-md          → text-gs-md
+     --radius-gs-xl        → rounded-gs-xl
+     --shadow-emerald-sm   → shadow-emerald-sm
+     --tracking-gs-tight   → tracking-gs-tight
+     --font-sans           → font-sans
+═══════════════════════════════════════════════════════════════════ */
+
+@theme {
+  /* ─── Brand Colors ────────────────────────────────────────────── */
+  --color-brand-emerald:         #10b981;
+  --color-brand-emerald-dark:    #059669;
+  --color-brand-emerald-light:   #34d399;
+  --color-brand-emerald-muted:   #a7f3d0;
+  --color-brand-emerald-surface: #ecfdf5;
+  --color-brand-emerald-deep:    #064e3b;
+  --color-brand-emerald-deeper:  #022c22;
+
+  /* ─── Neutral Palette ─────────────────────────────────────────── */
+  --color-neutral-ink:       #0f172a;
+  --color-neutral-ink-light: #1e293b;
+  --color-neutral-mid:       #475569;
+  --color-neutral-muted:     #64748b;
+  --color-neutral-subtle:    #94a3b8;
+  --color-neutral-border:    #e2e8f0;
+  --color-neutral-divider:   #f1f5f9;
+  --color-neutral-bg:        #f8fafc;
+  --color-neutral-surface:   #ffffff;
+
+  /* ─── Dark Scale ──────────────────────────────────────────────── */
+  --color-dark-base:     #020617;
+  --color-dark-elevated: #0f172a;
+  --color-dark-card:     #111827;
+  --color-dark-card-2:   #1e293b;
+  --color-dark-border:   #1e293b;
+  --color-dark-border-2: #334155;
+
+  /* ─── Semantic ────────────────────────────────────────────────── */
+  --color-semantic-success: #10b981;
+  --color-semantic-warning: #f59e0b;
+  --color-semantic-error:   #ef4444;
+  --color-semantic-info:    #3b82f6;
+
+  /* ─── Font Families ───────────────────────────────────────────── */
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+
+  /* ─── Font Sizes (gs- prefix avoids Tailwind default collision) ─ */
+  --text-gs-xs:   12px;
+  --text-gs-sm:   13px;
+  --text-gs-base: 15px;
+  --text-gs-md:   17px;
+  --text-gs-lg:   20px;
+  --text-gs-xl:   24px;
+  --text-gs-2xl:  32px;
+  --text-gs-3xl:  44px;
+  --text-gs-4xl:  60px;
+
+  /* ─── Border Radius (gs- prefix) ─────────────────────────────── */
+  --radius-gs-sm:  8px;
+  --radius-gs-md:  12px;
+  --radius-gs-lg:  16px;
+  --radius-gs-xl:  20px;
+  --radius-gs-2xl: 24px;
+
+  /* ─── Shadows ─────────────────────────────────────────────────── */
+  --shadow-emerald-sm: 0 4px 14px rgba(16,185,129,0.35);
+  --shadow-emerald-lg: 0 8px 30px rgba(16,185,129,0.40);
+  --shadow-dark-xl:    0 32px 80px rgba(0,0,0,0.50);
+
+  /* ─── Letter Spacing (gs- prefix) ────────────────────────────── */
+  --tracking-gs-tighter: -2px;
+  --tracking-gs-tight:   -1.5px;
+  --tracking-gs-normal:  -0.5px;
+  --tracking-gs-wide:    0.5px;
+  --tracking-gs-wider:   1px;
+
+  /* ─── Animations ──────────────────────────────────────────────── */
+  --animate-gs-blink: gs-blink 1.1s step-end infinite;
+}
+
+@keyframes gs-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+html {
+  scroll-behavior: smooth;
+}
