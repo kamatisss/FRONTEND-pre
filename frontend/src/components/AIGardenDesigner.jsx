@@ -1,13 +1,21 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { Sparkles, ArrowLeft, Check, Compass, ShieldAlert, Upload, X, CalendarPlus, Info } from 'lucide-react';
+import { Sparkles, ArrowLeft, Check, Compass, ShieldAlert, Upload, X, CalendarPlus, Info, Cpu, Wrench, RefreshCw, Box, ChevronLeft, ChevronRight } from 'lucide-react';
+import ZonePicker from './ZonePicker';
+import BudgetPicker from './BudgetPicker';
+import PageHero from './ui/PageHero';
+import { color, cardStyle, inputStyle, labelStyle, radius } from './ui/tokens';
+import { useCart } from '../context/CartContext';
+import { lotPlantsToStudioItems } from '../data/sampleGarden';
+import { plantBudgetFromAllIn } from '../data/pricing';
 import ThreeGardenCanvas from './ThreeGardenCanvas';
 import { useDesign } from '../context/DesignContext';
-import { getInventoryItems } from '../services/api';
+import { getInventoryItems, getPricing } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-import { saveGuestDesign, loadGuestDesign, clearGuestDesign } from '../services/guestSession';
+import { saveGuestDesign, loadGuestDesign, loadAiPrefill, clearAiPrefill } from '../services/guestSession';
 import GuestAuthModal from './GuestAuthModal';
+import { useIsPhone, useMediaQuery } from './ui/useMediaQuery';
 
 const LOADING_PHASES = [
   'Analyzing your garden space…',
@@ -79,7 +87,13 @@ export default function AIGardenDesigner() {
   const { dispatch } = useDesign();
   const { user } = useAuth();
 
-  const [budget, setBudget] = useState(5000);
+  // Budget as a range; three designs spread across it. "install" = all-in with our crew,
+  // otherwise plants only (the customer plants them).
+  const [budgetRange, setBudgetRange] = useState({ min: 50000, max: 100000 });
+  const [install, setInstall] = useState(true);
+  const { addToCart } = useCart();
+  const [rates, setRates] = useState(null);   // admin rate card
+  useEffect(() => { getPricing().then(setRates).catch(() => {}); }, []);
   const [inventory, setInventory] = useState([]);
   const [inventoryLoading, setInventoryLoading] = useState(true);
 
@@ -96,9 +110,14 @@ export default function AIGardenDesigner() {
     dispatch({ type: 'RESET' });
     navigate('/studio');
   };
-  const [lotWidth, setLotWidth] = useState(10.0);
-  const [lotLength, setLotLength] = useState(10.0);
-  const [preferredPlants, setPreferredPlants] = useState([]);
+  // Coming from the 3D Studio's "Let AI design it": reuse its yard size and plants
+  const [prefill] = useState(() => (user ? loadAiPrefill() : null));
+  const [prefillNote, setPrefillNote] = useState(!!prefill);
+  useEffect(() => { if (prefill) clearAiPrefill(); }, [prefill]);
+
+  const [lotWidth, setLotWidth] = useState(prefill?.lotWidth || 10.0);
+  const [lotLength, setLotLength] = useState(prefill?.lotLength || 10.0);
+  const [preferredPlants, setPreferredPlants] = useState(prefill?.plantIds || []);
   const [selectedImage, setSelectedImage] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -106,6 +125,14 @@ export default function AIGardenDesigner() {
   const [generatedLayouts, setGeneratedLayouts] = useState([]);
   const [activeLayout, setActiveLayout] = useState(null);
   const [activeView, setActiveView] = useState('3d');
+  const phone = useIsPhone();
+  const touch = useMediaQuery('(pointer: coarse)');
+  // Phones & tablets: the three options are a swipe carousel. Desktop keeps them side by
+  // side, because comparing the three at a glance is the point of this screen.
+  const carousel = useMediaQuery('(max-width: 1023px)');
+  const carouselRef = useRef(null);
+  const previewRef = useRef(null);
+  const [slide, setSlide] = useState(0);
   const [bookingLoading, setBookingLoading] = useState(false);
   const [horizonY, setHorizonY] = useState(0.5);
   const [calibrationMode, setCalibrationMode] = useState(false);
@@ -115,6 +142,12 @@ export default function AIGardenDesigner() {
   const [loadingPhase, setLoadingPhase] = useState(0);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [budgetWarning, setBudgetWarning] = useState('');
+  // Keep-clear zones from the photo: suggested by the AI scan, confirmed by the customer
+  const [zoneScan, setZoneScan] = useState({ status: 'idle', zones: [] });
+  const [keepClear, setKeepClear] = useState([]);
+  const [seed, setSeed] = useState(0);          // "Show other variations"
+  const [notice, setNotice] = useState('');     // e.g. AI unavailable → smart layouts
+  const scanFileRef = React.useRef(null);
 
   // Unlock body scroll for this page (App.css sets body { overflow: hidden } globally)
   useEffect(() => {
@@ -129,7 +162,8 @@ export default function AIGardenDesigner() {
       if (saved?.layouts?.length) {
         setGeneratedLayouts(saved.layouts);
         setActiveLayout(saved.layouts[0]);
-        if (saved.budget) setBudget(saved.budget);
+        if (saved.budgetRange) setBudgetRange(saved.budgetRange);
+        else if (saved.budget) setBudgetRange({ min: saved.budget, max: saved.budget });
         if (saved.lotWidth) setLotWidth(saved.lotWidth);
         if (saved.lotLength) setLotLength(saved.lotLength);
       }
@@ -168,11 +202,15 @@ export default function AIGardenDesigner() {
     }
   }, [preferredPlants, lotWidth, lotLength, inventory]);
 
-  // Pre-flight budget guard: warn if 45% plant allocation is too low for the lot
+  // Pre-flight budget guard: what's left for plants after site prep, materials, delivery and fees
+  const lotAreaNow = Number(lotWidth) * Number(lotLength);
   useEffect(() => {
-    const plantBudget = Number(budget) * 0.45;
     const lotArea = Number(lotWidth) * Number(lotLength);
-    if (!budget || !lotWidth || !lotLength || isNaN(lotArea) || lotArea <= 0) return;
+    if (!budgetRange.max || !lotWidth || !lotLength || isNaN(lotArea) || lotArea <= 0 || !rates) return;
+    // Judge by the top of the range: that's the most the customer will spend
+    const plantBudget = install
+      ? plantBudgetFromAllIn(budgetRange.max, lotArea, rates)
+      : Number(budgetRange.max) - Number(rates.shipping_fee);
     const cheapest = inventory.length > 0
       ? Math.min(...inventory.map(p => Number(p.unit_price)))
       : 200;
@@ -184,7 +222,7 @@ export default function AIGardenDesigner() {
     } else {
       setBudgetWarning('');
     }
-  }, [budget, lotWidth, lotLength, inventory]);
+  }, [budgetRange.max, install, lotWidth, lotLength, inventory, rates]);
 
   useEffect(() => {
     if (!loading) return;
@@ -201,23 +239,55 @@ export default function AIGardenDesigner() {
     );
   };
 
+  const authHeaders = () => {
+    try {
+      const tokens = JSON.parse(localStorage.getItem('authTokens') || 'null');
+      return tokens?.access ? { Authorization: `Bearer ${tokens.access}` } : {};
+    } catch { return {}; }
+  };
+
+  // Ask the AI to suggest keep-clear zones; the customer confirms them in ZonePicker.
+  // A failed scan just means the customer marks the zones themselves.
+  const scanZones = async (file) => {
+    scanFileRef.current = file;
+    setZoneScan({ status: 'scanning', zones: [] });
+    setKeepClear([]);
+    try {
+      const form = new FormData();
+      form.append('image', file);
+      const API_BASE_URL = import.meta.env?.VITE_API_BASE_URL || 'http://localhost:8000/api';
+      const res = await axios.post(`${API_BASE_URL}/scan-zones/`, form, { headers: authHeaders() });
+      if (scanFileRef.current !== file) return; // a newer photo replaced this one
+      const zones = res.data.zones || [];
+      setZoneScan({ status: res.data.status || 'failed', zones });
+      setKeepClear([...new Set(zones.map(z => z.zone))]);
+    } catch {
+      if (scanFileRef.current === file) setZoneScan({ status: 'failed', zones: [] });
+    }
+  };
+
   const handleImageChange = (e) => {
     const file = e.target.files[0];
     if (file) {
       setSelectedImage(file);
       setImagePreview(URL.createObjectURL(file));
+      scanZones(file);
     }
   };
 
   const handleRemoveImage = () => {
     if (imagePreview) URL.revokeObjectURL(imagePreview);
+    scanFileRef.current = null;
     setSelectedImage(null);
     setImagePreview(null);
+    setZoneScan({ status: 'idle', zones: [] });
+    setKeepClear([]);
   };
 
-  const handleGenerateDesigns = async (e) => {
-    e.preventDefault();
+  const handleGenerateDesigns = async (e, variationSeed = seed) => {
+    e?.preventDefault?.();
     setLoading(true);
+    setNotice('');
     setError('');
     const API_BASE_URL = import.meta.env?.VITE_API_BASE_URL || 'http://localhost:8000/api';
     const headers = {};
@@ -229,11 +299,15 @@ export default function AIGardenDesigner() {
       } catch (err) { console.error(err); }
     }
     const formData = new FormData();
-    formData.append('budget', Number(budget));
+    formData.append('budget_min', Number(budgetRange.min));
+    formData.append('budget_max', Number(budgetRange.max));
+    formData.append('install', install);
     formData.append('lot_width', Number(lotWidth));
     formData.append('lot_length', Number(lotLength));
     formData.append('preferred_plant_ids', JSON.stringify(preferredPlants));
-    if (selectedImage) formData.append('image', selectedImage);
+    // The photo stays in the browser for the AR view; only the confirmed zones are sent
+    formData.append('keep_clear_zones', JSON.stringify(keepClear));
+    formData.append('seed', variationSeed);
     try {
       const response = await axios.post(`${API_BASE_URL}/generate-layouts/`, formData, { headers });
       if (response.data?.designs) {
@@ -245,9 +319,12 @@ export default function AIGardenDesigner() {
           ),
         }));
         setGeneratedLayouts(validated);
+        setSlide(0);
+        setActiveLayout(null);
+        setNotice(response.data.notice || '');
         if (response.data.budget_warning) setBudgetWarning(response.data.budget_warning);
         if (!user) {
-          saveGuestDesign({ layouts: validated, budget, lotWidth, lotLength });
+          saveGuestDesign({ layouts: validated, budgetRange, lotWidth, lotLength });
         }
       } else {
         throw new Error("Invalid response format");
@@ -259,7 +336,53 @@ export default function AIGardenDesigner() {
     }
   };
 
-  const handleSelectLayout = (layout) => setActiveLayout(layout);
+  const handleSelectLayout = (layout) => {
+    setActiveLayout(layout);
+    if (carousel) setTimeout(() => previewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+  };
+
+  const onCarouselScroll = () => {
+    const el = carouselRef.current;
+    if (!el?.children.length) return;
+    const cards = [...el.children];
+    // Scrolled to the end: the last card counts as shown even if it can't reach the centre
+    if (el.scrollLeft + el.clientWidth >= el.scrollWidth - 4) { setSlide(cards.length - 1); return; }
+    const mid = el.scrollLeft + el.clientWidth / 2;
+    const dist = cards.map(c => Math.abs(c.offsetLeft - el.offsetLeft + c.offsetWidth / 2 - mid));
+    setSlide(dist.indexOf(Math.min(...dist)));
+  };
+  const goToSlide = (i) => {
+    const el = carouselRef.current;
+    const card = el?.children[i];
+    if (!card) return;
+    el.scrollTo({ left: card.offsetLeft - el.offsetLeft - (el.clientWidth - card.offsetWidth) / 2, behavior: 'smooth' });
+  };
+
+  const handleShowVariations = () => {
+    const next = seed + 1;
+    setSeed(next);
+    handleGenerateDesigns(null, next);
+  };
+
+  // Phase B: any design becomes an editable Studio design (unsaved until the customer saves)
+  const handleEditInStudio = (design) => {
+    const w = Number(lotWidth), l = Number(lotLength);
+    dispatch({
+      type: 'LOAD_DESIGN',
+      payload: {
+        designId: null,
+        designName: `${design.design_name} (from AI Designer)`,
+        placedItems: lotPlantsToStudioItems(design.plants || [], inventory, w, l),
+        dimensions: { width: w, length: l, terrainType: 'flat' },
+        depthData: null,
+        originalImageUrl: null,
+        terrainHeight: 1.5,
+        timeOfDay: 14,
+      },
+    });
+    dispatch({ type: 'SET_DESIGN_META', payload: { isDirty: true } });
+    navigate('/studio');
+  };
   const handleReset = () => { setGeneratedLayouts([]); setError(''); setActiveLayout(null); };
 
   // Analyse the uploaded photo's average colour to warm/cool the 3D lighting
@@ -294,13 +417,22 @@ export default function AIGardenDesigner() {
   };
 
   const handleBookDesign = async () => {
+    if (activeLayout && activeLayout.plants && !install) {
+      // Plants only: put this design's plant list in the shop cart
+      (activeLayout.plant_breakdown || []).forEach(row => {
+        const product = inventory.find(p => String(p.id) === String(row.plant_id));
+        if (product) addToCart(product, row.quantity);
+      });
+      navigate('/shop?cart=open');
+      return;
+    }
     if (!user) {
       const context = {
         selectedProfile: activeLayout?.design_name || '',
         estimatedPricing: activeLayout?.total_cost || 0,
         lotWidth: lotWidth,
         lotLength: lotLength,
-        budget: budget,
+        budget: activeLayout?.target_budget || budgetRange.max,
         imagePreview: imagePreview || '/login-hero-bg.png',
       };
       localStorage.setItem('pending_booking_context', JSON.stringify(context));
@@ -327,6 +459,7 @@ export default function AIGardenDesigner() {
         plant_breakdown: activeLayout.plant_breakdown || [],
         dimensions: { width: Number(lotWidth), length: Number(lotLength), horizonY },
         total_cost: activeLayout.total_cost,
+        cost_estimate: activeLayout.cost_estimate || {},
         reference_image_url: referenceImageUrl,
         status: 'draft',
       };
@@ -355,74 +488,10 @@ export default function AIGardenDesigner() {
   };
 
   const styles = {
-    page: {
-      minHeight: '100vh',
-      background: 'linear-gradient(160deg, #F7F3EC 0%, #EAF0E4 60%, #F0EBE0 100%)',
-      fontFamily: "'Inter', system-ui, sans-serif",
-      padding: '2rem 1rem',
-    },
-    container: {
-      maxWidth: '900px',
-      margin: '0 auto',
-    },
-    hero: {
-      position: 'relative',
-      background: 'linear-gradient(135deg, #1A2E1A 0%, #2D4A2D 60%, #1E3A1E 100%)',
-      borderRadius: '24px 24px 0 0',
-      padding: '3rem 2.5rem 5rem',
-      overflow: 'hidden',
-      marginBottom: '-2.5rem',
-    },
-    heroTag: {
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: '6px',
-      background: 'rgba(201,136,58,0.18)',
-      border: '1px solid rgba(201,136,58,0.35)',
-      color: '#C9883A',
-      fontSize: '10px',
-      fontWeight: 700,
-      letterSpacing: '0.12em',
-      textTransform: 'uppercase',
-      padding: '5px 14px',
-      borderRadius: '100px',
-      marginBottom: '1.25rem',
-    },
-    heroTitle: {
-      fontFamily: "'Playfair Display', Georgia, serif",
-      fontSize: 'clamp(2rem, 5vw, 3rem)',
-      fontWeight: 800,
-      color: '#F7F3EC',
-      lineHeight: 1.15,
-      margin: '0 0 0.75rem',
-      letterSpacing: '-0.02em',
-    },
-    heroTitleAccent: {
-      color: '#8FAF7E',
-      fontStyle: 'italic',
-    },
-    heroSub: {
-      color: 'rgba(247,243,236,0.6)',
-      fontSize: '0.9rem',
-      maxWidth: '440px',
-      lineHeight: 1.6,
-      margin: 0,
-    },
-    card: {
-      background: '#FFFFFF',
-      borderRadius: '0 0 24px 24px',
-      padding: '3.5rem 2.5rem 2.5rem',
-      boxShadow: '0 20px 60px rgba(26,46,26,0.1), 0 4px 16px rgba(26,46,26,0.06)',
-    },
-    sectionLabel: {
-      display: 'block',
-      fontSize: '10px',
-      fontWeight: 700,
-      letterSpacing: '0.12em',
-      textTransform: 'uppercase',
-      color: '#8FAF7E',
-      marginBottom: '8px',
-    },
+    page: { minHeight: '100vh', background: color.bg, fontFamily: "'Inter', system-ui, sans-serif", padding: 'clamp(1rem, 4vw, 2rem) 1rem' },
+    container: { maxWidth: '960px', margin: '0 auto' },
+    card: { ...cardStyle, padding: 'clamp(1.25rem, 4vw, 2.25rem)', marginTop: '1.5rem', boxShadow: '0 4px 16px rgba(15,23,42,0.04)' },
+    sectionLabel: { ...labelStyle },
     inputGroup: {
       display: 'flex',
       flexDirection: 'column',
@@ -435,62 +504,41 @@ export default function AIGardenDesigner() {
       left: '14px',
       top: '50%',
       transform: 'translateY(-50%)',
-      color: '#8FAF7E',
+      color: '#64748B',
       fontWeight: 700,
       fontSize: '0.95rem',
       pointerEvents: 'none',
       zIndex: 1,
     },
-    input: {
-      width: '100%',
-      background: '#F7F3EC',
-      border: '1.5px solid #E8E1D4',
-      borderRadius: '12px',
-      padding: '13px 16px',
-      fontSize: '0.95rem',
-      fontWeight: 600,
-      color: '#1A2E1A',
-      outline: 'none',
-      transition: 'border-color 0.2s, box-shadow 0.2s',
-      boxSizing: 'border-box',
-    },
+    input: { ...inputStyle },
     inputWithPrefix: {
       paddingLeft: '28px',
     },
     grid3: {
       display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
       gap: '1.25rem',
       marginBottom: '1.75rem',
     },
     divider: {
       border: 'none',
-      borderTop: '1.5px solid #EDE8DF',
+      borderTop: '1.5px solid #E2E8F0',
       margin: '1.75rem 0',
     },
     uploadZone: {
-      border: '2px dashed #D4CAB8',
+      border: '2px dashed #CBD5E1',
       borderRadius: '14px',
       padding: '2rem',
       textAlign: 'center',
       cursor: 'pointer',
       transition: 'all 0.2s',
-      background: '#FDFAF6',
+      background: '#FFFFFF',
       display: 'block',
     },
-    uploadIcon: {
-      width: '36px',
-      height: '36px',
-      background: 'linear-gradient(135deg, #2D4A2D, #4A7A3A)',
-      borderRadius: '10px',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      margin: '0 auto 12px',
-    },
+    uploadIcon: { width: '36px', height: '36px', background: color.brandSurface, borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px' },
     plantsGrid: {
       display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+      gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
       gap: '10px',
     },
     plantCard: (isSelected) => ({
@@ -499,11 +547,11 @@ export default function AIGardenDesigner() {
       gap: '12px',
       padding: '12px 14px',
       borderRadius: '12px',
-      border: isSelected ? '2px solid #4A7A3A' : '1.5px solid #E8E1D4',
-      background: isSelected ? 'linear-gradient(135deg, #F0F7ED, #EAF4E4)' : '#FDFAF6',
+      border: isSelected ? '2px solid #059669' : '1.5px solid #E2E8F0',
+      background: isSelected ? color.brandSurface : color.white,
       cursor: 'pointer',
       transition: 'all 0.18s',
-      boxShadow: isSelected ? '0 4px 16px rgba(74,122,58,0.15)' : 'none',
+      boxShadow: isSelected ? '0 4px 16px rgba(5,150,105,0.15)' : 'none',
     }),
     plantEmoji: {
       fontSize: '1.5rem',
@@ -515,12 +563,12 @@ export default function AIGardenDesigner() {
     plantName: (isSelected) => ({
       fontWeight: 700,
       fontSize: '0.8rem',
-      color: isSelected ? '#2D4A2D' : '#3A3A3A',
+      color: isSelected ? '#1E293B' : '#334155',
       display: 'block',
     }),
     plantPrice: (isSelected) => ({
       fontSize: '0.72rem',
-      color: isSelected ? '#4A7A3A' : '#9A9080',
+      color: isSelected ? '#059669' : '#94A3B8',
       fontWeight: 600,
       marginTop: '2px',
       display: 'block',
@@ -528,50 +576,15 @@ export default function AIGardenDesigner() {
     plantCheck: {
       width: '18px',
       height: '18px',
-      background: '#4A7A3A',
+      background: '#059669',
       borderRadius: '50%',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
       flexShrink: 0,
     },
-    submitBtn: {
-      width: '100%',
-      padding: '15px 24px',
-      background: 'linear-gradient(135deg, #2D4A2D 0%, #4A7A3A 100%)',
-      color: '#F7F3EC',
-      fontWeight: 700,
-      fontSize: '0.95rem',
-      border: 'none',
-      borderRadius: '14px',
-      cursor: 'pointer',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: '10px',
-      boxShadow: '0 8px 24px rgba(45,74,45,0.25)',
-      transition: 'all 0.2s',
-      marginTop: '1.75rem',
-      letterSpacing: '0.01em',
-    },
-    secondaryBtn: {
-      width: '100%',
-      padding: '15px 24px',
-      background: 'transparent',
-      color: '#2D4A2D',
-      fontWeight: 700,
-      fontSize: '0.95rem',
-      border: '2px solid #2D4A2D',
-      borderRadius: '14px',
-      cursor: 'pointer',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: '10px',
-      transition: 'all 0.2s',
-      marginTop: '1rem',
-      letterSpacing: '0.01em',
-    },
+    submitBtn: { width: '100%', padding: '14px 24px', background: color.brand, color: color.white, fontWeight: 700, fontSize: '0.95rem', border: 'none', borderRadius: `${radius.button}px`, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', boxShadow: '0 4px 14px rgba(16,185,129,0.2)', transition: 'background 0.2s', marginTop: '1.75rem' },
+    secondaryBtn: { width: '100%', padding: '14px 24px', background: color.white, color: color.text, fontWeight: 700, fontSize: '0.95rem', border: `1px solid ${color.border}`, borderRadius: `${radius.button}px`, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', transition: 'border-color 0.2s, color 0.2s', marginTop: '1rem' },
     errorBox: {
       background: '#FEF2F2',
       border: '1.5px solid #FECACA',
@@ -593,8 +606,8 @@ export default function AIGardenDesigner() {
     spinner: {
       width: '56px',
       height: '56px',
-      border: '4px solid #EAF0E4',
-      borderTop: '4px solid #4A7A3A',
+      border: '4px solid #ECFDF5',
+      borderTop: '4px solid #059669',
       borderRadius: '50%',
       animation: 'spin 0.9s linear infinite',
     },
@@ -605,10 +618,10 @@ export default function AIGardenDesigner() {
       marginBottom: '1.75rem',
     },
     resultsTitle: {
-      fontFamily: "'Playfair Display', Georgia, serif",
+      fontFamily: "'Inter', system-ui, sans-serif",
       fontSize: '1.5rem',
       fontWeight: 800,
-      color: '#1A2E1A',
+      color: '#0F172A',
       display: 'flex',
       alignItems: 'center',
       gap: '10px',
@@ -619,7 +632,7 @@ export default function AIGardenDesigner() {
       gap: '6px',
       fontSize: '0.8rem',
       fontWeight: 700,
-      color: '#8FAF7E',
+      color: '#059669',
       background: 'none',
       border: 'none',
       cursor: 'pointer',
@@ -629,47 +642,25 @@ export default function AIGardenDesigner() {
     },
     layoutsGrid: {
       display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+      gridTemplateColumns: 'repeat(auto-fill, minmax(min(260px, 100%), 1fr))',
       gap: '1.25rem',
     },
-    layoutCard: {
-      background: '#FFFFFF',
-      border: '1.5px solid #E8E1D4',
-      borderRadius: '18px',
-      overflow: 'hidden',
-      transition: 'all 0.25s',
-      boxShadow: '0 2px 12px rgba(26,46,26,0.06)',
+    // Swipe carousel: one card per view with the next one peeking in
+    layoutsCarousel: {
+      display: 'flex',
+      gap: '12px',
+      overflowX: 'auto',
+      scrollSnapType: 'x mandatory',
+      scrollbarWidth: 'none',
+      WebkitOverflowScrolling: 'touch',
+      padding: '4px 2px 8px',
+      alignItems: 'stretch',
     },
-    layoutCardTop: {
-      background: 'linear-gradient(135deg, #1A2E1A 0%, #2D4A2D 100%)',
-      padding: '1.5rem',
-    },
-    layoutBadge: {
-      fontSize: '9px',
-      fontWeight: 800,
-      letterSpacing: '0.14em',
-      textTransform: 'uppercase',
-      color: '#8FAF7E',
-      background: 'rgba(143,175,126,0.15)',
-      border: '1px solid rgba(143,175,126,0.25)',
-      borderRadius: '100px',
-      padding: '3px 10px',
-      display: 'inline-block',
-      marginBottom: '10px',
-    },
-    layoutName: {
-      fontFamily: "'Playfair Display', Georgia, serif",
-      fontSize: '1.15rem',
-      fontWeight: 800,
-      color: '#F7F3EC',
-      margin: '0 0 8px',
-    },
-    layoutCost: {
-      fontSize: '1.6rem',
-      fontWeight: 800,
-      color: '#C9883A',
-      fontFamily: "'Playfair Display', Georgia, serif",
-    },
+    layoutCard: { ...cardStyle, overflow: 'hidden', transition: 'transform 0.25s, box-shadow 0.25s', boxShadow: '0 2px 12px rgba(15,23,42,0.05)' },
+    layoutCardTop: { background: color.white, padding: '1.5rem 1.5rem 1rem', borderBottom: `1px solid ${color.divider}` },
+    layoutBadge: { fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: color.brandDeep, background: color.brandSurface, border: `1px solid ${color.brandBorder}`, borderRadius: '100px', padding: '3px 10px', display: 'inline-block', marginBottom: '10px' },
+    layoutName: { fontSize: '1.15rem', fontWeight: 800, color: color.ink, margin: '0 0 6px' },
+    layoutCost: { fontSize: '1.5rem', fontWeight: 800, color: color.ink },
     layoutBody: {
       padding: '1.25rem 1.5rem 1.5rem',
     },
@@ -678,7 +669,7 @@ export default function AIGardenDesigner() {
       fontWeight: 800,
       letterSpacing: '0.12em',
       textTransform: 'uppercase',
-      color: '#9A9080',
+      color: '#94A3B8',
       marginBottom: '10px',
       display: 'block',
     },
@@ -687,42 +678,33 @@ export default function AIGardenDesigner() {
       justifyContent: 'space-between',
       alignItems: 'center',
       padding: '8px 0',
-      borderBottom: '1px solid #F0EBE0',
+      borderBottom: '1px solid #F1F5F9',
     },
     plantItemName: {
       fontSize: '0.8rem',
       fontWeight: 600,
-      color: '#2D2D2D',
+      color: '#1E293B',
     },
     plantItemCoord: {
       fontSize: '0.68rem',
       fontWeight: 600,
-      color: '#9A9080',
-      background: '#F5F0E8',
+      color: '#94A3B8',
+      background: '#F1F5F9',
       padding: '2px 8px',
       borderRadius: '6px',
       fontFamily: 'monospace',
     },
-    selectBtn: {
-      width: '100%',
-      padding: '11px 20px',
-      background: 'linear-gradient(135deg, #2D4A2D 0%, #4A7A3A 100%)',
-      color: '#F7F3EC',
-      fontWeight: 700,
-      fontSize: '0.83rem',
-      border: 'none',
-      borderRadius: '10px',
-      cursor: 'pointer',
-      marginTop: '1.25rem',
-      letterSpacing: '0.02em',
-      transition: 'all 0.18s',
+    selectBtn: { width: '100%', padding: '11px 20px', background: color.brand, color: color.white, fontWeight: 700, fontSize: '0.85rem', border: 'none', borderRadius: `${radius.button}px`, cursor: 'pointer', marginTop: '1.25rem', transition: 'background 0.2s' },
+    carouselArrow: {
+      width: 36, height: 36, borderRadius: '50%', border: `1px solid ${color.border}`, background: color.white,
+      color: color.text, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
     },
     previewPanel: {
       marginTop: '2rem',
-      background: '#F7F3EC',
-      border: '1.5px solid #E8E1D4',
-      borderRadius: '18px',
-      padding: '1.75rem',
+      background: '#F8FAFC',
+      border: `1px solid ${color.border}`,
+      borderRadius: `${radius.card}px`,
+      padding: 'clamp(1rem, 4vw, 1.75rem)',
     },
     previewHeader: {
       display: 'flex',
@@ -733,34 +715,26 @@ export default function AIGardenDesigner() {
       gap: '1rem',
     },
     previewTitle: {
-      fontFamily: "'Playfair Display', Georgia, serif",
+      fontFamily: "'Inter', system-ui, sans-serif",
       fontSize: '1.2rem',
       fontWeight: 800,
-      color: '#1A2E1A',
+      color: '#0F172A',
       margin: '0 0 4px',
     },
     previewSub: {
       fontSize: '0.75rem',
-      color: '#8A7E6E',
+      color: '#64748B',
       margin: 0,
     },
-    previewCostBadge: {
-      background: 'linear-gradient(135deg, #C9883A, #D4A860)',
-      color: '#FFFFFF',
-      fontWeight: 800,
-      fontSize: '0.85rem',
-      padding: '8px 18px',
-      borderRadius: '100px',
-      whiteSpace: 'nowrap',
-    },
+    previewCostBadge: { background: color.brand, color: color.white, fontWeight: 800, fontSize: '0.85rem', padding: '8px 18px', borderRadius: '100px', whiteSpace: 'nowrap' },
     canvasPlaceholder: {
-      background: '#EAF0E4',
+      background: '#ECFDF5',
       borderRadius: '12px',
       height: '300px',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      color: '#6B9E5A',
+      color: '#10B981',
       fontWeight: 600,
       fontSize: '0.9rem',
     },
@@ -769,17 +743,18 @@ export default function AIGardenDesigner() {
   return (
     <>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;0,800;1,700&family=Inter:wght@400;500;600;700&display=swap');
+        .ai-carousel::-webkit-scrollbar { display: none; }
+        .carousel-arrow:not(:disabled):hover { border-color: #10B981 !important; color: #059669 !important; }
         @keyframes spin { to { transform: rotate(360deg); } }
         @keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
-        .garden-input:focus { border-color: #4A7A3A !important; box-shadow: 0 0 0 3px rgba(74,122,58,0.12) !important; }
-        .upload-zone:hover { border-color: #8FAF7E !important; background: #F5FAF0 !important; }
+        .garden-input:focus { border-color: #059669 !important; box-shadow: 0 0 0 3px rgba(5,150,105,0.12) !important; }
+        .upload-zone:hover { border-color: #10B981 !important; background: #F0FDF4 !important; }
         .plant-card:hover { transform: translateY(-1px); }
-        .layout-card:hover { transform: translateY(-3px); box-shadow: 0 12px 32px rgba(26,46,26,0.14) !important; }
-        .submit-btn:hover { transform: translateY(-1px); box-shadow: 0 12px 32px rgba(45,74,45,0.35) !important; }
-        .secondary-btn:hover { background: #EAF0E4 !important; }
-        .back-btn:hover { background: #EAF0E4 !important; color: #2D4A2D !important; }
-        .select-btn:hover { opacity: 0.88; }
+        .layout-card:hover { transform: translateY(-2px); box-shadow: 0 10px 25px -5px rgba(15,23,42,0.1) !important; }
+        .submit-btn:hover { background: #059669 !important; }
+        .secondary-btn:hover { border-color: #10B981 !important; color: #059669 !important; }
+        .back-btn:hover { background: #ECFDF5 !important; color: #047857 !important; }
+        .select-btn:hover { background: #059669 !important; }
         .fade-in { animation: fadeUp 0.4s ease both; }
         
         .tooltip-container {
@@ -791,8 +766,8 @@ export default function AIGardenDesigner() {
         .tooltip-text {
           visibility: hidden;
           width: 250px;
-          background-color: #1A2E1A;
-          color: #F7F3EC;
+          background-color: #0F172A;
+          color: #F8FAFC;
           text-align: left;
           border-radius: 12px;
           padding: 10px 14px;
@@ -807,7 +782,7 @@ export default function AIGardenDesigner() {
           line-height: 1.4;
           font-weight: 500;
           pointer-events: none;
-          border: 1px solid rgba(143,175,126,0.2);
+          border: 1px solid rgba(148,163,184,0.2);
         }
         .tooltip-text::after {
           content: "";
@@ -816,7 +791,7 @@ export default function AIGardenDesigner() {
           right: 14px;
           border-width: 6px;
           border-style: solid;
-          border-color: #1A2E1A transparent transparent transparent;
+          border-color: #0F172A transparent transparent transparent;
         }
         .tooltip-container:hover .tooltip-text {
           visibility: visible;
@@ -825,7 +800,23 @@ export default function AIGardenDesigner() {
         }
       `}</style>
 
-      <div className="w-full min-h-screen flex flex-col items-center justify-start bg-[#f6f6f4] py-6 px-4 md:px-8" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
+      <div className="w-full min-h-screen flex flex-col items-center justify-start bg-[#F8FAFC] py-6 px-4 md:px-8" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
+        {prefillNote && (
+          <div style={{
+            width: '100%', maxWidth: '1100px', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '10px',
+            background: '#ECFDF5', border: '1px solid #A7F3D0', color: '#065F46', borderRadius: '12px',
+            padding: '10px 14px', fontSize: '0.85rem', fontWeight: 600,
+          }}>
+            <Sparkles size={16} style={{ flexShrink: 0 }} />
+            <span style={{ flex: 1 }}>
+              We filled in your {prefill.lotWidth} × {prefill.lotLength} m yard
+              {prefill.plantIds?.length ? ` and the ${prefill.plantIds.length} plant type${prefill.plantIds.length > 1 ? 's' : ''} you picked` : ''} from the 3D Studio. Set your budget and generate.
+            </span>
+            <button onClick={() => setPrefillNote(false)} aria-label="Dismiss"
+              style={{ border: 'none', background: 'none', color: '#065F46', cursor: 'pointer', fontWeight: 800 }}>×</button>
+          </div>
+        )}
+
         {/* Space Warning Toast */}
         {toastMessage && (
           <div style={{
@@ -886,22 +877,12 @@ export default function AIGardenDesigner() {
         <div className="w-full max-w-6xl flex flex-col gap-6">
 
           {/* Hero Banner */}
-          <div style={styles.hero}>
-            <BotanicalSVG />
-            <div style={{ position: 'relative', zIndex: 1 }}>
-              <div style={styles.heroTag}>
-                <Compass size={11} />
-                AI-Powered · 3D Visualization
-              </div>
-              <h1 style={styles.heroTitle}>
-                Design your <span style={styles.heroTitleAccent}>dream garden</span><br />
-                in three dimensions.
-              </h1>
-              <p style={styles.heroSub}>
-                Set your budget, define the lot, pick your flora — and let the AI compose a garden layout tailored to your space.
-              </p>
-            </div>
-          </div>
+          <PageHero
+            eyebrow={<><Compass size={11} /> AI-Powered · 3D Visualization</>}
+            title="Design your dream garden in 3D"
+            subtitle="Set your budget, define the lot, pick your flora, and let the AI compose a garden layout tailored to your space."
+            decoration={<BotanicalSVG />}
+          />
 
           {/* Main Card */}
           <div style={styles.card}>
@@ -921,29 +902,15 @@ export default function AIGardenDesigner() {
             {!loading && generatedLayouts.length === 0 && (
               <form onSubmit={handleGenerateDesigns}>
 
-                {/* Budget + Dimensions */}
+                {/* Dimensions, then the budget range (its suggestion depends on the area) */}
                 <div style={styles.grid3}>
-                  <div style={styles.inputGroup}>
-                    <label style={styles.sectionLabel}>Budget (₱)</label>
-                    <div style={styles.inputWrapper}>
-                      <span style={styles.inputPrefix}>₱</span>
-                      <input
-                        type="number" min="500" value={budget}
-                        onChange={e => setBudget(e.target.value)}
-                        className="garden-input"
-                        style={{ ...styles.input, paddingLeft: '26px' }}
-                        required
-                      />
-                    </div>
+                  <div style={{ ...styles.inputGroup, gridColumn: '1 / -1' }}>
                     {budgetWarning && (
                       <div style={{ marginTop: '6px', display: 'flex', alignItems: 'flex-start', gap: '6px', padding: '8px 10px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px' }}>
                         <ShieldAlert size={13} style={{ color: '#d97706', flexShrink: 0, marginTop: 1 }} />
                         <span style={{ fontSize: '0.7rem', color: '#92400e', fontWeight: 600, lineHeight: 1.35 }}>{budgetWarning}</span>
                       </div>
                     )}
-                    <div style={{ marginTop: '6px', fontSize: '0.68rem', color: '#8A7E6E', fontWeight: 600 }}>
-                      Plant allocation: ₱{Math.round(Number(budget) * 0.45).toLocaleString()} (45% of budget)
-                    </div>
                   </div>
                   <div style={styles.inputGroup}>
                     <label style={styles.sectionLabel}>Lot Width (m)</label>
@@ -965,52 +932,67 @@ export default function AIGardenDesigner() {
                   </div>
                 </div>
 
+                <div style={{ marginTop: '1.25rem' }}>
+                  <label style={styles.sectionLabel}>Budget</label>
+                  <BudgetPicker
+                    areaSqm={lotAreaNow}
+                    install={install}
+                    onInstallChange={setInstall}
+                    range={budgetRange}
+                    onRangeChange={setBudgetRange}
+                    rates={rates}
+                  />
+                </div>
+
                 <hr style={styles.divider} />
 
                 {/* Image Upload */}
                 <div style={{ marginBottom: '1.75rem' }}>
-                  <label style={styles.sectionLabel}>Reference Photo <span style={{ color: '#B0A89A', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>(optional)</span></label>
+                  <label style={styles.sectionLabel}>Reference Photo <span style={{ color: '#94A3B8', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>(optional)</span></label>
                   <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
                     <label className="upload-zone" style={{ ...styles.uploadZone, flex: 1 }}>
                       <div style={styles.uploadIcon}>
-                        <Upload size={16} color="#8FAF7E" />
+                        <Upload size={16} color="#10B981" />
                       </div>
-                      <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#3A3A3A', marginBottom: '4px' }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#334155', marginBottom: '4px' }}>
                         Drop a photo of your garden space
                       </div>
-                      <div style={{ fontSize: '0.75rem', color: '#9A9080' }}>
+                      <div style={{ fontSize: '0.75rem', color: '#94A3B8' }}>
                         PNG, JPG or WEBP · max 5MB
                       </div>
                       <input type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImageChange} />
                     </label>
 
                     {imagePreview && (
-                      <div style={{ position: 'relative', width: '88px', height: '88px', borderRadius: '12px', overflow: 'hidden', flexShrink: 0, border: '1.5px solid #E8E1D4' }} className="group">
+                      <div style={{ position: 'relative', width: '88px', height: '88px', borderRadius: '12px', overflow: 'hidden', flexShrink: 0, border: '1.5px solid #E2E8F0' }} className="group">
                         <img src={imagePreview} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                         <button
                           type="button" onClick={handleRemoveImage}
-                          style={{ position: 'absolute', inset: 0, background: 'rgba(26,26,26,0.7)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#FFFFFF', fontSize: '0.65rem', fontWeight: 700, border: 'none', cursor: 'pointer', gap: '4px' }}
+                          style={{ position: 'absolute', inset: 0, background: 'rgba(15,23,42,0.7)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#FFFFFF', fontSize: '0.65rem', fontWeight: 700, border: 'none', cursor: 'pointer', gap: '4px' }}
                         >
                           <X size={14} /><span>Remove</span>
                         </button>
                       </div>
                     )}
                   </div>
+                  {imagePreview && (
+                    <ZonePicker imageUrl={imagePreview} scan={zoneScan} selected={keepClear} onChange={setKeepClear} />
+                  )}
                 </div>
 
                 <hr style={styles.divider} />
 
                 {/* Plant Picker */}
                 <div>
-                  <label style={styles.sectionLabel}>Preferred Plants <span style={{ color: '#B0A89A', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>(optional)</span></label>
+                  <label style={styles.sectionLabel}>Preferred Plants <span style={{ color: '#94A3B8', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>(optional)</span></label>
                   {inventoryLoading ? (
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '10px' }}>
                       {Array.from({ length: 6 }).map((_, i) => (
-                        <div key={i} style={{ height: '60px', borderRadius: '12px', background: '#F0EBE0', animation: 'pulse 1.4s ease-in-out infinite' }} />
+                        <div key={i} style={{ height: '60px', borderRadius: '12px', background: '#F1F5F9', animation: 'pulse 1.4s ease-in-out infinite' }} />
                       ))}
                     </div>
                   ) : inventory.length === 0 ? (
-                    <p style={{ fontSize: '0.8rem', color: '#9A9080', fontStyle: 'italic' }}>No plants found in inventory.</p>
+                    <p style={{ fontSize: '0.8rem', color: '#94A3B8', fontStyle: 'italic' }}>No plants found in inventory.</p>
                   ) : (
                     <div style={styles.plantsGrid}>
                       {inventory.map(plant => {
@@ -1063,27 +1045,27 @@ export default function AIGardenDesigner() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '1.5rem' }}>
                   <div style={styles.spinner} />
                   <div>
-                    <div style={{ fontFamily: "'Playfair Display', Georgia, serif", fontWeight: 800, fontSize: '1.15rem', color: '#1A2E1A' }}>
+                    <div style={{ fontFamily: "'Inter', system-ui, sans-serif", fontWeight: 800, fontSize: '1.15rem', color: '#0F172A' }}>
                       Composing your garden…
                     </div>
-                    <div style={{ fontSize: '0.78rem', color: '#8A7E6E', marginTop: '3px', minHeight: '1.1em', transition: 'opacity 0.4s' }}>
+                    <div style={{ fontSize: '0.78rem', color: '#64748B', marginTop: '3px', minHeight: '1.1em', transition: 'opacity 0.4s' }}>
                       {LOADING_PHASES[loadingPhase]}
                     </div>
                   </div>
                 </div>
-                <div style={styles.layoutsGrid}>
+                <div style={carousel ? styles.layoutsCarousel : styles.layoutsGrid} className="ai-carousel">
                   {[0.7, 0.8, 0.9].map((op, i) => (
-                    <div key={i} style={{ ...styles.layoutCard, opacity: op }}>
-                      <div style={{ ...styles.layoutCardTop, background: 'linear-gradient(135deg, #1A2E1A 0%, #2D4A2D 100%)' }}>
-                        <div style={{ height: '10px', width: '60px', background: 'rgba(255,255,255,0.13)', borderRadius: '8px', marginBottom: '12px' }} />
-                        <div style={{ height: '18px', width: '75%', background: 'rgba(255,255,255,0.10)', borderRadius: '8px', marginBottom: '10px' }} />
-                        <div style={{ height: '28px', width: '45%', background: 'rgba(201,136,58,0.22)', borderRadius: '8px' }} />
+                    <div key={i} style={{ ...styles.layoutCard, opacity: op, ...(carousel ? { flex: `0 0 ${phone ? '86%' : '58%'}` } : null) }}>
+                      <div style={styles.layoutCardTop}>
+                        <div style={{ height: '10px', width: '60px', background: '#E2E8F0', borderRadius: '8px', marginBottom: '12px' }} />
+                        <div style={{ height: '18px', width: '75%', background: '#F1F5F9', borderRadius: '8px', marginBottom: '10px' }} />
+                        <div style={{ height: '28px', width: '45%', background: '#D1FAE5', borderRadius: '8px' }} />
                       </div>
                       <div style={styles.layoutBody}>
                         {[1, 0.8, 0.65, 0.5, 0.35].map((lineOp, j) => (
-                          <div key={j} style={{ height: '12px', background: '#EDE8DF', borderRadius: '6px', marginBottom: '10px', opacity: lineOp }} />
+                          <div key={j} style={{ height: '12px', background: '#E2E8F0', borderRadius: '6px', marginBottom: '10px', opacity: lineOp }} />
                         ))}
-                        <div style={{ height: '36px', background: '#EDE8DF', borderRadius: '10px', marginTop: '1.25rem', opacity: 0.5 }} />
+                        <div style={{ height: '36px', background: '#E2E8F0', borderRadius: '10px', marginTop: '1.25rem', opacity: 0.5 }} />
                       </div>
                     </div>
                   ))}
@@ -1096,14 +1078,29 @@ export default function AIGardenDesigner() {
               <div className="fade-in">
                 <div style={styles.resultsHeader}>
                   <h2 style={styles.resultsTitle}>
-                    <Sparkles size={20} color="#4A7A3A" />
+                    <Sparkles size={20} color="#059669" />
                     Your Garden Options
                   </h2>
-                  <button onClick={handleReset} className="back-btn" style={styles.backBtn}>
-                    <ArrowLeft size={14} />
-                    Adjust parameters
-                  </button>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <button onClick={handleShowVariations} className="back-btn" style={styles.backBtn}>
+                      <RefreshCw size={14} />
+                      Show other variations
+                    </button>
+                    <button onClick={handleReset} className="back-btn" style={styles.backBtn}>
+                      <ArrowLeft size={14} />
+                      Adjust parameters
+                    </button>
+                  </div>
                 </div>
+
+                {notice && (
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '12px 16px', background: '#EFF6FF', border: '1.5px solid #BFDBFE', borderRadius: '12px', marginBottom: '1.25rem' }}>
+                    <Cpu size={18} style={{ color: '#1D4ED8', flexShrink: 0, marginTop: 1 }} />
+                    <div style={{ fontSize: '0.8rem', color: '#1E3A8A', lineHeight: 1.45 }}>
+                      {notice} Smart layouts follow the same spacing, stock and budget rules.
+                    </div>
+                  </div>
+                )}
 
                 {budgetWarning && (
                   <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '12px 16px', background: '#fffbeb', border: '1.5px solid #fde68a', borderRadius: '12px', marginBottom: '1.25rem' }}>
@@ -1115,24 +1112,53 @@ export default function AIGardenDesigner() {
                   </div>
                 )}
 
-                <div style={styles.layoutsGrid}>
+                <div
+                  ref={carouselRef}
+                  onScroll={carousel ? onCarouselScroll : undefined}
+                  className="ai-carousel"
+                  style={carousel ? styles.layoutsCarousel : styles.layoutsGrid}
+                  role={carousel ? 'region' : undefined}
+                  aria-roledescription={carousel ? 'carousel' : undefined}
+                  aria-label={carousel ? 'Garden design options' : undefined}
+                >
                   {generatedLayouts.map((design, index) => (
-                    <div key={index} className="layout-card" style={styles.layoutCard}>
+                    <div
+                      key={index}
+                      className="layout-card"
+                      aria-label={carousel ? `Option ${index + 1} of ${generatedLayouts.length}` : undefined}
+                      style={carousel
+                        ? { ...styles.layoutCard, flex: `0 0 ${phone ? '86%' : '58%'}`, scrollSnapAlign: 'center' }
+                        : styles.layoutCard}
+                    >
                       <div style={{ ...styles.layoutCardTop, position: 'relative' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                          <span style={{ ...styles.layoutBadge, marginBottom: 0 }}>Option {index + 1}</span>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                            <span style={{ ...styles.layoutBadge, marginBottom: 0 }}>Option {index + 1}</span>
+                            <span title={design.source === 'ai' ? 'Designed by our AI, then checked by our design engine' : 'Designed by our rule-based design engine'}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase', padding: '3px 8px', borderRadius: '99px',
+                                       background: design.source === 'ai' ? '#ECFDF5' : '#F1F5F9', color: design.source === 'ai' ? '#047857' : '#475569', border: `1px solid ${design.source === 'ai' ? '#A7F3D0' : '#E2E8F0'}` }}>
+                              {design.source === 'ai' ? <><Sparkles size={10} /> AI design</> : <><Cpu size={10} /> Smart layout</>}
+                            </span>
+                          </span>
                           {design.reasoning && (
                             <div className="tooltip-container">
-                              <Info size={16} className="text-[#8FAF7E] hover:text-[#C9883A] transition-colors" />
+                              <Info size={16} className="text-[#94A3B8] hover:text-[#059669] transition-colors" />
                               <div className="tooltip-text">
-                                <div className="font-bold mb-1 pb-1 border-b border-white/10 text-[#8FAF7E] text-[0.8rem]">AI Design Reasoning</div>
+                                <div className="font-bold mb-1 pb-1 border-b border-white/10 text-[#6EE7B7] text-[0.8rem]">{design.source === 'ai' ? 'AI Design Reasoning' : 'Design Approach'}</div>
                                 {design.reasoning}
                               </div>
                             </div>
                           )}
                         </div>
                         <h3 style={styles.layoutName}>{design.design_name}</h3>
-                        <div style={styles.layoutCost}>₱{design.total_cost.toLocaleString()}</div>
+                        <div style={styles.layoutCost}>≈ ₱{design.total_cost.toLocaleString()}</div>
+                        {design.target_budget && (
+                          <div style={{ fontSize: '0.7rem', color: '#64748B', marginTop: '4px', fontWeight: 600 }}>
+                            Designed for ₱{Number(design.target_budget).toLocaleString()} · {
+                              { Minimalist: 'low end', Symmetrical: 'middle', 'Lush / Organic': 'top' }[design.design_name] || 'within'
+                            } of your range
+                          </div>
+                        )}
                       </div>
                       <div style={styles.layoutBody}>
                         {(() => {
@@ -1152,45 +1178,57 @@ export default function AIGardenDesigner() {
                             );
                           })}
                           {(design.plants?.filter(p => !p.is_existing)?.length || 0) > 5 && (
-                            <div style={{ textAlign: 'center', padding: '10px 0 2px', fontSize: '0.78rem', color: '#8A7E6E', fontWeight: 600 }}>
+                            <div style={{ textAlign: 'center', padding: '10px 0 2px', fontSize: '0.78rem', color: '#64748B', fontWeight: 600 }}>
                               + {design.plants.filter(p => !p.is_existing).length - 5} more plants
                             </div>
                           )}
                         </div>
+                        {design.adjustments?.length > 0 && (
+                          <div style={{ marginTop: '0.75rem', padding: '8px 10px', borderRadius: '8px', background: '#F1F5F9', fontSize: '0.72rem', color: '#475569', lineHeight: 1.45 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 800, color: '#334155', marginBottom: '2px' }}>
+                              <Wrench size={11} /> What we adjusted
+                            </div>
+                            {design.adjustments.map((note, ni) => <div key={ni}>• {note}</div>)}
+                          </div>
+                        )}
+                        {design.budget_note && (
+                          <div style={{ marginTop: '0.5rem', fontSize: '0.72rem', color: '#64748B', lineHeight: 1.45 }}>
+                            <Info size={11} style={{ verticalAlign: 'middle', marginRight: 4 }} />{design.budget_note}
+                          </div>
+                        )}
                         {/* Cost Breakdown — always visible */}
                         {design.cost_breakdown && (
-                          <div style={{ marginTop: '1rem', borderTop: '1px solid #EDE8DF', paddingTop: '1rem' }}>
-                            <div style={{ fontSize: '9px', fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#9A9080', marginBottom: '8px' }}>
+                          <div style={{ marginTop: '1rem', borderTop: '1px solid #E2E8F0', paddingTop: '1rem' }}>
+                            <div style={{ fontSize: '9px', fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#94A3B8', marginBottom: '8px' }}>
                               Cost Breakdown
                             </div>
-                            {[
-                              { label: 'Plants & Materials', pct: '45%', amount: design.cost_breakdown.plants, color: '#4A7A3A', bg: '#F0F7ED' },
-                              { label: 'Labor & Site Mobilization', pct: '35%', amount: design.cost_breakdown.labor, color: '#8A7E6E', bg: '#F5F0E8' },
-                              { label: 'Service Fee & Design Markup', pct: '20%', amount: design.cost_breakdown.service, color: '#C9883A', bg: '#FDF7EE' },
-                            ].map((row, ri) => (
-                              <div key={ri} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 8px', borderRadius: '8px', background: row.bg, marginBottom: '4px' }}>
-                                <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#3A3A3A' }}>
-                                  {row.label} <span style={{ color: '#9A9080', fontWeight: 500 }}>({row.pct})</span>
-                                </span>
-                                <span style={{ fontSize: '0.75rem', fontWeight: 800, color: row.color, whiteSpace: 'nowrap' }}>
-                                  ₱{Number(row.amount).toLocaleString()}
+                            {(design.cost_breakdown.lines || []).map(line => (
+                              <div key={line.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', padding: '5px 8px', borderRadius: '8px', background: line.key === 'plants' ? '#ECFDF5' : '#F8FAFC', marginBottom: '3px' }}>
+                                <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#334155' }}>{line.label}</span>
+                                <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#475569', whiteSpace: 'nowrap' }}>
+                                  ₱{Number(line.amount).toLocaleString()}
                                 </span>
                               </div>
                             ))}
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 8px', borderRadius: '8px', background: '#1A2E1A', marginTop: '6px' }}>
-                              <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#F7F3EC', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                                Total Estimated Cost
-                              </span>
-                              <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#C9883A' }}>
-                                ₱{Number(design.cost_breakdown.total).toLocaleString()}
-                              </span>
+                            <div style={{ padding: '10px', borderRadius: '10px', background: '#ECFDF5', border: '1px solid #A7F3D0', marginTop: '6px' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#047857', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                                  Estimated total
+                                </span>
+                                <span style={{ fontSize: '0.9rem', fontWeight: 800, color: '#0F172A' }}>
+                                  ₱{Number(design.cost_breakdown.low).toLocaleString()}–₱{Number(design.cost_breakdown.high).toLocaleString()}
+                                </span>
+                              </div>
+                              <div style={{ fontSize: '0.66rem', color: '#64748B', marginTop: '3px' }}>
+                                Final price confirmed after a site inspection.
+                              </div>
                             </div>
 
                             {/* Plant BOM — still togglable */}
                             <button
                               type="button"
                               onClick={() => toggleBreakdown(index)}
-                              style={{ background: 'transparent', border: 'none', color: '#4A7A3A', fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', padding: '8px 0 0', outline: 'none' }}
+                              style={{ background: 'transparent', border: 'none', color: '#059669', fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', padding: '8px 0 0', outline: 'none' }}
                             >
                               {expandedBreakdowns[index] ? 'Hide Plant List ▲' : 'View Plant List ▼'}
                             </button>
@@ -1198,20 +1236,20 @@ export default function AIGardenDesigner() {
                               <div style={{ marginTop: '8px', overflowX: 'auto' }} className="fade-in">
                                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem', textAlign: 'left' }}>
                                   <thead>
-                                    <tr style={{ borderBottom: '1.5px solid #EDE8DF' }}>
-                                      <th style={{ padding: '6px 4px', color: '#9A9080', fontWeight: 700 }}>Plant</th>
-                                      <th style={{ padding: '6px 4px', color: '#9A9080', fontWeight: 700, textAlign: 'center' }}>Qty</th>
-                                      <th style={{ padding: '6px 4px', color: '#9A9080', fontWeight: 700, textAlign: 'right' }}>Unit</th>
-                                      <th style={{ padding: '6px 4px', color: '#9A9080', fontWeight: 700, textAlign: 'right' }}>Subtotal</th>
+                                    <tr style={{ borderBottom: '1.5px solid #E2E8F0' }}>
+                                      <th style={{ padding: '6px 4px', color: '#94A3B8', fontWeight: 700 }}>Plant</th>
+                                      <th style={{ padding: '6px 4px', color: '#94A3B8', fontWeight: 700, textAlign: 'center' }}>Qty</th>
+                                      <th style={{ padding: '6px 4px', color: '#94A3B8', fontWeight: 700, textAlign: 'right' }}>Unit</th>
+                                      <th style={{ padding: '6px 4px', color: '#94A3B8', fontWeight: 700, textAlign: 'right' }}>Subtotal</th>
                                     </tr>
                                   </thead>
                                   <tbody>
                                     {(design.plant_breakdown || []).map((item, itemIdx) => (
-                                      <tr key={itemIdx} style={{ borderBottom: '1px solid #F0EBE0' }}>
-                                        <td style={{ padding: '8px 4px', fontWeight: 600, color: '#2D2D2D' }}>{getPlantEmoji(item.name)} {item.name}</td>
-                                        <td style={{ padding: '8px 4px', textAlign: 'center', color: '#4A7A3A', fontWeight: 700 }}>{item.quantity}</td>
-                                        <td style={{ padding: '8px 4px', textAlign: 'right', color: '#8A7E6E' }}>₱{Number(item.unit_price).toLocaleString()}</td>
-                                        <td style={{ padding: '8px 4px', textAlign: 'right', fontWeight: 700, color: '#1A2E1A' }}>₱{Number(item.subtotal).toLocaleString()}</td>
+                                      <tr key={itemIdx} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                                        <td style={{ padding: '8px 4px', fontWeight: 600, color: '#1E293B' }}>{getPlantEmoji(item.name)} {item.name}</td>
+                                        <td style={{ padding: '8px 4px', textAlign: 'center', color: '#059669', fontWeight: 700 }}>{item.quantity}</td>
+                                        <td style={{ padding: '8px 4px', textAlign: 'right', color: '#64748B' }}>₱{Number(item.unit_price).toLocaleString()}</td>
+                                        <td style={{ padding: '8px 4px', textAlign: 'right', fontWeight: 700, color: '#0F172A' }}>₱{Number(item.subtotal).toLocaleString()}</td>
                                       </tr>
                                     ))}
                                   </tbody>
@@ -1228,47 +1266,85 @@ export default function AIGardenDesigner() {
                         >
                           View in 3D →
                         </button>
+                        <button
+                          onClick={() => handleEditInStudio(design)}
+                          className="secondary-btn"
+                          style={{ ...styles.secondaryBtn, marginTop: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                          title="Open this design in the 3D Studio to move, add or swap plants"
+                        >
+                          <Box size={14} /> Edit in Studio
+                        </button>
                       </div>
                     </div>
                   ))}
                 </div>
 
+                {/* Carousel controls: arrows + one dot per option */}
+                {carousel && generatedLayouts.length > 1 && (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '14px', marginTop: '10px' }}>
+                    <button type="button" onClick={() => goToSlide(slide - 1)} disabled={slide === 0} aria-label="Previous option"
+                      className="carousel-arrow" style={{ ...styles.carouselArrow, opacity: slide === 0 ? 0.35 : 1 }}>
+                      <ChevronLeft size={18} />
+                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      {generatedLayouts.map((d, i) => (
+                        <button key={i} type="button" onClick={() => goToSlide(i)} aria-label={`Show option ${i + 1}: ${d.design_name}`}
+                          aria-current={slide === i}
+                          style={{ width: slide === i ? 22 : 8, height: 8, borderRadius: 99, border: 'none', padding: 0, cursor: 'pointer',
+                                   background: slide === i ? color.brand : '#CBD5E1', transition: 'all 0.25s' }} />
+                      ))}
+                    </div>
+                    <button type="button" onClick={() => goToSlide(slide + 1)} disabled={slide === generatedLayouts.length - 1} aria-label="Next option"
+                      className="carousel-arrow" style={{ ...styles.carouselArrow, opacity: slide === generatedLayouts.length - 1 ? 0.35 : 1 }}>
+                      <ChevronRight size={18} />
+                    </button>
+                  </div>
+                )}
+                {carousel && generatedLayouts[slide] && (
+                  <p style={{ textAlign: 'center', fontSize: '0.75rem', color: color.muted, margin: '6px 0 0', fontWeight: 600 }}>
+                    Option {slide + 1} of {generatedLayouts.length} · {generatedLayouts[slide].design_name} · swipe to compare
+                  </p>
+                )}
+
                 {/* 3D / AR Preview */}
                 {activeLayout && (
-                  <div style={styles.previewPanel} className="fade-in">
+                  <div ref={previewRef} style={{ ...styles.previewPanel, scrollMarginTop: '72px' }} className="fade-in">
                     <div style={styles.previewHeader}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', marginBottom: '6px' }}>
+                      <div style={{ flex: '1 1 260px', minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px 14px', flexWrap: 'wrap', marginBottom: '6px' }}>
                           <h3 style={{ ...styles.previewTitle, margin: 0 }}>{activeLayout.design_name}</h3>
-                          {/* View Segment Controller */}
-                          <div style={{
-                            display: 'inline-flex',
-                            background: '#EDE8DF',
+                          {/* View switch (segmented control) */}
+                          <div role="tablist" aria-label="Preview mode" style={{
+                            display: 'flex',
+                            width: phone ? '100%' : 'auto',
+                            background: color.divider,
+                            border: `1px solid ${color.border}`,
                             borderRadius: '10px',
                             padding: '3px',
                             gap: '2px',
                           }}>
                             {[
-                              { key: '3d', label: 'Interactive 3D Canvas' },
-                              { key: 'ar', label: 'Photo Overlay Preview' },
+                              { key: '3d', label: phone ? '3D view' : 'Interactive 3D Canvas' },
+                              { key: 'ar', label: phone ? 'Photo overlay' : 'Photo Overlay Preview' },
                             ].map(tab => (
                               <button
                                 key={tab.key}
                                 type="button"
+                                role="tab"
+                                aria-selected={activeView === tab.key}
                                 onClick={() => setActiveView(tab.key)}
                                 style={{
-                                  padding: '5px 13px',
+                                  flex: phone ? 1 : 'none',
+                                  padding: phone ? '9px 10px' : '6px 13px',
                                   borderRadius: '7px',
-                                  border: activeView === tab.key
-                                    ? '1.5px solid #4A7A3A'
-                                    : '1.5px solid transparent',
+                                  border: 'none',
                                   cursor: 'pointer',
-                                  fontSize: '0.72rem',
+                                  fontSize: '0.75rem',
                                   fontWeight: 700,
                                   transition: 'all 0.2s',
-                                  background: activeView === tab.key ? '#2D4A2D' : 'transparent',
-                                  color: activeView === tab.key ? '#F7F3EC' : '#9A9080',
-                                  letterSpacing: '0.01em',
+                                  background: activeView === tab.key ? color.white : 'transparent',
+                                  color: activeView === tab.key ? color.brandDeep : color.muted,
+                                  boxShadow: activeView === tab.key ? '0 1px 3px rgba(15,23,42,0.1)' : 'none',
                                   lineHeight: 1.2,
                                   whiteSpace: 'nowrap',
                                 }}
@@ -1280,13 +1356,15 @@ export default function AIGardenDesigner() {
                         </div>
                         <p style={styles.previewSub}>
                           {calibrationMode
-                            ? 'Click anywhere on the canvas to set the horizon line'
+                            ? `${touch ? 'Tap' : 'Click'} anywhere on the canvas to set the horizon line`
                             : activeView === 'ar'
-                              ? 'Camera locked to photo perspective · Scroll to zoom'
-                              : 'Left click + drag to rotate · Scroll to zoom · Right drag to pan'}
+                              ? `Camera locked to photo perspective · ${touch ? 'Pinch' : 'Scroll'} to zoom`
+                              : touch
+                                ? 'Drag to rotate · Pinch to zoom · Two-finger drag to pan'
+                                : 'Left click + drag to rotate · Scroll to zoom · Right drag to pan'}
                         </p>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                         {activeView === 'ar' && imagePreview && (
                           <button
                             type="button"
@@ -1294,8 +1372,8 @@ export default function AIGardenDesigner() {
                             style={{
                               padding: '7px 14px',
                               background: calibrationMode ? 'rgba(251,191,36,0.15)' : 'transparent',
-                              border: `1.5px solid ${calibrationMode ? '#d97706' : '#D4CAB8'}`,
-                              color: calibrationMode ? '#b45309' : '#8A7E6E',
+                              border: `1.5px solid ${calibrationMode ? '#d97706' : '#CBD5E1'}`,
+                              color: calibrationMode ? '#b45309' : '#64748B',
                               fontWeight: 700,
                               fontSize: '0.72rem',
                               borderRadius: '8px',
@@ -1311,8 +1389,9 @@ export default function AIGardenDesigner() {
                       </div>
                     </div>
 
-                    <div style={{ borderRadius: '12px', overflow: 'hidden', position: 'relative', height: '450px' }}>
+                    <div style={{ borderRadius: '12px', overflow: 'hidden', position: 'relative', height: phone ? 340 : 450 }}>
                       <ThreeGardenCanvas
+                        height={phone ? 340 : 450}
                         plants={activeLayout.plants}
                         lotWidth={Number(lotWidth)}
                         lotLength={Number(lotLength)}
@@ -1334,9 +1413,9 @@ export default function AIGardenDesigner() {
                             position: 'absolute', top: '12px', left: '50%', transform: 'translateX(-50%)',
                             background: 'rgba(0,0,0,0.72)', color: '#fff', padding: '6px 16px',
                             borderRadius: '100px', fontSize: '0.71rem', fontWeight: 600,
-                            pointerEvents: 'none', whiteSpace: 'nowrap',
+                            pointerEvents: 'none', width: 'max-content', maxWidth: 'calc(100% - 24px)', textAlign: 'center',
                           }}>
-                            Click to align the horizon line with your photo
+                            {touch ? 'Tap' : 'Click'} to align the horizon line with your photo
                           </div>
                           {/* Draggable horizon line */}
                           <div style={{
@@ -1348,7 +1427,7 @@ export default function AIGardenDesigner() {
                               <div style={{
                                 position: 'absolute', left: '50%', top: '-9px',
                                 transform: 'translateX(-50%)',
-                                background: 'rgba(251,191,36,0.95)', color: '#1a1a1a',
+                                background: 'rgba(251,191,36,0.95)', color: '#0F172A',
                                 fontSize: '0.58rem', fontWeight: 800, letterSpacing: '0.1em',
                                 padding: '2px 8px', borderRadius: '4px', whiteSpace: 'nowrap',
                               }}>
@@ -1365,14 +1444,16 @@ export default function AIGardenDesigner() {
                           bottom: '16px',
                           left: '50%',
                           transform: 'translateX(-50%)',
-                          background: 'rgba(45,74,45,0.85)',
-                          color: '#F7F3EC',
+                          background: 'rgba(15,23,42,0.85)',
+                          color: '#F8FAFC',
                           padding: '8px 20px',
                           borderRadius: '100px',
                           fontSize: '0.75rem',
                           fontWeight: 600,
                           backdropFilter: 'blur(8px)',
-                          whiteSpace: 'nowrap',
+                          width: 'max-content',
+                          maxWidth: 'calc(100% - 24px)',
+                          textAlign: 'center',
                           pointerEvents: 'none',
                         }}>
                           Upload a garden photo above to enable the overlay effect
@@ -1381,7 +1462,7 @@ export default function AIGardenDesigner() {
                     </div>
 
                     {/* Book This Design CTA */}
-                    <div style={{ marginTop: '1.25rem', display: 'flex', justifyContent: 'flex-end' }}>
+                    <div style={{ marginTop: '1.25rem', display: 'flex', justifyContent: phone ? 'stretch' : 'flex-end' }}>
                       <button
                         type="button"
                         onClick={handleBookDesign}
@@ -1389,25 +1470,28 @@ export default function AIGardenDesigner() {
                         style={{
                           display: 'inline-flex',
                           alignItems: 'center',
+                          justifyContent: 'center',
                           gap: '8px',
-                          padding: '11px 22px',
-                          background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                          width: phone ? '100%' : 'auto',
+                          padding: phone ? '13px 18px' : '11px 22px',
+                          textAlign: 'center',
+                          background: color.brand,
                           color: '#ffffff',
                           fontWeight: 700,
                           fontSize: '0.85rem',
                           border: 'none',
-                          borderRadius: '10px',
+                          borderRadius: `${radius.button}px`,
                           cursor: bookingLoading ? 'not-allowed' : 'pointer',
-                          boxShadow: '0 4px 14px rgba(16,185,129,0.3)',
+                          boxShadow: '0 4px 14px rgba(16,185,129,0.2)',
                           letterSpacing: '0.01em',
                           transition: 'all 0.18s',
                           opacity: bookingLoading ? 0.7 : 1,
                         }}
-                        onMouseEnter={e => { if (!bookingLoading) { e.currentTarget.style.opacity = '0.88'; e.currentTarget.style.transform = 'translateY(-1px)'; } }}
-                        onMouseLeave={e => { e.currentTarget.style.opacity = bookingLoading ? '0.7' : '1'; e.currentTarget.style.transform = 'none'; }}
+                        onMouseEnter={e => { if (!bookingLoading) e.currentTarget.style.background = color.brandDark; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = color.brand; }}
                       >
                          <CalendarPlus size={15} />
-                         {bookingLoading ? 'Saving Design…' : 'Book Final Site Inspection & Consultation'}
+                         {bookingLoading ? 'Saving Design…' : install ? 'Book Final Site Inspection & Consultation' : 'Add these plants to my cart'}
                        </button>
                     </div>
                   </div>

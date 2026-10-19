@@ -193,18 +193,18 @@ const BookingManagement = () => {
     });
 
     return (
-        <div style={{ backgroundColor: '#f1f5f9', minHeight: '100%', padding: '40px', fontFamily: "'Inter', sans-serif" }}>
+        <div style={{ backgroundColor: '#f1f5f9', minHeight: '100%', padding: 'clamp(0px, 3vw - 8px, 40px)', fontFamily: "'Inter', sans-serif" }}>
             <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
                 
                 {/* Hero Section */}
-                <div style={{ 
+                <div className="rs-wrap" style={{ 
                     display: 'flex', 
                     alignItems: 'center',
                     marginBottom: '32px'
                 }}>
-                    <Calendar size={36} color="#10b981" style={{ marginRight: '20px' }} />
-                    <div>
-                        <h1 style={{ color: '#1e293b', fontSize: '28px', margin: '0 0 4px 0', fontWeight: '800' }}>Booking Management</h1>
+                    <Calendar size={36} color="#10b981" style={{ marginRight: '16px', flexShrink: 0 }} />
+                    <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+                        <h1 style={{ color: '#1e293b', fontSize: 'clamp(22px, 5vw, 28px)', margin: '0 0 4px 0', fontWeight: '800' }}>Booking Management</h1>
                         <p style={{ color: '#64748b', margin: 0, fontSize: '15px' }}>View and manage all customer appointment schedules</p>
                     </div>
 
@@ -232,7 +232,7 @@ const BookingManagement = () => {
                 <div style={{ 
                     backgroundColor: '#ffffff', 
                     borderRadius: '16px', 
-                    padding: '32px',
+                    padding: 'clamp(16px, 4vw, 32px)',
                     boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01)',
                     border: '1px solid #e2e8f0'
                 }}>
@@ -247,7 +247,7 @@ const BookingManagement = () => {
                         flexWrap: 'wrap'
                     }}>
                         {/* Search Input */}
-                        <div style={{ position: 'relative', flex: 1, minWidth: '250px' }}>
+                        <div style={{ position: 'relative', flex: 1, minWidth: 'min(250px, 100%)' }}>
                             <Search size={18} color="#94a3b8" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }} />
                             <input 
                                 type="text" 
@@ -326,7 +326,7 @@ const BookingManagement = () => {
                     </div>
 
                     {loading && bookings.length === 0 ? (
-                        <p style={{ color: '#64748b', textAlign: 'center', margin: 0, padding: '32px' }}>Loading bookings data...</p>
+                        <p style={{ color: '#64748b', textAlign: 'center', margin: 0, padding: 'clamp(16px, 4vw, 32px)' }}>Loading bookings data...</p>
                     ) : (
                         <div style={{ borderRadius: '12px', overflow: 'hidden', border: '1px solid #e2e8f0' }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
@@ -344,7 +344,7 @@ const BookingManagement = () => {
                                 <tbody>
                                     {filteredBookings.length === 0 ? (
                                         <tr>
-                                            <td colSpan="7" style={{ padding: '32px', color: '#64748b', textAlign: 'center', fontWeight: '500' }}>
+                                            <td colSpan="7" style={{ padding: 'clamp(16px, 4vw, 32px)', color: '#64748b', textAlign: 'center', fontWeight: '500' }}>
                                                 {searchTerm || statusFilter !== 'all' ? "No bookings match your filters." : "No bookings found."}
                                             </td>
                                         </tr>
@@ -495,7 +495,7 @@ const BookingManagement = () => {
                                                                                 </div>
                                                                             </div>
                                                                         )}
-                                                                        {b.status === 'Completed' && b.clock_out_photo_url && (
+                                                                        {['Finished', 'Completed'].includes(b.status) && b.clock_out_photo_url && (
                                                                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '16px', padding: '12px', background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '8px' }}>
                                                                                 <img 
                                                                                     src={b.clock_out_photo_url.startsWith('http') ? b.clock_out_photo_url : `${MEDIA_BASE_URL}${b.clock_out_photo_url}`} 

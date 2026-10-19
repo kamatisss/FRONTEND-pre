@@ -198,7 +198,7 @@ const ManageUsers = () => {
     });
 
     return (
-        <div style={{ backgroundColor: '#f1f5f9', minHeight: '100%', padding: '40px', fontFamily: "'Inter', sans-serif" }}>
+        <div style={{ backgroundColor: '#f1f5f9', minHeight: '100%', padding: 'clamp(0px, 3vw - 8px, 40px)', fontFamily: "'Inter', sans-serif" }}>
             {/* Modal */}
             {modalOpen && (
                 <div style={{
@@ -219,7 +219,7 @@ const ManageUsers = () => {
                         borderRadius: '16px',
                         width: '100%',
                         maxWidth: '450px',
-                        padding: '32px',
+                        padding: 'clamp(16px, 4vw, 32px)',
                         boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
                         border: '1px solid #e2e8f0',
                         animation: 'modal-in 0.2s ease-out'
@@ -334,25 +334,26 @@ const ManageUsers = () => {
                 margin: '0 auto', 
                 backgroundColor: '#ffffff', 
                 borderRadius: '16px', 
-                padding: '32px',
+                padding: 'clamp(16px, 4vw, 32px)',
                 boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01)'
             }}>
                 {/* Header / Hero */}
-                <div style={{ 
+                <div className="rs-wrap" style={{ 
                     display: 'flex', 
                     alignItems: 'center',
                     justifyContent: 'space-between',
                     marginBottom: '32px'
                 }}>
                     <div style={{ display: 'flex', alignItems: 'center' }}>
-                        <Users size={36} color="#10b981" style={{ marginRight: '20px' }} />
+                        <Users size={36} color="#10b981" style={{ marginRight: '16px', flexShrink: 0 }} />
                         <div>
-                            <h1 style={{ color: '#1e293b', fontSize: '28px', margin: '0 0 4px 0', fontWeight: '800' }}>User Management</h1>
+                            <h1 style={{ color: '#1e293b', fontSize: 'clamp(22px, 5vw, 28px)', margin: '0 0 4px 0', fontWeight: '800' }}>User Management</h1>
                             <p style={{ color: '#64748b', margin: 0, fontSize: '15px' }}>Manage administrative, staff, and customer accounts</p>
                         </div>
                     </div>
                     <button
                         onClick={handleOpenModal}
+                        className="rs-full-sm"
                         style={{
                             padding: '12px 24px',
                             cursor: 'pointer',
@@ -416,11 +417,11 @@ const ManageUsers = () => {
                         <p style={{ margin: 0, fontSize: '14px' }}>{error}</p>
                     </div>
                 ) : (
-                    <div style={{ borderRadius: '12px', overflow: 'hidden', border: '1px solid #e2e8f0' }}>
+                    <div className="rs-scroll-x" style={{ borderRadius: '12px', border: '1px solid #e2e8f0' }}>
                         {filteredUsers.length === 0 ? (
-                            <p style={{ padding: '32px', color: '#64748b', textAlign: 'center', margin: 0 }}>No matching accounts found.</p>
+                            <p style={{ padding: 'clamp(16px, 4vw, 32px)', color: '#64748b', textAlign: 'center', margin: 0 }}>No matching accounts found.</p>
                         ) : (
-                            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                            <table style={{ width: '100%', minWidth: '760px', borderCollapse: 'collapse', textAlign: 'left' }}>
                                 <thead>
                                     <tr style={{ background: '#f8fafc' }}>
                                         <th style={{ padding: '16px 24px', color: '#475569', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #e2e8f0', fontWeight: '700' }}>User ID</th>
@@ -595,9 +596,9 @@ const ManageUsers = () => {
                         </div>
 
                         {/* Body Columns */}
-                        <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
+                        <div className="rs-stack" style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
                             {/* Left Column: Account Settings */}
-                            <div style={{ width: '40%', padding: '32px', borderRight: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: '24px', overflowY: 'auto' }}>
+                            <div style={{ width: '40%', padding: 'clamp(16px, 4vw, 32px)', borderRight: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: '24px', overflowY: 'auto' }}>
                                 <div>
                                     <h4 style={{ color: '#475569', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: '700', margin: '0 0 16px 0' }}>Account Settings</h4>
                                     
@@ -674,7 +675,7 @@ const ManageUsers = () => {
                             </div>
 
                             {/* Right Column: Activity Overview */}
-                            <div style={{ width: '60%', padding: '32px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                            <div style={{ width: '60%', padding: 'clamp(16px, 4vw, 32px)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                                 <h4 style={{ color: '#475569', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: '700', margin: '0 0 16px 0' }}>Activity Overview</h4>
                                 
                                 <div style={{ flex: 1, overflowY: 'auto', paddingRight: '8px', minHeight: 0 }}>
@@ -771,7 +772,7 @@ const ManageUsers = () => {
                         color: t.type === 'success' ? '#065F46' : '#991B1B',
                         border: `1px solid ${t.type === 'success' ? '#A7F3D0' : '#FCA5A5'}`,
                         boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                        fontSize: '14px', fontWeight: '600', minWidth: '250px',
+                        fontSize: '14px', fontWeight: '600', minWidth: 'min(250px, 100%)',
                         transition: 'all 0.2s ease-in-out'
                     }}>
                         <CheckCircle size={16} />

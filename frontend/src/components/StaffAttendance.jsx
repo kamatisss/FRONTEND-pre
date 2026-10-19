@@ -331,7 +331,8 @@ const StaffAttendance = () => {
       });
       if (bookingsRes.ok) {
         const bookingsData = await bookingsRes.json();
-        setBookings(bookingsData.filter((b) => !["Finished", "Cancelled"].includes(b.status)));
+        // Only jobs still open for work can be clocked in to (matches the backend rule)
+        setBookings(bookingsData.filter((b) => !["For Review", "Finished", "Cancelled"].includes(b.status)));
       }
 
       const logsData = await getAttendanceLogs();
@@ -510,10 +511,11 @@ const StaffAttendance = () => {
         color: TEXT_PRIMARY,
       }}
     >
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "36px 24px" }}>
+      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "clamp(4px, 4vw, 36px) clamp(0px, 4vw - 8px, 24px)" }}>
 
         {/* ── Page header ── */}
         <div
+          className="rs-wrap"
           style={{
             display: "flex",
             alignItems: "center",

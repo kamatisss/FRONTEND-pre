@@ -94,3 +94,22 @@
 html {
   scroll-behavior: smooth;
 }
+
+/* ─── Responsive helpers for inline-styled screens ─────────────────
+   Inline styles can't hold media queries, so those screens opt in with
+   these classes (breakpoint = Tailwind md, 768px).
+   rs-stack:    side-by-side columns stack on phones
+   rs-wrap:     a header row (title + buttons) wraps on phones
+   rs-scroll-x: wide content (tables) scrolls sideways instead of overflowing */
+.rs-scroll-x { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
+@media (max-width: 767px) {
+  .rs-stack { flex-direction: column !important; overflow-y: auto !important; }
+  .rs-stack > * { width: 100% !important; border-right: none !important; overflow: visible !important; flex: none !important; }
+  .rs-wrap { flex-wrap: wrap !important; gap: 12px !important; }
+  .rs-full-sm { width: 100% !important; justify-content: center; }
+}
+
+/* Inputs below 16px make iOS Safari zoom the page on focus */
+@media (max-width: 767px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea { font-size: max(16px, 1em); }
+}

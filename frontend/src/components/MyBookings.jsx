@@ -5,6 +5,10 @@ import { Calendar, Check, Clock, MapPin, AlertTriangle, Star, CalendarPlus, Chec
 import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
 import ServiceRatingModal from './ServiceRatingModal';
+import PortfolioConsentCard from './PortfolioConsentCard';
+import { getMyPortfolio } from '../services/api';
+import SwipeCarousel from './ui/SwipeCarousel';
+import { useIsPhone } from './ui/useMediaQuery';
 
 const getActiveStep = (status, hasDesign) => {
     switch (status) {
@@ -13,6 +17,7 @@ const getActiveStep = (status, hasDesign) => {
         case 'Preparing':
             return 4;
         case 'Installing':
+        case 'For Review':  // crew finished, awaiting office sign-off
             return 5;
         case 'Finished':
         case 'Completed':
@@ -60,7 +65,7 @@ const BookingMilestoneTracker = ({ status, hasDesign }) => {
     }
 
     return (
-        <div style={{ marginTop: '2rem', marginBottom: '2rem', padding: '0 8px' }}>
+        <div className="stepper" style={{ marginTop: '2rem', marginBottom: '2rem', padding: '0 8px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'relative', width: '100%' }}>
                 
                 {/* Background progress line */}
@@ -72,7 +77,7 @@ const BookingMilestoneTracker = ({ status, hasDesign }) => {
                         left: '7%',
                         right: '7%',
                         height: '4px',
-                        background: '#EDE8DF',
+                        background: '#E2E8F0',
                         zIndex: 0,
                     }} 
                 />
@@ -87,7 +92,7 @@ const BookingMilestoneTracker = ({ status, hasDesign }) => {
                             left: '7%',
                             width: `${(activeStep / (steps.length - 1)) * 86}%`,
                             height: '4px',
-                            background: 'linear-gradient(135deg, #2D4A2D, #4A7A3A)',
+                            background: '#059669',
                             zIndex: 1,
                             transition: 'width 0.4s ease-in-out',
                         }} 
@@ -114,23 +119,23 @@ const BookingMilestoneTracker = ({ status, hasDesign }) => {
                     if (isCompleted) {
                         nodeStyle = {
                             ...nodeStyle,
-                            background: '#4A7A3A',
-                            color: '#F7F3EC',
-                            border: '2px solid #4A7A3A',
+                            background: '#059669',
+                            color: '#F8FAFC',
+                            border: '2px solid #059669',
                         };
                     } else if (isActive) {
                         nodeStyle = {
                             ...nodeStyle,
-                            background: '#FDFAF6',
-                            color: '#4A7A3A',
-                            border: '3px solid #4A7A3A',
+                            background: '#FFFFFF',
+                            color: '#059669',
+                            border: '3px solid #059669',
                         };
                     } else {
                         nodeStyle = {
                             ...nodeStyle,
-                            background: '#F5F0E8',
-                            color: '#9A9080',
-                            border: '2px solid #E8E1D4',
+                            background: '#F1F5F9',
+                            color: '#94A3B8',
+                            border: '2px solid #E2E8F0',
                         };
                     }
 
@@ -157,12 +162,12 @@ const BookingMilestoneTracker = ({ status, hasDesign }) => {
                                 )}
                             </div>
 
-                            {/* Labels */}
+                            {/* Labels (hidden on phones, see the caption below) */}
                             <div className="stepper-labels-container" style={{ textAlign: 'center', marginTop: '12px' }}>
                                 <div className="stepper-label" style={{
                                     fontSize: '0.8rem',
                                     fontWeight: isActive || isCompleted ? 700 : 500,
-                                    color: isActive ? '#4A7A3A' : isCompleted ? '#1A2E1A' : '#9A9080',
+                                    color: isActive ? '#059669' : isCompleted ? '#0F172A' : '#94A3B8',
                                     lineHeight: 1.25,
                                     marginBottom: '4px',
                                 }}>
@@ -170,7 +175,7 @@ const BookingMilestoneTracker = ({ status, hasDesign }) => {
                                 </div>
                                 <div className="stepper-desc" style={{
                                     fontSize: '0.7rem',
-                                    color: '#9A9080',
+                                    color: '#94A3B8',
                                     fontWeight: 500,
                                 }}>
                                     {step.desc}
@@ -180,6 +185,16 @@ const BookingMilestoneTracker = ({ status, hasDesign }) => {
                     );
                 })}
             </div>
+            {activeStep >= 0 && (
+                <div className="stepper-mobile-caption" style={{ display: 'none', marginTop: '12px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '0.8rem', fontWeight: 800, color: '#059669' }}>
+                        Step {Math.min(activeStep + 1, steps.length)} of {steps.length} · {steps[Math.min(activeStep, steps.length - 1)].label}
+                    </div>
+                    <div style={{ fontSize: '0.72rem', color: '#64748B', fontWeight: 500, marginTop: '2px' }}>
+                        {steps[Math.min(activeStep, steps.length - 1)].desc}
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
@@ -382,7 +397,7 @@ function NewBookingModal({ isOpen, onClose, onSuccess }) {
                 {/* Left Column: Form */}
                 <div className="w-full md:w-[60%] p-6 md:p-8 overflow-y-auto max-h-[85vh] md:max-h-[90vh]">
                     <h3 className="text-[22px] font-black text-slate-900 flex items-center gap-2 mb-1">
-                        <CalendarPlus style={{ color: '#4A7A3A' }} size={24} />
+                        <CalendarPlus style={{ color: '#059669' }} size={24} />
                         Book a Service
                     </h3>
                     <p className="text-slate-500 text-xs font-semibold mb-6">
@@ -617,6 +632,8 @@ const MyBookings = () => {
     const [ratingModal,      setRatingModal]      = useState(null); // bookingId or null
     const [reviewSuccessIds, setReviewSuccessIds] = useState(new Set());
     const [showNewBookingModal, setShowNewBookingModal] = useState(false);
+    const [portfolioByBooking,  setPortfolioByBooking]  = useState({}); // bookingId → portfolio entry
+    const isPhone = useIsPhone();
     const location = useLocation();
 
     // Automatically open the booking modal if user is redirected from AI Designer page
@@ -659,9 +676,17 @@ const MyBookings = () => {
         } catch { /* non-critical */ }
     };
 
+    const fetchMyPortfolio = async () => {
+        try {
+            const entries = await getMyPortfolio();
+            setPortfolioByBooking(Object.fromEntries(entries.map(e => [e.booking, e])));
+        } catch { /* non-critical */ }
+    };
+
     useEffect(() => {
         fetchMyBookings();
         fetchMyReviews();
+        fetchMyPortfolio();
     }, []);
 
     const handleCancelBooking = async (bookingId) => {
@@ -694,40 +719,225 @@ const MyBookings = () => {
         };
         switch (status) {
             case 'Pending':
-                return { ...base, background: '#FDFAF6', color: '#C9883A', borderColor: '#E8E1D4' };
+                return { ...base, background: '#FFFBEB', color: '#B45309', borderColor: '#FDE68A' };
             case 'Confirmed':
             case 'Preparing':
-                return { ...base, background: '#EAF0E4', color: '#4A7A3A', borderColor: '#8FAF7E' };
+                return { ...base, background: '#ECFDF5', color: '#059669', borderColor: '#6EE7B7' };
             case 'In Progress':
             case 'Installing':
-                return { ...base, background: '#F0EBE0', color: '#8A7E6E', borderColor: '#D4CAB8' };
+            case 'For Review':
+                return { ...base, background: '#F1F5F9', color: '#64748B', borderColor: '#CBD5E1' };
             case 'Completed':
             case 'Finished':
-                return { ...base, background: '#EAF0E4', color: '#4A7A3A', borderColor: '#8FAF7E' };
+                return { ...base, background: '#ECFDF5', color: '#059669', borderColor: '#6EE7B7' };
             case 'Cancelled':
                 return { ...base, background: '#FEF2F2', color: '#991B1B', borderColor: '#FECACA' };
             default:
-                return { ...base, background: '#F5F0E8', color: '#9A9080', borderColor: '#E8E1D4' };
+                return { ...base, background: '#F1F5F9', color: '#94A3B8', borderColor: '#E2E8F0' };
         }
     };
+
+    // One booking card, shared by the phone carousel/list and the desktop list
+    const renderBooking = (b) => (
+            <div key={b.id} style={{
+                background: '#ffffff',
+                borderRadius: '16px',
+                border: '1.5px solid #E2E8F0',
+                padding: isPhone ? '16px' : '24px',
+                boxShadow: '0 4px 12px rgba(15,23,42, 0.03)',
+                display: 'flex',
+                flexDirection: 'column',
+                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+            }}
+            onMouseEnter={e => {
+                e.currentTarget.style.transform = 'translateY(-2px)';
+                e.currentTarget.style.borderColor = '#6EE7B7';
+                e.currentTarget.style.boxShadow = '0 8px 24px rgba(15,23,42, 0.08)';
+            }}
+            onMouseLeave={e => {
+                e.currentTarget.style.transform = 'translateY(0)';
+                e.currentTarget.style.borderColor = '#E2E8F0';
+                e.currentTarget.style.boxShadow = '0 4px 12px rgba(15,23,42, 0.03)';
+            }}
+            >
+                {/* Top row: Service Type & Status Badge */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <span style={{
+                            padding: '4px 10px',
+                            background: '#ECFDF5',
+                            color: '#059669',
+                            borderRadius: '8px',
+                            fontSize: '0.75rem',
+                            fontWeight: 700,
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.05em'
+                        }}>
+                            Service
+                        </span>
+                        <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: '#0F172A', textTransform: 'capitalize' }}>
+                            {b.service_type}
+                        </h3>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                        <span style={getStatusBadge(b.status)}>
+                            {b.status === 'For Review' ? 'Final Inspection' : b.status}
+                        </span>
+                        {b.status.toLowerCase() === 'pending' && (
+                            <button
+                                onClick={() => handleCancelBooking(b.id)}
+                                style={{
+                                    fontSize: '0.8rem', fontWeight: 700, color: '#EF4444',
+                                    background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                                    textDecoration: 'none'
+                                }}
+                                onMouseEnter={e => e.currentTarget.style.textDecoration = 'underline'}
+                                onMouseLeave={e => e.currentTarget.style.textDecoration = 'none'}
+                            >
+                                Cancel Booking
+                            </button>
+                        )}
+                        {(b.status === 'Finished' || b.status === 'Completed') && (
+                            reviewSuccessIds.has(b.id) || reviewedIds.has(b.id) ? (
+                                <span style={{
+                                    display: 'inline-flex', alignItems: 'center', gap: '5px',
+                                    fontSize: '0.75rem', fontWeight: 700, color: '#059669',
+                                    background: '#ecfdf5', padding: '4px 10px',
+                                    borderRadius: '9999px', border: '1px solid #a7f3d0',
+                                }}>
+                                    <Star size={11} fill="#059669" color="#059669" /> Reviewed
+                                </span>
+                            ) : (
+                                <button
+                                    onClick={() => setRatingModal(b.id)}
+                                    style={{
+                                        display: 'inline-flex', alignItems: 'center', gap: '6px',
+                                        fontSize: '0.78rem', fontWeight: 700, color: '#fff',
+                                        background: '#10b981', border: 'none', padding: '5px 12px',
+                                        borderRadius: '9999px', cursor: 'pointer', transition: 'background .15s',
+                                    }}
+                                    onMouseEnter={e => e.currentTarget.style.background = '#059669'}
+                                    onMouseLeave={e => e.currentTarget.style.background = '#10b981'}
+                                >
+                                    <Star size={12} fill="white" color="white" /> Rate Our Service
+                                </button>
+                            )
+                        )}
+                    </div>
+                </div>
+
+                {/* Booking details grid */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(200px, 100%), 1fr))', gap: isPhone ? '12px' : '16px', marginBottom: isPhone ? '16px' : '24px', paddingBottom: '16px', borderBottom: '1.5px solid #F1F5F9' }}>
+                    <div>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>Date & Time</span>
+                        <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#1E293B' }}>
+                            {b.scheduled_date} {b.preferred_time ? `• ${b.preferred_time}` : ''}
+                        </span>
+                    </div>
+                    {b.service_address && (
+                        <div style={{ gridColumn: isPhone ? '1 / -1' : 'span 2' }}>
+                            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>Location</span>
+                            <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#1E293B', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <MapPin size={14} style={{ color: '#059669', flexShrink: 0 }} />
+                                {b.service_address}
+                            </span>
+                        </div>
+                    )}
+                    {b.contact_number && (
+                        <div>
+                            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>Contact</span>
+                            <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#1E293B' }}>{b.contact_number}</span>
+                        </div>
+                    )}
+                </div>
+
+                {/* Milestone Tracker */}
+                <BookingMilestoneTracker status={b.status} hasDesign={!!(b.design || b.design_details)} />
+
+                {/* Project stage & billing (from the project tracker) */}
+                {b.tracker && b.status !== 'Cancelled' && b.tracker.total_price > 0 && (
+                    <div style={{ marginTop: '16px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '12px', padding: '14px 16px', background: '#FFFFFF', borderRadius: '12px', border: '1.5px solid #E2E8F0' }}>
+                        {[
+                            ['Project stage', b.tracker.status_display],
+                            ['Project price', `₱${b.tracker.total_price.toLocaleString()}`],
+                            ['Paid', `₱${b.tracker.amount_paid.toLocaleString()}`],
+                            ['Balance', b.tracker.remaining_balance > 0 ? `₱${b.tracker.remaining_balance.toLocaleString()}` : 'Fully paid'],
+                        ].map(([label, value]) => (
+                            <div key={label}>
+                                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', display: 'block', marginBottom: '3px' }}>{label}</span>
+                                <span style={{ fontSize: '0.9rem', fontWeight: 700, color: label === 'Balance' && b.tracker.remaining_balance > 0 ? '#B45309' : '#1E293B' }}>{value}</span>
+                            </div>
+                        ))}
+                    </div>
+                )}
+
+                {/* Notes section if present */}
+                {b.notes && (
+                    <div style={{ marginTop: '16px', padding: '12px 16px', background: '#F9FAFB', borderRadius: '10px', border: '1px solid #F3F4F6' }}>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>Notes</span>
+                        <p style={{ margin: 0, fontSize: '0.85rem', color: '#4B5563', lineHeight: 1.5 }}>{b.notes}</p>
+                    </div>
+                )}
+
+                {/* Completed Photo Proof */}
+                {['Finished', 'Completed'].includes(b.status) && b.clock_out_photo_url && (
+                    <div style={{ marginTop: '16px', padding: '16px', background: '#ECFDF5', borderRadius: '12px', border: '1px solid #A7F3D0' }}>
+                        <h4 style={{ margin: '0 0 8px 0', fontSize: '0.85rem', color: '#065F46', fontWeight: 800 }}>
+                            Service Completed Proof Photo
+                        </h4>
+                        <img 
+                            src={b.clock_out_photo_url.startsWith('http') ? b.clock_out_photo_url : `${import.meta.env.VITE_MEDIA_BASE_URL || 'http://localhost:8000'}${b.clock_out_photo_url}`} 
+                            alt="Finished work proof" 
+                            style={{
+                                maxWidth: '400px',
+                                width: '100%',
+                                height: isPhone ? '180px' : '240px',
+                                objectFit: 'cover',
+                                borderRadius: '8px',
+                                border: '1px solid #D1D5DB',
+                                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+                            }}
+                        />
+                    </div>
+                )}
+
+                {/* Project Hub: permission to feature this garden */}
+                {portfolioByBooking[b.id] && (
+                    <PortfolioConsentCard
+                        entry={portfolioByBooking[b.id]}
+                        onUpdated={entry => setPortfolioByBooking(prev => ({ ...prev, [entry.booking]: entry }))}
+                    />
+                )}
+            </div>
+    );
+
+    // Phones: bookings still in motion swipe in a carousel; finished/cancelled ones are a list
+    const ACTIVE_STATUSES = ['Pending', 'Confirmed', 'Preparing', 'In Progress', 'Installing', 'For Review'];
+    const activeBookings = bookings.filter(b => ACTIVE_STATUSES.includes(b.status));
+    const pastBookings = bookings.filter(b => !ACTIVE_STATUSES.includes(b.status));
+    const sectionTitle = (text, n) => (
+        <h3 style={{ margin: '0 0 12px', fontSize: '0.8rem', fontWeight: 800, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            {text} <span style={{ color: '#94A3B8' }}>({n})</span>
+        </h3>
+    );
 
     const s = {
         page: {
             minHeight: 'calc(100vh - 64px)',
-            background: 'linear-gradient(160deg, #F7F3EC 0%, #EAF0E4 60%, #F0EBE0 100%)',
-            padding: '2.5rem 1.5rem',
+            background: 'linear-gradient(160deg, #F8FAFC 0%, #ECFDF5 60%, #F1F5F9 100%)',
+            padding: 'clamp(1rem, 4vw, 2.5rem) clamp(0.25rem, 2vw, 1.5rem)',
             fontFamily: "'Inter', system-ui, sans-serif",
         },
         card: {
             width: '100%',
             maxWidth: '1024px',
             margin: '0 auto',
-            background: '#FDFAF6',
+            background: '#FFFFFF',
             borderRadius: '20px',
-            border: '1.5px solid #E8E1D4',
-            boxShadow: '0 8px 30px rgba(45, 74, 45, 0.05)',
+            border: '1.5px solid #E2E8F0',
+            boxShadow: '0 8px 30px rgba(15,23,42, 0.05)',
             overflow: 'hidden',
-            padding: '2.5rem',
+            padding: 'clamp(1.25rem, 4vw, 2.5rem)',
         },
         header: {
             display: 'flex',
@@ -735,27 +945,27 @@ const MyBookings = () => {
             gap: '14px',
             marginBottom: '2rem',
             paddingBottom: '1.25rem',
-            borderBottom: '1.5px solid #EDE8DF',
+            borderBottom: '1.5px solid #E2E8F0',
         },
         title: {
-            fontFamily: "'Playfair Display', Georgia, serif",
-            fontSize: '2rem',
+            fontFamily: "'Inter', system-ui, sans-serif",
+            fontSize: 'clamp(1.5rem, 5vw, 2rem)',
             fontWeight: 800,
-            color: '#1A2E1A',
+            color: '#0F172A',
             letterSpacing: '-0.01em',
             margin: 0,
         },
         empty: {
             padding: '4rem 1rem',
             textAlign: 'center',
-            color: '#9A9080',
+            color: '#94A3B8',
             fontSize: '1rem',
             fontWeight: 500,
         },
         loading: {
             padding: '4rem 1rem',
             textAlign: 'center',
-            color: '#9A9080',
+            color: '#94A3B8',
             fontSize: '1rem',
             fontWeight: 500,
         },
@@ -766,9 +976,9 @@ const MyBookings = () => {
         <div style={s.page}>
             <style>{`
                 @keyframes stepperPulse {
-                    0% { box-shadow: 0 0 0 0 rgba(74, 122, 58, 0.4); }
-                    70% { box-shadow: 0 0 0 10px rgba(74, 122, 58, 0); }
-                    100% { box-shadow: 0 0 0 0 rgba(74, 122, 58, 0); }
+                    0% { box-shadow: 0 0 0 0 rgba(5,150,105, 0.4); }
+                    70% { box-shadow: 0 0 0 10px rgba(5,150,105, 0); }
+                    100% { box-shadow: 0 0 0 0 rgba(5,150,105, 0); }
                 }
                 .stepper-active-node {
                     animation: stepperPulse 2s infinite;
@@ -788,6 +998,11 @@ const MyBookings = () => {
                     .stepper-line, .stepper-line-fill {
                         top: 16px !important;
                     }
+                }
+                @media (max-width: 640px) {
+                    .stepper { margin-top: 1.25rem !important; margin-bottom: 1.25rem !important; }
+                    .stepper-labels-container { display: none !important; }
+                    .stepper-mobile-caption { display: block !important; }
                 }
                 @media (max-width: 480px) {
                     .stepper-label {
@@ -812,28 +1027,28 @@ const MyBookings = () => {
                 {/* Card Header */}
                 <div style={{ ...s.header, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                        <Calendar size={28} style={{ color: '#4A7A3A' }} />
+                        <Calendar size={28} style={{ color: '#059669' }} />
                         <h2 style={s.title}>My Bookings</h2>
                     </div>
                     <button
                         onClick={() => setShowNewBookingModal(true)}
                         style={{
                             padding: '10px 20px',
-                            background: '#4A7A3A',
-                            color: '#FDFAF6',
+                            background: '#059669',
+                            color: '#FFFFFF',
                             border: 'none',
                             borderRadius: '12px',
                             fontSize: '0.85rem',
                             fontWeight: 800,
                             cursor: 'pointer',
-                            boxShadow: '0 4px 12px rgba(74, 122, 58, 0.15)',
+                            boxShadow: '0 4px 12px rgba(5,150,105, 0.15)',
                             display: 'flex',
                             alignItems: 'center',
                             gap: '6px',
                             transition: 'all 0.2s',
                         }}
-                        onMouseEnter={e => { e.currentTarget.style.background = '#3D6130'; }}
-                        onMouseLeave={e => { e.currentTarget.style.background = '#4A7A3A'; }}
+                        onMouseEnter={e => { e.currentTarget.style.background = '#047857'; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = '#059669'; }}
                     >
                         <CalendarPlus size={16} /> New Service
                     </button>
@@ -843,155 +1058,28 @@ const MyBookings = () => {
                     <div style={s.loading}>Loading your bookings...</div>
                 ) : bookings.length === 0 ? (
                     <div style={s.empty}>You don't have any bookings yet.</div>
+                ) : isPhone ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
+                        {activeBookings.length > 0 && (
+                            <section>
+                                {sectionTitle('In progress', activeBookings.length)}
+                                <SwipeCarousel label="Bookings in progress" caption={i => activeBookings[i].status === 'For Review' ? 'Final Inspection' : activeBookings[i].status}>
+                                    {activeBookings.map(renderBooking)}
+                                </SwipeCarousel>
+                            </section>
+                        )}
+                        {pastBookings.length > 0 && (
+                            <section>
+                                {sectionTitle('Past bookings', pastBookings.length)}
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                    {pastBookings.map(renderBooking)}
+                                </div>
+                            </section>
+                        )}
+                    </div>
                 ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                        {bookings.map(b => (
-                            <div key={b.id} style={{
-                                background: '#ffffff',
-                                borderRadius: '16px',
-                                border: '1.5px solid #E8E1D4',
-                                padding: '24px',
-                                boxShadow: '0 4px 12px rgba(45, 74, 45, 0.03)',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                            }}
-                            onMouseEnter={e => {
-                                e.currentTarget.style.transform = 'translateY(-2px)';
-                                e.currentTarget.style.borderColor = '#8FAF7E';
-                                e.currentTarget.style.boxShadow = '0 8px 24px rgba(45, 74, 45, 0.08)';
-                            }}
-                            onMouseLeave={e => {
-                                e.currentTarget.style.transform = 'translateY(0)';
-                                e.currentTarget.style.borderColor = '#E8E1D4';
-                                e.currentTarget.style.boxShadow = '0 4px 12px rgba(45, 74, 45, 0.03)';
-                            }}
-                            >
-                                {/* Top row: Service Type & Status Badge */}
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                        <span style={{
-                                            padding: '4px 10px',
-                                            background: '#EAF0E4',
-                                            color: '#4A7A3A',
-                                            borderRadius: '8px',
-                                            fontSize: '0.75rem',
-                                            fontWeight: 700,
-                                            textTransform: 'uppercase',
-                                            letterSpacing: '0.05em'
-                                        }}>
-                                            Service
-                                        </span>
-                                        <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: '#1A2E1A', textTransform: 'capitalize' }}>
-                                            {b.service_type}
-                                        </h3>
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-                                        <span style={getStatusBadge(b.status)}>
-                                            {b.status}
-                                        </span>
-                                        {b.status.toLowerCase() === 'pending' && (
-                                            <button
-                                                onClick={() => handleCancelBooking(b.id)}
-                                                style={{
-                                                    fontSize: '0.8rem', fontWeight: 700, color: '#EF4444',
-                                                    background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                                                    textDecoration: 'none'
-                                                }}
-                                                onMouseEnter={e => e.currentTarget.style.textDecoration = 'underline'}
-                                                onMouseLeave={e => e.currentTarget.style.textDecoration = 'none'}
-                                            >
-                                                Cancel Booking
-                                            </button>
-                                        )}
-                                        {(b.status === 'Finished' || b.status === 'Completed') && (
-                                            reviewSuccessIds.has(b.id) || reviewedIds.has(b.id) ? (
-                                                <span style={{
-                                                    display: 'inline-flex', alignItems: 'center', gap: '5px',
-                                                    fontSize: '0.75rem', fontWeight: 700, color: '#059669',
-                                                    background: '#ecfdf5', padding: '4px 10px',
-                                                    borderRadius: '9999px', border: '1px solid #a7f3d0',
-                                                }}>
-                                                    <Star size={11} fill="#059669" color="#059669" /> Reviewed
-                                                </span>
-                                            ) : (
-                                                <button
-                                                    onClick={() => setRatingModal(b.id)}
-                                                    style={{
-                                                        display: 'inline-flex', alignItems: 'center', gap: '6px',
-                                                        fontSize: '0.78rem', fontWeight: 700, color: '#fff',
-                                                        background: '#10b981', border: 'none', padding: '5px 12px',
-                                                        borderRadius: '9999px', cursor: 'pointer', transition: 'background .15s',
-                                                    }}
-                                                    onMouseEnter={e => e.currentTarget.style.background = '#059669'}
-                                                    onMouseLeave={e => e.currentTarget.style.background = '#10b981'}
-                                                >
-                                                    <Star size={12} fill="white" color="white" /> Rate Our Service
-                                                </button>
-                                            )
-                                        )}
-                                    </div>
-                                </div>
-
-                                {/* Booking details grid */}
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '24px', paddingBottom: '16px', borderBottom: '1.5px solid #F0EBE0' }}>
-                                    <div>
-                                        <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#8A7E6E', textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>Date & Time</span>
-                                        <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#2D2D2D' }}>
-                                            {b.scheduled_date} {b.preferred_time ? `• ${b.preferred_time}` : ''}
-                                        </span>
-                                    </div>
-                                    {b.service_address && (
-                                        <div style={{ gridColumn: 'span 2' }}>
-                                            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#8A7E6E', textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>Location</span>
-                                            <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#2D2D2D', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                                <MapPin size={14} style={{ color: '#4A7A3A', flexShrink: 0 }} />
-                                                {b.service_address}
-                                            </span>
-                                        </div>
-                                    )}
-                                    {b.contact_number && (
-                                        <div>
-                                            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#8A7E6E', textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>Contact</span>
-                                            <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#2D2D2D' }}>{b.contact_number}</span>
-                                        </div>
-                                    )}
-                                </div>
-
-                                {/* Milestone Tracker */}
-                                <BookingMilestoneTracker status={b.status} hasDesign={!!(b.design || b.design_details)} />
-
-                                {/* Notes section if present */}
-                                {b.notes && (
-                                    <div style={{ marginTop: '16px', padding: '12px 16px', background: '#F9FAFB', borderRadius: '10px', border: '1px solid #F3F4F6' }}>
-                                        <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>Notes</span>
-                                        <p style={{ margin: 0, fontSize: '0.85rem', color: '#4B5563', lineHeight: 1.5 }}>{b.notes}</p>
-                                    </div>
-                                )}
-
-                                {/* Completed Photo Proof */}
-                                {b.status === 'Completed' && b.clock_out_photo_url && (
-                                    <div style={{ marginTop: '16px', padding: '16px', background: '#ECFDF5', borderRadius: '12px', border: '1px solid #A7F3D0' }}>
-                                        <h4 style={{ margin: '0 0 8px 0', fontSize: '0.85rem', color: '#065F46', fontWeight: 800 }}>
-                                            Service Completed Proof Photo
-                                        </h4>
-                                        <img 
-                                            src={b.clock_out_photo_url.startsWith('http') ? b.clock_out_photo_url : `${import.meta.env.VITE_MEDIA_BASE_URL || 'http://localhost:8000'}${b.clock_out_photo_url}`} 
-                                            alt="Finished work proof" 
-                                            style={{
-                                                maxWidth: '400px',
-                                                width: '100%',
-                                                height: '240px',
-                                                objectFit: 'cover',
-                                                borderRadius: '8px',
-                                                border: '1px solid #D1D5DB',
-                                                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
-                                            }}
-                                        />
-                                    </div>
-                                )}
-                            </div>
-                        ))}
+                        {bookings.map(renderBooking)}
                     </div>
                 )}
 

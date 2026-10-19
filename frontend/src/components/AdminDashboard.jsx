@@ -4,6 +4,9 @@ import { useAuth } from '../context/AuthContext';
 import { useDesign } from '../context/DesignContext';
 import { loadDesign } from '../services/api';
 import { Shield, ChevronDown, ChevronUp, Eye, CheckCircle, XCircle, TrendingUp, ShoppingBag, Clock, Percent, MapPin, ExternalLink, Image, Sparkles, Users } from 'lucide-react';
+import IncomeAnalytics from './IncomeAnalytics';
+import StudioFunnelCard from './StudioFunnelCard';
+import AIDesignerHealthCard from './AIDesignerHealthCard';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
 const MEDIA_BASE_URL = import.meta.env.VITE_MEDIA_BASE_URL || 'http://localhost:8000';
@@ -18,10 +21,11 @@ const AdminDashboard = () => {
     const [selectedAttendance, setSelectedAttendance] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-    const [activeTab, setActiveTab] = useState('designs');
+    const [activeTab, setActiveTab] = useState('analytics');
     const [expandedOrder, setExpandedOrder] = useState(null);
     const [allDesigns, setAllDesigns] = useState([]);
     const [allUsers, setAllUsers] = useState([]);
+    const [allTimeEarned, setAllTimeEarned] = useState(null);
 
     useEffect(() => {
         const fetchSubmittedDesigns = async () => {
@@ -91,13 +95,29 @@ const AdminDashboard = () => {
             }
         };
 
+        // All-time earned income across both services (same definitions as the analytics tab)
+        const fetchAllTimeEarned = async () => {
+            try {
+                const response = await fetch(`${API_BASE_URL}/analytics/income/?range=all`, {
+                    headers: { 'Authorization': `Bearer ${authTokens.access}` }
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    setAllTimeEarned(data.landscape.earned + data.ecommerce.earned);
+                }
+            } catch (err) {
+                console.error('Failed to fetch earned income:', err);
+            }
+        };
+
         if (authTokens) {
             Promise.all([
                 fetchSubmittedDesigns(),
                 fetchOrders(),
                 fetchAttendanceLogs(),
                 fetchAllDesigns(),
-                fetchAllUsers()
+                fetchAllUsers(),
+                fetchAllTimeEarned()
             ]).finally(() => setLoading(false));
         }
     }, [authTokens]);
@@ -159,7 +179,6 @@ const AdminDashboard = () => {
             setExpandedOrder(orderId);
         }
     };
-    const totalRevenue = orders.reduce((sum, order) => sum + Number(order.total_price || 0), 0);
     const totalOrdersCount = orders.length;
     const pendingDesignsCount = designs.length;
 
@@ -168,7 +187,7 @@ const AdminDashboard = () => {
     const onlinePercentage = totalOrdersCount > 0 ? 100 - codPercentage : 0;
 
     return (
-        <div style={{ backgroundColor: '#f8fafc', minHeight: '100%', padding: '40px', fontFamily: "'Inter', sans-serif" }}>
+        <div style={{ backgroundColor: '#f8fafc', minHeight: '100%', padding: 'clamp(0px, 3vw - 8px, 40px)', fontFamily: "'Inter', sans-serif" }}>
             <div style={{ 
                 maxWidth: '1200px', 
                 margin: '0 auto',
@@ -188,12 +207,15 @@ const AdminDashboard = () => {
                 </div>
 
                 {/* Analytics Summary Cards */}
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-6" style={{ marginBottom: '32px' }}>
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 lg:gap-6" style={{ marginBottom: '32px' }}>
                     {/* Total Earnings */}
                     <div className="border border-slate-100 rounded-xl bg-white p-6 shadow-sm flex items-center justify-between transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
                         <div>
-                            <p style={{ color: '#64748b', fontSize: '12px', fontWeight: '700', margin: '0 0 6px 0', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total Earnings (PHP)</p>
-                            <h3 style={{ color: '#059669', fontSize: '24px', fontWeight: '800', margin: 0 }}>₱{totalRevenue.toLocaleString()}</h3>
+                            <p style={{ color: '#64748b', fontSize: '12px', fontWeight: '700', margin: '0 0 6px 0', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total Earned (PHP)</p>
+                            <h3 style={{ color: '#059669', fontSize: '24px', fontWeight: '800', margin: 0 }}>
+                                {allTimeEarned === null ? '—' : `₱${allTimeEarned.toLocaleString()}`}
+                            </h3>
+                            <p style={{ color: '#94a3b8', fontSize: '11px', margin: '4px 0 0 0' }}>Landscape + shop, all time</p>
                         </div>
                         <div style={{ backgroundColor: '#ecfdf5', padding: '12px', borderRadius: '10px' }}>
                             <TrendingUp size={24} color="#059669" />
@@ -238,15 +260,32 @@ const AdminDashboard = () => {
                 <div style={{ 
                     backgroundColor: '#ffffff', 
                     borderRadius: '16px', 
-                    padding: '32px',
+                    padding: 'clamp(16px, 4vw, 32px)',
                     boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.02)',
                     border: '1px solid #f1f5f9'
                 }}>
 
                 {/* Controls / Tabs */}
-                <div style={{ display: 'flex', gap: '12px', marginBottom: '24px' }}>
-                    <button 
-                        onClick={() => setActiveTab('designs')} 
+                <div style={{ display: 'flex', gap: '12px', marginBottom: '24px', flexWrap: 'wrap' }}>
+                    <button
+                        onClick={() => setActiveTab('analytics')}
+                        style={{
+                            padding: '12px 24px',
+                            cursor: 'pointer',
+                            background: activeTab === 'analytics' ? '#10b981' : '#f1f5f9',
+                            color: activeTab === 'analytics' ? 'white' : '#475569',
+                            border: 'none',
+                            borderRadius: '8px',
+                            fontWeight: '700',
+                            fontSize: '15px',
+                            transition: 'all 0.2s',
+                            boxShadow: activeTab === 'analytics' ? '0 4px 14px rgba(16,185,129,0.3)' : 'none'
+                        }}
+                    >
+                        Income Analytics
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('designs')}
                         style={{ 
                             padding: '12px 24px', 
                             cursor: 'pointer', 
@@ -298,14 +337,23 @@ const AdminDashboard = () => {
                     </button>
                 </div>
 
-                {loading && <p style={{ color: '#64748b' }}>Loading data...</p>}
-                {error && <p style={{ color: '#ef4444' }}>{error}</p>}
-                
+                {/* Income Analytics — fetches its own data, independent of the tables below */}
+                {activeTab === 'analytics' && (
+                    <>
+                        <IncomeAnalytics />
+                        <StudioFunnelCard />
+                        <AIDesignerHealthCard />
+                    </>
+                )}
+
+                {activeTab !== 'analytics' && loading && <p style={{ color: '#64748b' }}>Loading data...</p>}
+                {activeTab !== 'analytics' && error && <p style={{ color: '#ef4444' }}>{error}</p>}
+
                 {/* Pending Designs Table */}
                 {!loading && !error && activeTab === 'designs' && (
                     <div style={{ borderRadius: '12px', overflow: 'hidden', border: '1px solid #f1f5f9' }}>
                         {designs.length === 0 ? (
-                            <p style={{ padding: '32px', color: '#64748b', textAlign: 'center', margin: 0 }}>No designs are currently pending review.</p>
+                            <p style={{ padding: 'clamp(16px, 4vw, 32px)', color: '#64748b', textAlign: 'center', margin: 0 }}>No designs are currently pending review.</p>
                         ) : (
                             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                                 <thead>
@@ -349,7 +397,7 @@ const AdminDashboard = () => {
                 {!loading && !error && activeTab === 'orders' && (
                     <div style={{ borderRadius: '12px', overflow: 'hidden', border: '1px solid #f1f5f9' }}>
                         {orders.length === 0 ? (
-                            <p style={{ padding: '32px', color: '#64748b', textAlign: 'center', margin: 0 }}>No orders have been placed yet.</p>
+                            <p style={{ padding: 'clamp(16px, 4vw, 32px)', color: '#64748b', textAlign: 'center', margin: 0 }}>No orders have been placed yet.</p>
                         ) : (
                             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                                 <thead>
@@ -417,7 +465,7 @@ const AdminDashboard = () => {
                                                     <td colSpan="7" style={{ padding: '0 24px 24px 24px', borderBottom: '1px solid #f1f5f9' }}>
                                                         <div style={{ background: '#ffffff', borderRadius: '8px', padding: '16px', border: '1px solid #f1f5f9', boxShadow: 'inset 0 2px 4px 0 rgba(0, 0, 0, 0.02)' }}>
                                                             <h4 style={{ color: '#475569', margin: '0 0 12px 0', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: '700' }}>Ordered Items</h4>
-                                                            <ul style={{ margin: 0, paddingLeft: '20px', color: '#334155', fontSize: '14px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '10px' }}>
+                                                            <ul style={{ margin: 0, paddingLeft: '20px', color: '#334155', fontSize: '14px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(250px, 100%), 1fr))', gap: '10px' }}>
                                                                 {order.items.map(item => (
                                                                     <li key={item.id}>
                                                                         <span style={{ fontWeight: '700', color: '#0f172a' }}>{item.quantity}x</span> {item.item_name} <span style={{ color: '#059669', fontWeight: '600' }}>(₱{Number(item.price_at_booking).toLocaleString()})</span>
@@ -440,7 +488,7 @@ const AdminDashboard = () => {
                 {!loading && !error && activeTab === 'attendance' && (
                     <div style={{ borderRadius: '12px', overflow: 'hidden', border: '1px solid #f1f5f9' }}>
                         {attendanceLogs.length === 0 ? (
-                            <p style={{ padding: '32px', color: '#64748b', textAlign: 'center', margin: 0 }}>No attendance logs recorded yet.</p>
+                            <p style={{ padding: 'clamp(16px, 4vw, 32px)', color: '#64748b', textAlign: 'center', margin: 0 }}>No attendance logs recorded yet.</p>
                         ) : (
                             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                                 <thead>

@@ -188,10 +188,11 @@ const AdminAttendance = () => {
         color: "#111827",
       }}
     >
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "28px 24px" }}>
+      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "clamp(4px, 4vw, 28px) clamp(0px, 4vw - 8px, 24px)" }}>
 
         {/* ── Page header ── */}
         <div
+          className="rs-wrap"
           style={{
             display: "flex",
             alignItems: "flex-start",
@@ -253,7 +254,7 @@ const AdminAttendance = () => {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(4, 1fr)",
+            gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
             gap: 12,
             marginBottom: 20,
           }}

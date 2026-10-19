@@ -67,13 +67,13 @@ const ManageAvailability = () => {
     ];
 
     return (
-        <div style={{ backgroundColor: '#f1f5f9', minHeight: '100%', padding: '40px', fontFamily: "'Inter', sans-serif" }}>
+        <div style={{ backgroundColor: '#f1f5f9', minHeight: '100%', padding: 'clamp(0px, 3vw - 8px, 40px)', fontFamily: "'Inter', sans-serif" }}>
             <div style={{ 
                 maxWidth: '1200px', 
                 margin: '0 auto', 
                 backgroundColor: '#ffffff', 
                 borderRadius: '16px', 
-                padding: '32px',
+                padding: 'clamp(16px, 4vw, 32px)',
                 boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01)'
             }}>
                 
@@ -125,6 +125,12 @@ const ManageAvailability = () => {
                         font-weight: 500;
                         transition: all 0.2s;
                     }
+                    /* Phones: smaller day cells so the month fits the screen */
+                    @media (max-width: 480px) {
+                        .custom-datepicker-container .react-datepicker { padding: 8px; }
+                        .custom-datepicker-container .react-datepicker__day-name,
+                        .custom-datepicker-container .react-datepicker__day { width: 34px; line-height: 34px; margin: 2px; }
+                    }
                     .custom-datepicker-container .react-datepicker__day:hover {
                         background-color: #f1f5f9;
                         border-radius: 50%;
@@ -152,7 +158,7 @@ const ManageAvailability = () => {
 
                 <div style={{ display: 'flex', gap: '40px', flexWrap: 'wrap' }}>
                     {/* Left Side: Calendar */}
-                    <div className="custom-datepicker-container" style={{ flex: '1', minWidth: '350px' }}>
+                    <div className="custom-datepicker-container" style={{ flex: '1', minWidth: 'min(350px, 100%)' }}>
                         {loading ? <p style={{ color: '#64748b' }}>Loading calendar...</p> : (
                             <DatePicker
                                 selected={selectedDate}
@@ -164,7 +170,7 @@ const ManageAvailability = () => {
                     </div>
 
                     {/* Right Side: Details Panel */}
-                    <div style={{ flex: '1', minWidth: '300px', background: '#f8fafc', borderRadius: '12px', padding: '24px', border: '1px solid #e2e8f0' }}>
+                    <div style={{ flex: '1', minWidth: 'min(300px, 100%)', background: '#f8fafc', borderRadius: '12px', padding: '24px', border: '1px solid #e2e8f0' }}>
                         <h3 style={{ margin: '0 0 16px 0', color: '#1e293b', fontSize: '16px', fontWeight: '700' }}>Legend</h3>
                         
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '32px' }}>

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useEffect } from 'react';
 import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 
@@ -17,7 +17,7 @@ const DEFAULT_CATEGORY_SCALE = 1.5; // fallback for unknown categories
  * NormalizedModel
  *
  * Loads a .glb from `url` and automatically:
- *   1. Clones the scene (safe for multiple instances)
+ *   1. Clones the scene and its materials (safe for multiple instances)
  *   2. Computes the bounding box with THREE.Box3
  *   3. Centers the model on the X and Z axes
  *   4. Pins the model's lowest Y point exactly to Y = 0 (ground-flush)
@@ -26,7 +26,7 @@ const DEFAULT_CATEGORY_SCALE = 1.5; // fallback for unknown categories
  *   7. Applies the user's `scale` slider on top of everything
  *
  * Props:
- *   url       {string}  — Absolute URL of the .glb (e.g. from Django backend)
+ *   url       {string}  — URL of the .glb, resolved via resolveModelUrl() (e.g. /models/plants/bamboo.glb)
  *   scale     {number}  — User's UI scale multiplier (e.g. 0.8 – 2.0)
  *   category  {string}  — 'plant' | 'hardscape' | 'furniture'
  */
@@ -38,6 +38,8 @@ export default function NormalizedModel({ url, scale = 1, category = 'plant', re
     const clone = scene.clone(true);
 
     // ── 2. Enable shadows on every mesh in the hierarchy ──────────────────────
+    //    scene.clone() shares materials with the cached GLTF, so clone those too —
+    //    otherwise hover/select emissive on one instance lights up every copy.
     clone.traverse((child) => {
       if (child.isMesh) {
         child.castShadow    = true;
@@ -45,11 +47,16 @@ export default function NormalizedModel({ url, scale = 1, category = 'plant', re
         child.frustumCulled = false;
         if (child.material) {
           if (Array.isArray(child.material)) {
-            child.material.forEach((mat) => {
-              mat.side = THREE.DoubleSide;
+            child.material = child.material.map((mat) => {
+              const own = mat.clone();
+              own.side = THREE.DoubleSide;
+              own.userData.instanceOwned = true;
+              return own;
             });
           } else {
+            child.material = child.material.clone();
             child.material.side = THREE.DoubleSide;
+            child.material.userData.instanceOwned = true;
           }
         }
         if (child.geometry) {
@@ -97,6 +104,15 @@ export default function NormalizedModel({ url, scale = 1, category = 'plant', re
     return clone;
   }, [scene, scale, category, realWorldSize]);
   // Re-run whenever the loaded scene, the user's scale, or the category changes.
+
+  // Free this instance's cloned materials when replaced or unmounted.
+  // Geometry and textures stay shared with the GLTF cache, so they aren't disposed.
+  useEffect(() => () => {
+    normalizedScene.traverse((child) => {
+      if (!child.isMesh || !child.material) return;
+      (Array.isArray(child.material) ? child.material : [child.material]).forEach((m) => m.dispose());
+    });
+  }, [normalizedScene]);
 
   return <primitive object={normalizedScene} />;
 }

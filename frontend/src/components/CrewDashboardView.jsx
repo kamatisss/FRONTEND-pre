@@ -5,6 +5,7 @@ import {
   MapPin, LogIn, X, Layers, Eye,
 } from 'lucide-react';
 import ThreeGardenCanvas from './ThreeGardenCanvas';
+import ProgressPhotos from './ProgressPhotos';
 
 /* ─── Tiny shared helpers (crew-scoped, don't touch StaffDashboard versions) ── */
 function SkeletonCard() {
@@ -26,9 +27,13 @@ const CREW_STATUS_STYLES = {
   Pending:    'bg-amber-50   text-amber-700   border-amber-200',
   Preparing:  'bg-blue-50    text-blue-700    border-blue-200',
   Installing: 'bg-orange-50  text-orange-700  border-orange-200',
+  'For Review': 'bg-violet-50 text-violet-700 border-violet-200',
   Finished:   'bg-emerald-50 text-emerald-700 border-emerald-200',
   Cancelled:  'bg-red-50     text-red-700     border-red-200',
 };
+
+// Jobs the crew has handed off: submitted for sign-off, signed off, or cancelled
+const CREW_DONE_STATUSES = ['For Review', 'Finished', 'Cancelled'];
 
 function CrewBadge({ label }) {
   const cls = CREW_STATUS_STYLES[label] || 'bg-slate-100 text-slate-600 border-slate-200';
@@ -155,6 +160,7 @@ export default function CrewDashboardView({
       Installing: { bg: 'bg-orange-500',  text: 'text-white', label: 'IN PROGRESS' },
       Preparing:  { bg: 'bg-blue-500',    text: 'text-white', label: 'PREPARING'   },
       Pending:    { bg: 'bg-amber-400',   text: 'text-white', label: 'SCHEDULED'   },
+      'For Review': { bg: 'bg-violet-500', text: 'text-white', label: 'AWAITING SIGN-OFF' },
       Finished:   { bg: 'bg-emerald-500', text: 'text-white', label: 'FINISHED'    },
       Cancelled:  { bg: 'bg-red-400',     text: 'text-white', label: 'CANCELLED'   },
     };
@@ -256,14 +262,30 @@ export default function CrewDashboardView({
             </div>
           )}
 
+          {/* Before / during / after photos — feed the Project Hub portfolio */}
+          {booking.status !== 'Cancelled' && (
+            <ProgressPhotos
+              booking={booking}
+              user={user}
+              toast={toast}
+              canUpload={booking.status !== 'Finished'}
+            />
+          )}
+
           {booking.status === 'Installing' && (
             <button
-              onClick={() => updateBookingStatus(booking.id, 'Finished')}
+              onClick={() => updateBookingStatus(booking.id, 'For Review')}
               disabled={isAct}
               className="flex items-center justify-center gap-2 w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold rounded-xl transition-colors cursor-pointer border-none disabled:opacity-50"
             >
-              {isAct ? 'Finishing…' : '✓ Mark as Finished'}
+              {isAct ? 'Submitting…' : '✓ Submit for Sign-off'}
             </button>
+          )}
+
+          {booking.status === 'For Review' && (
+            <p className="text-xs text-violet-700 bg-violet-50 border border-violet-200 rounded-xl px-3 py-2.5 m-0 leading-relaxed">
+              Submitted as finished. An office admin will review and sign off the job.
+            </p>
           )}
         </div>
       </div>
@@ -295,7 +317,7 @@ export default function CrewDashboardView({
         {/* Stat cards */}
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
           <CrewStatCard icon={Calendar}     label="Assigned Projects" value={bookings.length} iconBg="bg-orange-50" iconColor="text-orange-600" />
-          <CrewStatCard icon={Clock}        label="Active Today"      value={bookings.filter(b => b.scheduled_date === today && !['Finished', 'Cancelled'].includes(b.status)).length} iconBg="bg-blue-50" iconColor="text-blue-600" />
+          <CrewStatCard icon={Clock}        label="Active Today"      value={bookings.filter(b => b.scheduled_date === today && !CREW_DONE_STATUSES.includes(b.status)).length} iconBg="bg-blue-50" iconColor="text-blue-600" />
           <CrewStatCard icon={CheckCircle2} label="Shift Status"      value={activeAttendance?.clocked_in ? 'On Shift' : 'Off Shift'} iconBg={activeAttendance?.clocked_in ? 'bg-emerald-50' : 'bg-slate-50'} iconColor={activeAttendance?.clocked_in ? 'text-emerald-600' : 'text-slate-400'} />
         </div>
 
@@ -333,7 +355,7 @@ export default function CrewDashboardView({
               <div className="grid grid-cols-3 gap-4">
                 <CrewStatCard icon={Calendar}     label="Assigned"   value={bookings.length}                                              iconBg="bg-orange-50"   iconColor="text-orange-600" />
                 <CrewStatCard icon={Clock}        label="Active Now" value={bookings.filter(b => b.status === 'Installing').length}       iconBg="bg-blue-50"     iconColor="text-blue-600" />
-                <CrewStatCard icon={CheckCircle2} label="Done"       value={bookings.filter(b => b.status === 'Finished').length}         iconBg="bg-emerald-50"  iconColor="text-emerald-600" />
+                <CrewStatCard icon={CheckCircle2} label="Done"       value={bookings.filter(b => ['For Review', 'Finished'].includes(b.status)).length} iconBg="bg-emerald-50"  iconColor="text-emerald-600" />
               </div>
 
               {todayActive.length > 0 ? (
@@ -363,11 +385,11 @@ export default function CrewDashboardView({
         {/* ── My Tasks tab ── */}
         {!loading && activeTab === 'projects' && (() => {
           const myBookings    = bookings;
-          const todayBookings = myBookings.filter(b => b.scheduled_date === today && !['Finished', 'Cancelled'].includes(b.status));
+          const todayBookings = myBookings.filter(b => b.scheduled_date === today && !CREW_DONE_STATUSES.includes(b.status));
           const viewBookings  = crewViewMode === 'today' ? todayBookings : myBookings;
           const activeB       = viewBookings.filter(b => ['Preparing', 'Installing'].includes(b.status));
           const pendingB      = viewBookings.filter(b => b.status === 'Pending');
-          const completedB    = crewViewMode === 'all' ? viewBookings.filter(b => ['Finished', 'Cancelled'].includes(b.status)) : [];
+          const completedB    = crewViewMode === 'all' ? viewBookings.filter(b => CREW_DONE_STATUSES.includes(b.status)) : [];
 
           return (
             <div className="space-y-5">
@@ -375,7 +397,7 @@ export default function CrewDashboardView({
                 <div className="flex gap-1 p-1 bg-white border border-slate-200 rounded-xl shadow-sm">
                   {[
                     { key: 'today', label: "Today's Schedule", count: todayBookings.length },
-                    { key: 'all',   label: 'All Tasks',        count: myBookings.filter(b => !['Finished', 'Cancelled'].includes(b.status)).length },
+                    { key: 'all',   label: 'All Tasks',        count: myBookings.filter(b => !CREW_DONE_STATUSES.includes(b.status)).length },
                   ].map(({ key, label, count }) => (
                     <button
                       key={key}
@@ -546,10 +568,10 @@ export default function CrewDashboardView({
                         onClick={() => setModalArMode(key)}
                         style={{
                           padding: '4px 12px', borderRadius: '6px',
-                          border: modalArMode === key ? '1.5px solid #4A7A3A' : '1.5px solid transparent',
+                          border: modalArMode === key ? '1.5px solid #059669' : '1.5px solid transparent',
                           cursor: 'pointer', fontSize: '0.71rem', fontWeight: 700,
-                          background: modalArMode === key ? '#2D4A2D' : 'transparent',
-                          color: modalArMode === key ? '#F7F3EC' : '#64748B',
+                          background: modalArMode === key ? '#1E293B' : 'transparent',
+                          color: modalArMode === key ? '#F8FAFC' : '#64748B',
                           transition: 'all 0.18s', whiteSpace: 'nowrap',
                         }}
                       >

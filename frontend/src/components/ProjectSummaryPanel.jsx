@@ -5,7 +5,7 @@ import {
   Pencil, Trash2, Leaf, GripVertical, Minus,
   ChevronUp, ChevronDown, Package,
 } from 'lucide-react';
-import { submitOrder, createCheckoutSession } from '../services/api';
+import { submitOrder, createCheckoutSession, getPricing, getEstimate } from '../services/api';
 
 /* ─────────────────────────────────────────────────────────────────────────
    GLOBAL STYLES
@@ -19,7 +19,6 @@ if (typeof document !== 'undefined') {
     document.head.appendChild(s);
   }
   s.textContent = `
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
 
     @keyframes psp-panelIn {
       from { opacity: 0; transform: scale(0.97) translateY(10px); }
@@ -246,17 +245,41 @@ const Dot = ({ i }) => (
 /* ─────────────────────────────────────────────────────────────────────────
    MAIN COMPONENT
 ───────────────────────────────────────────────────────────────────────── */
-export default function ProjectSummaryPanel() {
+// onCheckout: optional override (the guest Studio asks visitors to sign in first)
+// compact: phones. Starts as the pill and opens to the screen width.
+export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
   const { totalCost, costBreakdown, state, dispatch } = useDesign();
   const { placedItems } = state;
 
   /* ── UI state ── */
   const [minimized, setMinimized]       = useState(false);
-  const [collapsed, setCollapsed]       = useState(false);
+  const [collapsed, setCollapsed]       = useState(compact);
   const [showCheckout, setShowCheckout] = useState(false);
   const [formData, setFormData]         = useState({ name: '', email: '', phone: '', address: '' });
   const [payMethod, setPayMethod]       = useState('stripe');
   const [loading, setLoading]           = useState(false);
+  const [shippingFee, setShippingFee]   = useState(150);   // from the admin rate card
+  const [installEst, setInstallEst]     = useState(null);  // { low, high } with crew installation
+
+  useEffect(() => {
+    getPricing().then(p => setShippingFee(Number(p.shipping_fee))).catch(() => {});
+  }, []);
+
+  // Installed-by-our-crew estimate from the rate card (debounced while the design changes)
+  const itemCounts = JSON.stringify(placedItems.reduce((acc, i) => {
+    if (i.productId != null) acc[i.productId] = (acc[i.productId] || 0) + 1;
+    return acc;
+  }, {}));
+  const area = Number(state.dimensions?.width || 0) * Number(state.dimensions?.length || 0);
+  useEffect(() => {
+    const counts = JSON.parse(itemCounts);
+    const items = Object.entries(counts).map(([product_id, quantity]) => ({ product_id: Number(product_id), quantity }));
+    if (!items.length) return undefined;  // nothing to estimate (the line is hidden below)
+    const t = setTimeout(() => {
+      getEstimate(items, area).then(e => setInstallEst({ low: e.low, high: e.high })).catch(() => setInstallEst(null));
+    }, 600);
+    return () => clearTimeout(t);
+  }, [itemCounts, area]);
 
   /* ── Drag ── */
   const panelRef  = useRef(null);
@@ -307,7 +330,6 @@ export default function ProjectSummaryPanel() {
         customer_phone: formData.phone,
         customer_address: formData.address,
         payment_method: payMethod,
-        total_price: totalCost,
         items,
       };
 
@@ -391,8 +413,10 @@ export default function ProjectSummaryPanel() {
         ref={panelRef}
         style={{
           position: 'absolute', bottom: 0, right: 0,
-          transform: `translate(${pos.x}px, ${pos.y}px)`,
-          width: 358,
+          transform: compact ? 'none' : `translate(${pos.x}px, ${pos.y}px)`,
+          width: compact ? 'calc(100vw - 24px)' : 358,
+          maxHeight: compact ? 'calc(100dvh - 200px)' : undefined,
+          overflowY: compact ? 'auto' : undefined,
           background: C.panel,
           backdropFilter: 'blur(24px) saturate(1.7)',
           WebkitBackdropFilter: 'blur(24px) saturate(1.7)',
@@ -593,9 +617,9 @@ export default function ProjectSummaryPanel() {
                 marginBottom: 11,
               }}>
                 <div>
-                  <Label style={{ color: C.greenDark }}>Total Estimate</Label>
+                  <Label style={{ color: C.greenDark }}>Items Total</Label>
                   <p style={{ margin: '3px 0 0', fontSize: 9.5, color: C.textDim, fontWeight: 500 }}>
-                    {costBreakdown.length} line{costBreakdown.length !== 1 ? 's' : ''} · incl. VAT
+                    {costBreakdown.length} line{costBreakdown.length !== 1 ? 's' : ''} · + ₱{shippingFee.toLocaleString()} delivery
                   </p>
                 </div>
                 <span style={{
@@ -607,10 +631,19 @@ export default function ProjectSummaryPanel() {
                 </span>
               </div>
 
+              {/* What it would cost installed by our crew (rate card estimate) */}
+              {installEst && itemCounts !== '{}' && (
+                <p style={{ margin: '0 0 11px', fontSize: 10.5, color: C.textMid, lineHeight: 1.45 }}>
+                  <strong style={{ color: C.greenDark }}>Installed by our crew:</strong>{' '}
+                  est. ₱{installEst.low.toLocaleString()}–₱{installEst.high.toLocaleString()} incl. site prep, soil &amp; labour
+                  {area ? ` for ${state.dimensions.width} × ${state.dimensions.length} m` : ''}. Final price after a site visit.
+                </p>
+              )}
+
               {/* Checkout CTA */}
               <button
                 className="psp-checkout-btn"
-                onClick={() => setShowCheckout(true)}
+                onClick={() => (onCheckout ? onCheckout() : setShowCheckout(true))}
               >
                 <ShoppingCart size={15} strokeWidth={2.5} />
                 Checkout &amp; Order
@@ -823,7 +856,7 @@ export default function ProjectSummaryPanel() {
                 <div>
                   <Label style={{ color: C.greenDark }}>Amount Due</Label>
                   <p style={{ margin: '3px 0 0', fontSize: 9.5, color: C.textMid, fontWeight: 500 }}>
-                    {placedItems.length} items · {payMethod === 'cod' ? 'Pay on delivery' : 'Pay now'}
+                    {placedItems.length} items + ₱{shippingFee.toLocaleString()} delivery · {payMethod === 'cod' ? 'Pay on delivery' : 'Pay now'}
                   </p>
                 </div>
                 <span style={{
@@ -831,7 +864,7 @@ export default function ProjectSummaryPanel() {
                   color: C.greenDark, fontFamily: C.mono,
                   letterSpacing: '-0.04em', lineHeight: 1,
                 }}>
-                  ₱{totalCost.toLocaleString()}
+                  ₱{(totalCost + shippingFee).toLocaleString()}
                 </span>
               </div>
 

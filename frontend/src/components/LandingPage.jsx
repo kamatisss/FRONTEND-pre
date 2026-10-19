@@ -2,13 +2,17 @@ import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import FeatureCarousel from './FeatureCarousel';
+import ReviewCarousel from './ReviewCarousel';
+import LandingStudioTeaser from './LandingStudioTeaser';
+import HeroGarden from './HeroGarden';
+import { prefetchStudio } from '../services/prefetch';
+import { ProjectCard } from './ProjectHub';
+import { getPublicProjects, getTrackRecord } from '../services/api';
 import {
   Leaf,
   MapPin,
   Phone,
   Mail,
-  Star,
-  Quote,
   ArrowRight,
   ShieldCheck,
   Image as ImageIcon,
@@ -56,12 +60,6 @@ const STEPS = [
   { step: '04', title: 'Build',        desc: 'Save your design or book our pros to bring it to life.' },
 ];
 
-const REVIEWS = [
-  { text: 'Being able to see the 3D design before spending any money gave me so much confidence. The installation team executed it perfectly.', name: 'Sarah M.', role: 'Homeowner', rating: 5 },
-  { text: 'The app is incredibly fun to use, and the final garden looks exactly like the 3D render. Absolutely worth every penny.', name: 'David L.', role: 'Property Developer', rating: 5 },
-  { text: 'They transformed my boring backyard into a tropical resort. The plant recommendations were spot on for our climate.', name: 'Elena R.', role: 'Homeowner', rating: 5 },
-];
-
 const GALLERY = [
   { src: 'https://images.unsplash.com/photo-1598902108854-10e335adac99?q=80&w=800&auto=format&fit=crop', label: 'Monstera Deliciosa',      category: 'Tropical Plant' },
   { src: 'https://images.unsplash.com/photo-1584622781564-1d987f7333c1?q=80&w=800&auto=format&fit=crop', label: 'Natural Stone Pavers',    category: 'Hardscape' },
@@ -75,14 +73,16 @@ const GALLERY = [
 export default function LandingPage() {
   const [scrolled,     setScrolled]     = useState(false);
   const [mobileOpen,   setMobileOpen]   = useState(false);
-  const [liveReviews,  setLiveReviews]  = useState(null);
+  const [projects,     setProjects]     = useState([]);
+  const [record,       setRecord]       = useState(null);
 
   useEffect(() => {
-    const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
-    fetch(`${apiBase}/reviews/public/`)
-      .then(r => r.ok ? r.json() : null)
-      .then(data => { if (data?.length) setLiveReviews(data); })
+    // Featured portfolio projects, falling back to the most recent published ones
+    getPublicProjects({ featured: 1, limit: 3 })
+      .then(d => d.results.length ? d.results : getPublicProjects({ limit: 3 }).then(r => r.results))
+      .then(setProjects)
       .catch(() => {});
+    getTrackRecord().then(d => setRecord(d.stats)).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -119,6 +119,7 @@ export default function LandingPage() {
   const navLinks = [
     { label: 'Services',     id: 'services' },
     { label: 'How it Works', id: 'how-it-works' },
+    { label: 'Reviews',      id: 'reviews' },
   ];
 
   return (
@@ -126,7 +127,6 @@ export default function LandingPage() {
 
       {/* ══ GLOBAL STYLES ══ */}
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
 
         * { box-sizing: border-box; }
 
@@ -474,35 +474,6 @@ export default function LandingPage() {
           background: #f8fafc;
           border-top: 1px solid #e2e8f0;
         }
-        .gs-reviews-grid {
-          display: grid;
-          grid-template-columns: repeat(3, 1fr);
-          gap: 24px;
-        }
-        .gs-review-card {
-          background: #ffffff;
-          border: 1px solid #e2e8f0;
-          border-radius: 20px; padding: 36px 32px;
-          position: relative;
-          transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
-        }
-        .gs-review-card:hover {
-          background: #ecfdf5;
-          border-color: #a7f3d0;
-          box-shadow: 0 8px 30px rgba(16,185,129,0.08);
-        }
-        .gs-quote-icon {
-          position: absolute; top: 24px; right: 28px;
-          color: #d1fae5;
-        }
-        .gs-stars { display: flex; gap: 4px; margin-bottom: 20px; }
-        .gs-review-text {
-          font-size: 15px; line-height: 1.75;
-          color: #475569; margin: 0 0 28px;
-          font-weight: 400;
-        }
-        .gs-reviewer-name  { font-size: 15px; font-weight: 800; color: #0f172a; margin: 0 0 4px; }
-        .gs-reviewer-role  { font-size: 13px; color: #059669; margin: 0; }
 
         /* ── CTA ── */
         .gs-cta {
@@ -644,7 +615,6 @@ export default function LandingPage() {
           .gs-nav-links, .gs-nav-cta { display: none; }
           .gs-services-grid { grid-template-columns: 1fr; }
           .gs-steps-grid { grid-template-columns: 1fr; }
-          .gs-reviews-grid { grid-template-columns: 1fr; }
           .gs-footer-grid { grid-template-columns: 1fr; gap: 32px; }
           .gs-gallery-grid { grid-template-columns: repeat(2, 1fr); }
           .gs-gallery-header { flex-direction: column; align-items: flex-start; gap: 12px; }
@@ -677,6 +647,12 @@ export default function LandingPage() {
               >{label}</button>
             </li>
           ))}
+          <li>
+            <Link to="/projects" style={{ color: '#475569', fontSize: 'inherit', fontWeight: 'inherit', textDecoration: 'none' }}
+              onMouseEnter={e => e.target.style.color = '#10b981'}
+              onMouseLeave={e => e.target.style.color = '#475569'}
+            >Projects</Link>
+          </li>
         </ul>
         <div className="gs-nav-cta">
           <Link to="/login" className="gs-btn-ghost" style={{ color: '#475569' }}>
@@ -703,6 +679,7 @@ export default function LandingPage() {
               {label}
             </button>
           ))}
+          <Link to="/projects" className="gs-mobile-link">Projects</Link>
           <Link to="/login" className="gs-mobile-link" style={{ color: '#475569' }}>Log In</Link>
           <Link to="/register" className="gs-mobile-cta">Sign Up Free</Link>
         </motion.div>
@@ -717,7 +694,7 @@ export default function LandingPage() {
             <motion.div initial="hidden" animate="visible" variants={STAGGER} className="gs-hero-copy">
               <motion.div variants={FADE_UP} className="gs-hero-badge">
                 <Sparkles size={13} />
-                AI Garden Design · Free to Try
+                Free 3D Garden Studio · No sign-up
               </motion.div>
 
               <motion.h1 variants={FADE_UP} className="gs-hero-h1">
@@ -726,26 +703,34 @@ export default function LandingPage() {
               </motion.h1>
 
               <motion.p variants={FADE_UP} className="gs-hero-sub">
-                Upload a site photo, visualize 1,200+ plants and materials in real 3D,
-                then book your crew — all before the first shovel hits the ground.
+                Design your garden in real 3D right in your browser, free. Let our AI
+                finish it for you, then book our crew — all before the first shovel hits the ground.
               </motion.p>
 
               <motion.div variants={FADE_UP} className="gs-hero-actions">
-                <Link to="/ai-designer" className="gs-btn-hero-primary">
+                <Link to="/try-studio" className="gs-btn-hero-primary"
+                  onPointerEnter={prefetchStudio} onFocus={prefetchStudio} onTouchStart={prefetchStudio}>
                   Start Designing Free <ArrowRight size={18} />
                 </Link>
-                <button className="gs-btn-hero-outline" onClick={() => scrollTo('services')}>
-                  Explore Services
-                </button>
+                <Link to="/ai-designer" className="gs-btn-hero-outline">
+                  <Sparkles size={16} /> Let AI design it
+                </Link>
               </motion.div>
 
-              <motion.div variants={FADE_UP} className="gs-hero-proofrow">
-                <span><strong>500+</strong> Projects</span>
-                <span className="gs-hero-proof-dot" />
-                <span><strong>98%</strong> Client Satisfaction</span>
-                <span className="gs-hero-proof-dot" />
-                <span><strong>1,200+</strong> Plants Available</span>
-              </motion.div>
+              {/* Live numbers from the Project Hub track record — no hard-coded claims */}
+              {record && record.projects_completed > 0 && (
+                <motion.div variants={FADE_UP} className="gs-hero-proofrow">
+                  <span><strong>{record.projects_completed.toLocaleString()}</strong> Projects completed</span>
+                  {record.average_rating && (
+                    <>
+                      <span className="gs-hero-proof-dot" />
+                      <span><strong>{record.average_rating}★</strong> from {record.review_count.toLocaleString()} reviews</span>
+                    </>
+                  )}
+                  <span className="gs-hero-proof-dot" />
+                  <Link to="/track-record" style={{ color: 'inherit' }}>See our track record</Link>
+                </motion.div>
+              )}
             </motion.div>
 
             {/* Right — feature journey carousel */}
@@ -755,7 +740,8 @@ export default function LandingPage() {
               transition={{ duration: 0.75, delay: 0.2, ease: [0.22, 1, 0.36, 1] }}
               className="gs-hero-visual"
             >
-              <FeatureCarousel />
+              {/* Live 3D garden on capable desktops; the image carousel everywhere else */}
+              <HeroGarden fallback={<FeatureCarousel />} />
             </motion.div>
 
           </div>
@@ -820,6 +806,32 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* ══ TRY THE STUDIO — free 3D design, AI with an account ══ */}
+      <LandingStudioTeaser />
+
+      {/* ══ FEATURED PROJECTS (Project Hub) — only once real projects are published ══ */}
+      {projects.length > 0 && (
+        <section id="projects" className="gs-gallery">
+          <div className="gs-container">
+            <div className="gs-gallery-header">
+              <div>
+                <div className="gs-section-eyebrow" style={{ marginBottom: 14 }}>Project Hub</div>
+                <h2 className="gs-section-title" style={{ margin: 0 }}>Gardens We've Built</h2>
+              </div>
+              <Link to="/projects" className="gs-gallery-link">
+                See all projects <ArrowRight size={16} />
+              </Link>
+            </div>
+            <motion.div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6"
+              initial="hidden" whileInView="visible" viewport={{ once: true }} variants={STAGGER}>
+              {projects.map(p => (
+                <motion.div key={p.slug} variants={FADE_UP}><ProjectCard project={p} /></motion.div>
+              ))}
+            </motion.div>
+          </div>
+        </section>
+      )}
+
       {/* ══ MATERIAL PALETTE ══ */}
       <section className="gs-gallery">
         <div className="gs-container">
@@ -828,8 +840,8 @@ export default function LandingPage() {
               <div className="gs-section-eyebrow" style={{ marginBottom: 14 }}>Material Palette</div>
               <h2 className="gs-section-title" style={{ margin: 0 }}>Premium Materials</h2>
             </div>
-            <Link to="/ai-designer" className="gs-gallery-link">
-              View full catalog <ArrowRight size={16} />
+            <Link to="/try-studio" className="gs-gallery-link">
+              Try them in 3D <ArrowRight size={16} />
             </Link>
           </div>
           <motion.div className="gs-gallery-grid"
@@ -848,61 +860,8 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ══ TESTIMONIALS ══ */}
-      <section className="gs-testimonials">
-        <div className="gs-container">
-          <div className="gs-section-header" style={{ marginBottom: 56 }}>
-            <motion.div initial="hidden" whileInView="visible" viewport={{ once: true }} variants={FADE_UP}>
-              <div className="gs-section-eyebrow" style={{ marginBottom: 16 }}>
-                Reviews
-              </div>
-              <h2 className="gs-section-title">Loved by Homeowners</h2>
-              <p style={{ fontSize: 17, color: '#64748b', maxWidth: 440, margin: '12px auto 0', lineHeight: 1.65 }}>
-                Real results from real customers who transformed their spaces.
-              </p>
-            </motion.div>
-          </div>
-          <motion.div className="gs-reviews-grid"
-            initial="hidden" whileInView="visible" viewport={{ once: true }} variants={STAGGER}>
-            {(liveReviews
-              ? liveReviews.map(r => ({
-                  text: r.comment || 'Great service overall.',
-                  name: r.reviewer_name,
-                  role: r.service_type || 'Homeowner',
-                  rating: r.rating,
-                  verified: true,
-                }))
-              : REVIEWS
-            ).map((review, i) => (
-              <motion.div key={i} className="gs-review-card" variants={FADE_UP}>
-                <Quote size={36} className="gs-quote-icon" />
-                <div className="gs-stars">
-                  {[...Array(review.rating)].map((_, j) => (
-                    <Star key={j} size={14} fill="#10b981" color="#10b981" />
-                  ))}
-                </div>
-                <p className="gs-review-text">"{review.text}"</p>
-                <div>
-                  <p className="gs-reviewer-name">{review.name}</p>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                    <p className="gs-reviewer-role" style={{ margin: 0 }}>{review.role}</p>
-                    {review.verified && (
-                      <span style={{
-                        display: 'inline-flex', alignItems: 'center', gap: 3,
-                        fontSize: 10, fontWeight: 700, color: '#059669',
-                        background: '#ecfdf5', padding: '2px 7px',
-                        borderRadius: 9999, border: '1px solid #a7f3d0',
-                      }}>
-                        <ShieldCheck size={10} /> Verified Customer
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </motion.div>
-            ))}
-          </motion.div>
-        </div>
-      </section>
+      {/* ══ TESTIMONIALS — real reviews from projects and orders ══ */}
+      <ReviewCarousel />
 
       {/* ══ CTA ══ */}
       <section className="gs-cta">
@@ -922,7 +881,7 @@ export default function LandingPage() {
             </motion.p>
             <motion.div variants={FADE_UP} className="gs-cta-btns">
               <Link to="/register" className="gs-btn-cta-primary">Create Free Account</Link>
-              <Link to="/ai-designer" className="gs-btn-cta-outline">Try Studio as Guest</Link>
+              <Link to="/try-studio" className="gs-btn-cta-outline">Try the 3D Studio Free</Link>
             </motion.div>
           </motion.div>
         </div>
@@ -952,7 +911,9 @@ export default function LandingPage() {
             <div>
               <h4 className="gs-footer-heading">Quick Links</h4>
               <ul className="gs-footer-links">
+                <li><Link to="/try-studio">Free 3D Studio</Link></li>
                 <li><Link to="/ai-designer">AI Designer</Link></li>
+                <li><Link to="/projects">Our Projects</Link></li>
                 <li><button onClick={() => scrollTo('services')}>Services</button></li>
                 <li><button onClick={() => scrollTo('how-it-works')}>How it Works</button></li>
                 <li><Link to="/login">Login</Link></li>
@@ -1002,5 +963,5 @@ export default function LandingPage() {
       </footer>
 
     </div>
-  );s
+  );
 }

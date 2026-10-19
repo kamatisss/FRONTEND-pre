@@ -1,9 +1,12 @@
-import { useRef, useState, useEffect, useCallback } from 'react';
+import { useRef, useState, useEffect, useCallback, Suspense } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { TransformControls, Html, ContactShadows } from '@react-three/drei';
+import { ErrorBoundary } from 'react-error-boundary';
 import { useDesign } from '../context/DesignContext';
 import * as THREE from 'three';
 import NormalizedModel from './NormalizedModel';
+import ModelPlaceholder from './ModelPlaceholder';
+import { resolveModelUrl } from '../data/modelCatalog';
 
 /* ═══════════════════════════════════════════════════════════════════════
    PLACED OBJECT — Interactive 3D item with direct drag + TransformControls
@@ -61,16 +64,15 @@ export default function PlacedObject({ item, orbitControlsRef }) {
     item.rotation?.z ?? 0,
   ];
 
-  // --- Backend Path Logic ---
-  // When a design is loaded from the backend, the placed items may only have modelType 
-  // (which is just the name/category) and productId. We need to look up the actual model_file 
-  // from our live inventory catalog (state.products).
+  // --- Model Path Logic ---
+  // When a design is loaded from the backend, the placed items may only have modelType
+  // (which is just the name/category) and productId. We need to look up the actual model_file
+  // from our live inventory catalog (state.products). Catalog models resolve to the
+  // frontend's public/models folder; only custom uploads hit backend media.
   const productMatch = state.products.find(p => p.id === item.productId);
   const rawUrl = item.model_file || (productMatch && productMatch.model_file) || item.modelPath || item.modelType;
-  
-  const modelUrl = rawUrl
-    ? (rawUrl.startsWith('http') ? rawUrl : `${import.meta.env.VITE_MEDIA_BASE_URL || 'http://localhost:8000'}${rawUrl}`)
-    : null;
+  const modelUrl = resolveModelUrl(rawUrl);
+  const category = item.category || productMatch?.category;
 
   // ── Hover emissive effect ──────────────────────────────────────
   useFrame(() => {
@@ -287,22 +289,22 @@ export default function PlacedObject({ item, orbitControlsRef }) {
       }}
     >
       {modelUrl ? (
-        <NormalizedModel
-          url={modelUrl}
-          category={item.category}
-          realWorldSize={productMatch?.real_world_size || item.real_world_size}
-        />
+        /* Per-object boundary: a failed .glb shows a placeholder instead of crashing the canvas */
+        <ErrorBoundary
+          resetKeys={[modelUrl]}
+          onError={(err) => console.error('Failed to load 3D model:', modelUrl, err)}
+          fallback={<ModelPlaceholder category={category} label="3D Model Unavailable" />}
+        >
+          <Suspense fallback={<ModelPlaceholder category={category} />}>
+            <NormalizedModel
+              url={modelUrl}
+              category={category}
+              realWorldSize={productMatch?.real_world_size || item.real_world_size}
+            />
+          </Suspense>
+        </ErrorBoundary>
       ) : (
-        /* Fallback: red wireframe box */
-        <mesh position={[0, 0.5, 0]}>
-          <boxGeometry args={[1, 1, 1]} />
-          <meshStandardMaterial color="#ef4444" wireframe />
-          <Html center position={[0, 1.2, 0]}>
-            <div className="bg-red-500 text-white px-2 py-1 rounded text-xs font-bold whitespace-nowrap shadow-lg">
-              Missing 3D Model
-            </div>
-          </Html>
-        </mesh>
+        <ModelPlaceholder category={category} label="Missing 3D Model" />
       )}
 
       {/* Grounding shadow */}

@@ -1,9 +1,13 @@
-import { useRef, useEffect, useCallback, useMemo } from 'react';
+import { useRef, useEffect, useCallback, Suspense } from 'react';
 import { useThree, useFrame } from '@react-three/fiber';
+import { ErrorBoundary } from 'react-error-boundary';
 import * as THREE from 'three';
 import { useDesign } from '../context/DesignContext';
 import { PLANT_COMPONENTS } from './ProceduralPlants';
 import { HARDSCAPE_COMPONENTS } from './ProceduralHardscape';
+import NormalizedModel from './NormalizedModel';
+import ModelPlaceholder from './ModelPlaceholder';
+import { resolveModelUrl } from '../data/modelCatalog';
 
 const ALL_COMPONENTS = { ...PLANT_COMPONENTS, ...HARDSCAPE_COMPONENTS };
 
@@ -22,32 +26,31 @@ export default function PlacementPreview({ terrainRef }) {
   const targetPos = useRef(new THREE.Vector3(0, 0, 0));
   const currentPos = useRef(new THREE.Vector3(0, 0, 0));
   const isValid = useRef(true);
-  const materialsCloned = useRef(false);
   const mouse = useRef(new THREE.Vector2());
 
   const { previewObject, placementMode } = state;
 
-  // ── Clone materials for transparency on mount ──────────────
-  useEffect(() => {
-    materialsCloned.current = false;
-  }, [previewObject?.modelType]);
-
   useFrame(() => {
     if (!groupRef.current) return;
 
-    // Clone materials once after the component tree mounts
-    if (!materialsCloned.current) {
-      groupRef.current.traverse((child) => {
-        if (child.isMesh && child.material) {
-          const mat = child.material.clone();
-          mat.transparent = true;
-          mat.opacity = 0.6;
-          mat.depthWrite = false;
-          child.material = mat;
-        }
+    // Ghost any material not yet converted. Checked every frame because the .glb
+    // mounts asynchronously (after the Suspense placeholder). NormalizedModel's
+    // per-instance materials are modified in place; shared ones (procedural
+    // module-level materials) are cloned first so other users aren't affected.
+    groupRef.current.traverse((child) => {
+      if (!child.isMesh || !child.material) return;
+      const mats = Array.isArray(child.material) ? child.material : [child.material];
+      if (mats.every((m) => m.userData.isPreviewGhost)) return;
+      const ghosts = mats.map((m) => {
+        const mat = m.userData.instanceOwned ? m : m.clone();
+        mat.transparent = true;
+        mat.opacity = 0.6;
+        mat.depthWrite = false;
+        mat.userData.isPreviewGhost = true;
+        return mat;
       });
-      materialsCloned.current = true;
-    }
+      child.material = Array.isArray(child.material) ? ghosts : ghosts[0];
+    });
 
     // Smoothly lerp position toward target
     currentPos.current.lerp(targetPos.current, 0.15);
@@ -106,15 +109,27 @@ export default function PlacementPreview({ terrainRef }) {
   }, [placementMode, terrainRef, gl, camera, raycaster, dispatch, previewObject?.position]);
 
   // ── Attach/detach pointer listener ─────────────────────────
+  // pointerdown too: on touch screens there is no hover, so a tap moves the ghost
+  // to that spot first and the click that follows places it there (tap-to-place)
   useEffect(() => {
     const canvas = gl.domElement;
     canvas.addEventListener('pointermove', handlePointerMove);
-    return () => canvas.removeEventListener('pointermove', handlePointerMove);
+    canvas.addEventListener('pointerdown', handlePointerMove);
+    return () => {
+      canvas.removeEventListener('pointermove', handlePointerMove);
+      canvas.removeEventListener('pointerdown', handlePointerMove);
+    };
   }, [gl, handlePointerMove]);
 
   // ── Don't render if no preview ─────────────────────────────
   if (!previewObject || placementMode === 'idle') return null;
 
+  // Same model lookup as PlacedObject, so the ghost matches what gets placed
+  const productMatch = state.products.find(p => p.id === previewObject.productId);
+  const modelUrl = resolveModelUrl(
+    previewObject.model_file || productMatch?.model_file || previewObject.modelPath || previewObject.modelType
+  );
+  const category = previewObject.category || productMatch?.category;
   const Component = ALL_COMPONENTS[previewObject.modelType];
   const objScale = previewObject.scale?.x || previewObject.scale || 0.8;
   const rot = [
@@ -133,7 +148,20 @@ export default function PlacementPreview({ terrainRef }) {
       scale={[objScale, objScale, objScale]}
     >
       {/* The 3D model */}
-      {Component ? (
+      {modelUrl ? (
+        <ErrorBoundary
+          resetKeys={[modelUrl]}
+          fallback={<ModelPlaceholder category={category} label="3D Model Unavailable" />}
+        >
+          <Suspense fallback={<ModelPlaceholder category={category} />}>
+            <NormalizedModel
+              url={modelUrl}
+              category={category}
+              realWorldSize={productMatch?.real_world_size || previewObject.real_world_size}
+            />
+          </Suspense>
+        </ErrorBoundary>
+      ) : Component ? (
         <group position={[0, -0.05, 0]}>
           <Component scale={1} />
         </group>

@@ -51,7 +51,9 @@ const BookService = () => {
                     if (context.imagePreview) {
                         setPreviewImage(context.imagePreview);
                     }
-                    setServiceType('consultation');
+                    // "Book a similar project" from the Project Hub sets serviceType + notes
+                    setServiceType(context.serviceType || 'consultation');
+                    if (context.notes) setNotes(context.notes);
                 }
             } catch (e) {
                 console.error("Error parsing pending_booking_context:", e);
@@ -242,7 +244,7 @@ const BookService = () => {
             display: 'flex',
             alignItems: 'flex-start',
             justifyContent: 'center',
-            padding: '6rem 2rem 5rem 2rem',
+            padding: 'clamp(1rem, 4vw, 6rem) clamp(0px, 3vw - 8px, 2rem) 5rem',
             fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
             boxSizing: 'border-box',
             overflowY: 'auto',
@@ -260,7 +262,7 @@ const BookService = () => {
         },
         leftCol: {
             width: '55%',
-            padding: '3rem 3rem 80px 3rem',
+            padding: 'clamp(1.25rem, 5vw, 3rem) clamp(1.25rem, 5vw, 3rem) 80px',
             display: 'flex',
             flexDirection: 'column',
             justifyContent: 'center',
@@ -268,7 +270,7 @@ const BookService = () => {
         rightCol: {
             width: '45%',
             background: '#F0FDF4',
-            padding: '3rem',
+            padding: 'clamp(1.25rem, 5vw, 3rem)',
             display: 'flex',
             flexDirection: 'column',
             justifyContent: 'center',
@@ -420,7 +422,7 @@ const BookService = () => {
 
     return (
         <div style={styles.page}>
-            <div style={styles.card}>
+            <div className="rs-stack" style={styles.card}>
 
                 {/* Left Column: The Form */}
                 <div style={styles.leftCol}>

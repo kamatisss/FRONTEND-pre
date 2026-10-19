@@ -6,7 +6,15 @@ import { clearGuestDesign } from '../services/guestSession';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
 
-export default function GuestAuthModal({ onClose, onAuthSuccess }) {
+// title / subtitle / cta let other entry points (the free 3D Studio, the AI Designer) reuse
+// this modal; onAuthSuccess receives 'signin' or 'register'.
+export default function GuestAuthModal({
+  onClose,
+  onAuthSuccess,
+  title = 'Save your design & book your pros',
+  subtitle = 'Create a free account to unlock booking, design history, and dedicated landscapers.',
+  cta = 'Continue Booking',
+}) {
   const { loginUserSilent } = useAuth();
   const navigate = useNavigate();
   const [tab, setTab] = useState('signin'); // 'signin' | 'register'
@@ -27,7 +35,7 @@ export default function GuestAuthModal({ onClose, onAuthSuccess }) {
         onClose();
         navigate('/book-service');
       } else {
-        onAuthSuccess();
+        onAuthSuccess('signin');
       }
     } catch (err) {
       setError(err.message || 'Invalid credentials. Please try again.');
@@ -61,7 +69,7 @@ export default function GuestAuthModal({ onClose, onAuthSuccess }) {
           onClose();
           navigate('/book-service');
         } else {
-          onAuthSuccess();
+          onAuthSuccess('register');
         }
       } else {
         const msg = data.username?.[0] || data.email?.[0] || data.password?.[0] || data.detail || 'Registration failed.';
@@ -177,8 +185,8 @@ export default function GuestAuthModal({ onClose, onAuthSuccess }) {
 
           <div className="gam-header">
             <div className="gam-badge"><Leaf size={11} /> Garden Studio</div>
-            <h2 className="gam-headline">Save your design &amp; book your pros</h2>
-            <p className="gam-subline">Create a free account to unlock booking, design history, and dedicated landscapers.</p>
+            <h2 className="gam-headline">{title}</h2>
+            <p className="gam-subline">{subtitle}</p>
           </div>
 
           <div className="gam-tabs">
@@ -202,7 +210,7 @@ export default function GuestAuthModal({ onClose, onAuthSuccess }) {
                     value={signIn.password} onChange={e => setSignIn(p => ({ ...p, password: e.target.value }))} />
                 </div>
                 <button className="gam-submit" type="submit" disabled={loading}>
-                  {loading ? 'Signing in…' : <><Sparkles size={15} style={{ marginRight: 6, verticalAlign: 'middle' }} />Sign In &amp; Continue Booking</>}
+                  {loading ? 'Signing in…' : <><Sparkles size={15} style={{ marginRight: 6, verticalAlign: 'middle' }} />Sign In &amp; {cta}</>}
                 </button>
               </form>
             )}

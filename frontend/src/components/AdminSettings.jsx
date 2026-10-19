@@ -35,13 +35,13 @@ export default function AdminSettings() {
   };
 
   return (
-    <div style={{ backgroundColor: '#f1f5f9', minHeight: '100%', padding: '40px', fontFamily: "'Inter', sans-serif" }}>
+    <div style={{ backgroundColor: '#f1f5f9', minHeight: '100%', padding: 'clamp(0px, 3vw - 8px, 40px)', fontFamily: "'Inter', sans-serif" }}>
       <div style={{
         maxWidth: '1000px',
         margin: '0 auto',
         backgroundColor: '#ffffff',
         borderRadius: '16px',
-        padding: '32px',
+        padding: 'clamp(16px, 4vw, 32px)',
         boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01)'
       }}>
         {/* Header */}
@@ -62,7 +62,7 @@ export default function AdminSettings() {
 
         <form onSubmit={handleSubmit}>
           {/* Settings Grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '32px', marginBottom: '32px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px, 100%), 1fr))', gap: '32px', marginBottom: '32px' }}>
             
             {/* System Status & AI Config */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>

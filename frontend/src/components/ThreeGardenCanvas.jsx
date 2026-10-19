@@ -2,15 +2,37 @@ import React, { useRef, useEffect, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+// Catalog models are Meshopt-compressed (see scripts/optimize-models.md); drei's useGLTF enables this by default
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { getInventoryItems } from '../services/api';
+import { resolveModelUrl } from '../data/modelCatalog';
 
-export default function ThreeGardenCanvas({ plants, lotWidth, lotLength, backgroundImageUrl, arMode = false, arGrid = false, horizonY = 0.5, photoTone = null, readOnly = false }) {
+// height: canvas height in px. enableZoom / enablePan / autoRotate tune the orbit controls
+// (the landing hero turns zoom off so the mouse wheel keeps scrolling the page).
+// active=false pauses rendering, e.g. while the canvas is scrolled out of view.
+export default function ThreeGardenCanvas({
+  plants, lotWidth, lotLength, backgroundImageUrl, arMode = false, arGrid = false, horizonY = 0.5,
+  photoTone = null, readOnly = false, preserveDrawingBuffer = false,
+  height = 450, enableZoom = true, enablePan = true, autoRotate = false, active = true,
+}) {
   const canvasRef = useRef(null);
   const aiPlantsGroupRef = useRef(null);
   const ambientLightRef = useRef(null);
   const cameraRef = useRef(null);
   const controlsRef = useRef(null);
   const horizonYRef = useRef(horizonY);
+  const viewRef = useRef({ enableZoom, enablePan, autoRotate, active });
+
+  // Orbit options + pause state change without rebuilding the scene
+  useEffect(() => {
+    viewRef.current = { enableZoom, enablePan, autoRotate, active };
+    const controls = controlsRef.current;
+    if (!controls) return;
+    controls.enableZoom = enableZoom;
+    if (!arMode) controls.enablePan = enablePan;
+    controls.autoRotate = autoRotate;
+  }, [enableZoom, enablePan, autoRotate, active, arMode]);
+
   const [inventory, setInventory] = useState([]);
 
   useEffect(() => {
@@ -75,7 +97,6 @@ export default function ThreeGardenCanvas({ plants, lotWidth, lotLength, backgro
 
     const parent = canvas.parentElement;
     const width = parent.clientWidth || 800;
-    const height = 450;
 
     const pad = 6;
     const currentWidth  = Math.max(Number(lotWidth)  || 10, 1);
@@ -116,9 +137,10 @@ export default function ThreeGardenCanvas({ plants, lotWidth, lotLength, backgro
     }
 
     // 3. Renderer
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    renderer.setSize(width, height);
+    // preserveDrawingBuffer lets callers snapshot the canvas (portfolio 3D renders)
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(width, height, false);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
@@ -212,7 +234,12 @@ export default function ThreeGardenCanvas({ plants, lotWidth, lotLength, backgro
       controls.minAzimuthAngle = -Math.PI / 5;
       controls.maxAzimuthAngle = Math.PI / 5;
       controls.enablePan = false;
+    } else {
+      controls.enablePan = viewRef.current.enablePan;
     }
+    controls.enableZoom = viewRef.current.enableZoom;
+    controls.autoRotate = viewRef.current.autoRotate;
+    controls.autoRotateSpeed = 0.6;
     controls.update();
     // Store refs so Effect 3 and Effect 4 can update camera/light without reinit
     cameraRef.current   = camera;
@@ -222,23 +249,27 @@ export default function ThreeGardenCanvas({ plants, lotWidth, lotLength, backgro
     let animationFrameId;
     const animate = () => {
       animationFrameId = requestAnimationFrame(animate);
+      if (!viewRef.current.active) return;
       controls.update();
       renderer.render(scene, camera);
     };
     animate();
 
+    // Follow the container, not just the window: panels open, scrollbars appear and
+    // phones rotate without a window resize, which left the canvas at its old width.
     const handleResize = () => {
-      if (!canvas.parentElement) return;
       const w = parent.clientWidth;
+      if (!w) return;
       camera.aspect = w / height;
       camera.updateProjectionMatrix();
-      renderer.setSize(w, height);
+      renderer.setSize(w, height, false);
     };
-    window.addEventListener('resize', handleResize);
+    const resizeObserver = new ResizeObserver(handleResize);
+    resizeObserver.observe(parent);
 
     return () => {
       cancelAnimationFrame(animationFrameId);
-      window.removeEventListener('resize', handleResize);
+      resizeObserver.disconnect();
       controls.dispose();
       renderer.dispose();
       ground.geometry.dispose();
@@ -250,7 +281,7 @@ export default function ThreeGardenCanvas({ plants, lotWidth, lotLength, backgro
       controlsRef.current    = null;
       ambientLightRef.current = null;
     };
-  }, [lotWidth, lotLength, arMode, backgroundImageUrl, arGrid]);
+  }, [lotWidth, lotLength, arMode, backgroundImageUrl, arGrid, height, preserveDrawingBuffer]);
 
   // Effect 2: Place, position, rotate, and dispose AI plants when props change
   useEffect(() => {
@@ -278,7 +309,7 @@ export default function ThreeGardenCanvas({ plants, lotWidth, lotLength, backgro
 
     if (!plants || !Array.isArray(plants)) return;
 
-    const loader = new GLTFLoader();
+    const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
 
     plants.forEach((plant) => {
       if (plant.is_existing) {
@@ -397,12 +428,9 @@ export default function ThreeGardenCanvas({ plants, lotWidth, lotLength, backgro
         );
       });
 
-      if (match && match.model_file) {
-        const rawUrl = match.model_file;
-        const modelUrl = rawUrl.startsWith('http')
-          ? rawUrl
-          : `${import.meta.env.VITE_MEDIA_BASE_URL || 'http://localhost:8000'}${rawUrl}`;
-
+      const modelUrl = match ? resolveModelUrl(match.model_file) : null;
+      if (modelUrl) {
+        // On load failure the procedural placeholder above stays in the scene
         loader.load(
           modelUrl,
           (gltf) => {
@@ -470,7 +498,7 @@ export default function ThreeGardenCanvas({ plants, lotWidth, lotLength, backgro
     <canvas
       ref={canvasRef}
       className="w-full block focus:outline-none"
-      style={{ height: '450px', display: 'block' }}
+      style={{ width: '100%', height: `${height}px`, display: 'block' }}
     />
   );
 }

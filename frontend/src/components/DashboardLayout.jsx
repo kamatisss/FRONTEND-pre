@@ -1,18 +1,9 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useLocation, Link } from 'react-router-dom';
 import TopNavbar from './TopNavbar';
 import { useAuth } from '../context/AuthContext';
-import { 
-  LayoutDashboard, 
-  Paintbrush, 
-  Calendar, 
-  Package, 
-  Clock, 
-  Layers, 
-  Users, 
-  Settings, 
-  LogOut 
-} from 'lucide-react';
+import { useStaffLinks } from './navLinks';
+import { LogOut } from 'lucide-react';
 
 function Avatar({ user }) {
   const letter = (user?.first_name || user?.username || '?')[0].toUpperCase();
@@ -42,6 +33,8 @@ const DashboardLayout = ({ children }) => {
     const isOperational = isAdmin || isStaff;
     
     const isAIDesignerRoute = location.pathname === '/ai-designer';
+    // The 3D Studio runs edge-to-edge on phones
+    const isStudioRoute = location.pathname === '/studio';
 
     // Define the operational routes where the sidebar should be rendered
     const operationalRoutes = [
@@ -53,116 +46,66 @@ const DashboardLayout = ({ children }) => {
         '/admin-settings',
         '/view-bookings',
         '/staff-attendance',
-        '/admin-attendance'
+        '/admin-attendance',
+        '/portfolio-manager',
+        '/review-moderation',
+        '/pricing-settings'
     ];
     const isOperationalRoute = operationalRoutes.some(route => location.pathname.startsWith(route));
 
-    // Construct sidebar links based on location parameters & active states
-    const queryParams = new URLSearchParams(location.search);
-    const activeTab = queryParams.get('tab') || 'overview';
+    const links = useStaffLinks(user);
 
-    const links = [
-        {
-            name: 'Overview / Dashboard',
-            icon: <LayoutDashboard size={18} />,
-            to: isAdmin ? '/admin-dashboard' : '/staff-dashboard?tab=overview',
-            active: location.pathname === '/admin-dashboard' || (location.pathname === '/staff-dashboard' && activeTab === 'overview')
-        },
-        {
-            name: 'Design Queue',
-            icon: <Paintbrush size={18} />,
-            to: '/staff-dashboard?tab=designs',
-            active: location.pathname === '/staff-dashboard' && activeTab === 'designs'
-        },
-        {
-            name: 'Appointments',
-            icon: <Calendar size={18} />,
-            to: '/staff-dashboard?tab=bookings',
-            active: location.pathname === '/staff-dashboard' && activeTab === 'bookings'
-        },
-        {
-            name: 'Order Fulfillment',
-            icon: <Package size={18} />,
-            to: '/staff-dashboard?tab=orders',
-            active: location.pathname === '/staff-dashboard' && activeTab === 'orders'
-        },
-        {
-            name: 'Attendance Tracking',
-            icon: <Clock size={18} />,
-            to: isAdmin ? '/admin-attendance' : '/staff-attendance',
-            active: location.pathname === '/admin-attendance' || location.pathname === '/staff-attendance'
-        },
-        {
-            name: 'Inventory Management',
-            icon: <Layers size={18} />,
-            to: '/inventory',
-            active: location.pathname === '/inventory'
-        },
-        // Admin-only links
-        ...(isAdmin ? [
-            {
-                name: 'User Accounts',
-                icon: <Users size={18} />,
-                to: '/manage-users',
-                active: location.pathname === '/manage-users'
-            },
-            {
-                name: 'Global Settings',
-                icon: <Settings size={18} />,
-                to: '/admin-settings',
-                active: location.pathname === '/admin-settings'
-            }
-        ] : [])
-    ];
-
+    // Phones: no sidebar (the top bar's menu button opens the same links in a drawer).
+    // Tablets: an icon rail. Desktop: the full sidebar.
     return (
-        <div style={isAIDesignerRoute
-            ? { display: 'flex', flexDirection: 'column', minHeight: '100vh' }
-            : { display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }
+        <div className="flex flex-col" style={isAIDesignerRoute
+            ? { minHeight: '100dvh' }
+            : { height: '100dvh', overflow: 'hidden' }
         }>
             <TopNavbar />
-            <div className={isAIDesignerRoute ? 'flex flex-1 bg-slate-50' : 'flex flex-1 overflow-hidden bg-slate-50'}>
+            <div className={isAIDesignerRoute ? 'flex flex-1 bg-slate-50' : 'flex flex-1 min-h-0 overflow-hidden bg-slate-50'}>
                 {isOperational && isOperationalRoute && (
-                    <aside className="w-16 md:w-64 flex-shrink-0 bg-white border-r border-slate-100 flex flex-col justify-between h-[calc(100vh-56px)] sticky top-14 overflow-y-auto">
+                    <aside className="hidden md:flex md:w-20 lg:w-64 flex-shrink-0 bg-white border-r border-slate-100 flex-col justify-between overflow-y-auto">
                         {/* TOP SECTION */}
-                        <div className="flex flex-col gap-2 p-3 md:p-6 overflow-y-auto flex-1">
-                            <div className="pb-4 border-b border-slate-100 mb-4 shrink-0 flex items-center justify-center md:justify-start">
-                                <span className="hidden md:inline text-xs font-extrabold text-slate-400 uppercase tracking-wider">
+                        <div className="flex flex-col gap-2 p-3 lg:p-6 overflow-y-auto flex-1">
+                            <div className="pb-4 border-b border-slate-100 mb-4 shrink-0 flex items-center justify-center lg:justify-start">
+                                <span className="hidden lg:inline text-xs font-extrabold text-slate-400 uppercase tracking-wider">
                                     {isAdmin ? 'Admin Control Tower' : 'Staff Control Center'}
                                 </span>
-                                <span className="inline md:hidden text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                                <span className="inline lg:hidden text-[10px] font-black text-slate-400 uppercase tracking-wider">
                                     {isAdmin ? 'ADM' : 'STF'}
                                 </span>
                             </div>
-                            
+
                             <nav className="flex flex-col gap-y-2">
-                                {links.map((link) => (
-                                    <Link 
-                                        key={link.name}
-                                        to={link.to} 
-                                        className={link.active
-                                            ? 'bg-emerald-50 text-emerald-700 font-semibold rounded-xl px-4 py-3 flex items-center justify-center md:justify-start gap-3 w-full transition-all duration-200 no-underline'
-                                            : 'text-slate-600 font-medium rounded-xl px-4 py-3 flex items-center justify-center md:justify-start gap-3 w-full hover:bg-slate-50 hover:translate-x-1 hover:text-slate-900 transition-all duration-200 ease-in-out no-underline'
+                                {links.map(({ label, icon, to, active }) => { const Icon = icon; return (
+                                    <Link
+                                        key={label}
+                                        to={to}
+                                        title={label}
+                                        className={active
+                                            ? 'bg-emerald-50 text-emerald-700 font-semibold rounded-xl px-4 py-3 flex items-center justify-center lg:justify-start gap-3 w-full transition-all duration-200 no-underline'
+                                            : 'text-slate-600 font-medium rounded-xl px-4 py-3 flex items-center justify-center lg:justify-start gap-3 w-full hover:bg-slate-50 lg:hover:translate-x-1 hover:text-slate-900 transition-all duration-200 ease-in-out no-underline'
                                         }
                                     >
-                                        <span className={link.active ? 'text-emerald-700 shrink-0' : 'text-slate-400 shrink-0'}>
-                                            {link.icon}
+                                        <span className={active ? 'text-emerald-700 shrink-0' : 'text-slate-400 shrink-0'}>
+                                            <Icon size={18} />
                                         </span>
-                                        <span className="hidden md:inline text-sm truncate">{link.name}</span>
+                                        <span className="hidden lg:inline text-sm truncate">{label}</span>
                                     </Link>
-                                ))}
+                                ); })}
                             </nav>
                         </div>
 
                         {/* BOTTOM PROFILE FOOTER SECTION */}
                         <div className="p-4 bg-slate-50 border-t border-slate-100 w-full shrink-0">
-                            <div className="flex flex-col md:flex-row items-center justify-between gap-3 w-full">
+                            <div className="flex flex-col lg:flex-row items-center justify-between gap-3 w-full">
                                 <div className="flex items-center gap-3 min-w-0">
                                     <div className="relative shrink-0">
                                         <Avatar user={user} />
                                         <span className="absolute bottom-0 right-0 block h-2.5 w-2.5 rounded-full bg-emerald-500 ring-2 ring-white animate-pulse" />
                                     </div>
-                                    <div className="hidden md:flex flex-col min-w-0 justify-center">
+                                    <div className="hidden lg:flex flex-col min-w-0 justify-center">
                                         <span className="text-sm font-semibold text-slate-800 truncate">
                                             {isAdmin ? 'Admin' : 'Staff'} {user?.first_name || user?.username || 'Member'}
                                         </span>
@@ -182,10 +125,10 @@ const DashboardLayout = ({ children }) => {
                         </div>
                     </aside>
                 )}
-                
+
                 <main className={isAIDesignerRoute
                     ? 'flex-1 min-w-0 bg-slate-50'
-                    : 'flex-1 min-w-0 h-[calc(100vh-56px)] overflow-y-auto p-6 bg-slate-50'
+                    : `flex-1 min-w-0 overflow-y-auto ${isStudioRoute ? 'p-0 md:p-6' : 'p-4 md:p-6'} bg-slate-50`
                 }>
                     {children}
                 </main>

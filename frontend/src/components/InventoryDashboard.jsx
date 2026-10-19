@@ -201,7 +201,7 @@ export default function InventoryDashboard() {
   };
 
   return (
-    <div style={{ minHeight: '100%', padding: '40px 48px', fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif" }}>
+    <div style={{ minHeight: '100%', padding: 'clamp(0px, 3vw - 8px, 40px) clamp(0px, 4vw - 8px, 48px)', fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif" }}>
       {/* ── Centered White Card ── */}
       <div style={{
         maxWidth: 1100,
@@ -216,7 +216,9 @@ export default function InventoryDashboard() {
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          padding: '28px 32px 24px',
+          flexWrap: 'wrap',
+          gap: 12,
+          padding: 'clamp(18px, 4vw, 28px) clamp(16px, 4vw, 32px) 24px',
           borderBottom: '1px solid #f1f5f9',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>

@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
+import { getPricing } from '../services/api';
+import { useIsPhone } from './ui/useMediaQuery';
 import { 
     Search, Filter, ShoppingBag, ShoppingCart, Plus, Minus, X, Check, ArrowRight, Leaf, 
-    Trash2, CreditCard, DollarSign, Sparkles, Star, Shield, HelpCircle, MapPin, Info
+    Trash2, CreditCard, DollarSign, Sparkles, Star, Shield, HelpCircle, MapPin, Info, ChevronDown
 } from 'lucide-react';
 
 /* ─── Static Metadata Mappings for Inventory Items ─── */
@@ -156,6 +158,9 @@ export default function Shop() {
 
     // Active categories tab
     const [activeTab, setActiveTab] = useState('All'); // 'All', 'plant', 'furniture', 'hardscape'
+    const [filtersOpen, setFiltersOpen] = useState(false); // phones/tablets: filter panel folds away
+    const isPhone = useIsPhone();
+    const productsRef = useRef(null);
 
     // Filtering & Searching state
     const [searchQuery, setSearchQuery] = useState('');
@@ -166,9 +171,23 @@ export default function Shop() {
 
     // Selected product for detailed modal
     const [selectedProduct, setSelectedProduct] = useState(null);
+    const [productReviews, setProductReviews] = useState(null); // null = loading
+
+    // Load public customer reviews whenever a product's detail modal opens
+    useEffect(() => {
+        if (!selectedProduct) return;
+        let cancelled = false;
+        setProductReviews(null);
+        fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/product-reviews/public/?product=${selectedProduct.id}`)
+            .then(res => res.ok ? res.json() : [])
+            .then(data => { if (!cancelled) setProductReviews(Array.isArray(data) ? data : []); })
+            .catch(() => { if (!cancelled) setProductReviews([]); });
+        return () => { cancelled = true; };
+    }, [selectedProduct]);
 
     // Drawer state
-    const [isCartOpen, setIsCartOpen] = useState(false);
+    // /shop?cart=open (e.g. after "Add these plants to my cart" in the AI Designer) opens the cart
+    const [isCartOpen, setIsCartOpen] = useState(() => new URLSearchParams(window.location.search).get('cart') === 'open');
     const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
 
     // Checkout form state
@@ -182,8 +201,12 @@ export default function Shop() {
     const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
     const [checkoutError, setCheckoutError] = useState('');
 
-    const SHIPPING_FEE = 150; // flat bulky shipping fee in PHP
-    const grandTotal = cartSubtotal > 0 ? cartSubtotal + SHIPPING_FEE : 0;
+    // Delivery fee from the admin rate card; the server prices the order itself, this is for display
+    const [shippingFee, setShippingFee] = useState(150);
+    useEffect(() => {
+        getPricing().then(p => setShippingFee(Number(p.shipping_fee))).catch(() => {});
+    }, []);
+    const grandTotal = cartSubtotal > 0 ? cartSubtotal + shippingFee : 0;
 
     // Fetch Products on Mount
     useEffect(() => {
@@ -194,6 +217,10 @@ export default function Shop() {
                 if (res.ok) {
                     const data = await res.json();
                     setProducts(data);
+                    // "Shop the look" links from the Project Hub open a product directly: /shop?product=<id>
+                    const linked = new URLSearchParams(window.location.search).get('product');
+                    const match = linked && data.find(p => String(p.id) === linked);
+                    if (match) setSelectedProduct(match);
                 } else {
                     setError("Failed to fetch product catalog.");
                 }
@@ -285,7 +312,6 @@ export default function Shop() {
                     customer_address: checkoutForm.address,
                     payment_method: paymentMethod,
                     items: orderItems,
-                    total_price: grandTotal
                 })
             });
 
@@ -316,7 +342,7 @@ export default function Shop() {
                     setCheckoutError('Order placed, but failed to initialize Stripe payment. Please contact staff.');
                 } else {
                     // Redirect directly to order success screen for COD
-                    navigate(`/order-success?order_id=${orderId}&total=${grandTotal}&name=${encodeURIComponent(checkoutForm.name)}&method=cod`);
+                    navigate(`/order-success?order_id=${orderId}&total=${data.total_price ?? grandTotal}&name=${encodeURIComponent(checkoutForm.name)}&method=cod`);
                 }
             } else {
                 const errData = await res.json();
@@ -330,18 +356,122 @@ export default function Shop() {
         }
     };
 
+    // One product card, shared by the grid and the phone category rows
+    const renderProductCard = (product, { className = '', showCategory = true } = {}) => {
+        const isOutOfStock = product.stock_quantity <= 0;
+        return (
+            <div 
+                key={product.id}
+                onClick={() => setSelectedProduct(product)}
+                className={`group bg-white rounded-2xl sm:rounded-3xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md hover:-translate-y-1 transition-all duration-300 cursor-pointer flex flex-col ${className}`}
+            >
+                {/* Lifestyle Image with zoom effect */}
+                <div className="relative aspect-square overflow-hidden bg-slate-100 shrink-0 flex items-center justify-center">
+                    {getProductImage(product) ? (
+                        <img
+                            src={getProductImage(product)}
+                            alt={product.name}
+                            loading="lazy"
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                        />
+                    ) : (
+                        <div className="w-full h-full bg-[#F1F5F9] flex flex-col items-center justify-center gap-2 p-4 text-center border-b border-slate-200">
+                            <Leaf className="text-slate-400" size={28} />
+                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Image Coming Soon</span>
+                        </div>
+                    )}
+                    {/* Tag category badge */}
+                    {showCategory && <span className="absolute top-2 left-2 sm:top-3 sm:left-3 px-2 sm:px-2.5 py-1 bg-white/90 backdrop-blur-[4px] text-slate-800 text-[10px] font-black rounded-lg uppercase tracking-wider border border-slate-100 shadow-sm">
+                        {product.category}
+                    </span>}
+                    
+                    {/* Stock badge */}
+                    {isOutOfStock ? (
+                        <span className="absolute top-2 right-2 sm:top-3 sm:right-3 px-2 py-0.5 bg-red-100 text-red-800 text-[9px] font-black rounded uppercase">
+                            Out of Stock
+                        </span>
+                    ) : product.stock_quantity < 10 ? (
+                        <span className="absolute top-2 right-2 sm:top-3 sm:right-3 px-2 py-0.5 bg-amber-100 text-amber-800 text-[9px] font-black rounded uppercase">
+                            Only {product.stock_quantity} left
+                        </span>
+                    ) : null}
+                </div>
+
+                {/* Content info block */}
+                <div className="p-3 sm:p-4 flex-1 flex flex-col justify-between">
+                    <div>
+                        <h3 className="font-bold text-slate-900 text-sm group-hover:text-emerald-700 transition-colors mb-1 truncate">
+                            {product.name}
+                        </h3>
+                        {product.review_count > 0 && (
+                            <div className="flex items-center gap-1 mb-1 text-[11px] font-bold text-slate-600">
+                                <Star size={11} className="text-amber-400" fill="currentColor" />
+                                {product.avg_rating.toFixed(1)}
+                                <span className="text-slate-400 font-semibold">({product.review_count})</span>
+                            </div>
+                        )}
+                        <p className="text-slate-500 text-xs line-clamp-2 leading-relaxed mb-3">
+                            {product.description || "No description provided."}
+                        </p>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-100 mt-2">
+                        <div className="flex flex-col">
+                            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Unit Price</span>
+                            <span className="text-[#059669] font-black text-sm">
+                                ₱{parseFloat(product.unit_price).toLocaleString()}
+                            </span>
+                        </div>
+
+                        {/* Add to Cart Action */}
+                        <button
+                            onClick={(e) => {
+                                e.stopPropagation(); // Avoid opening product modal
+                                if (!isOutOfStock) {
+                                    addToCart(product, 1);
+                                }
+                            }}
+                            disabled={isOutOfStock}
+                            className="w-9 h-9 rounded-xl bg-emerald-50 hover:bg-emerald-600 hover:text-white text-emerald-700 flex items-center justify-center border-none cursor-pointer disabled:opacity-50 disabled:hover:bg-emerald-50 disabled:hover:text-emerald-700 transition-colors"
+                        >
+                            <Plus size={16} />
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    // Phones, "All Products" with nothing narrowed down: one swipe row per category
+    // (shop-app style). Searching, filtering or picking a tab switches to the grid.
+    const filtersActive = !!searchQuery || maxPrice < 6000 || selectedLights.size > 0 || selectedCares.size > 0 || selectedMaterials.size > 0;
+    const showCategoryRows = isPhone && activeTab === 'All' && !filtersActive;
+    const CATEGORY_ROWS = [
+        { key: 'plant', label: 'Plants' },
+        { key: 'furniture', label: 'Furniture' },
+        { key: 'hardscape', label: 'Hardscape' },
+    ];
+    const openCategory = (key) => {
+        setActiveTab(key);
+        setSelectedLights(new Set());
+        setSelectedCares(new Set());
+        setSelectedMaterials(new Set());
+        // Land on the top of the results, just under the sticky category tabs
+        requestAnimationFrame(() => productsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+    };
+
     return (
-        <div className="min-h-screen bg-[#FDFAF6]" style={{ fontFamily: "'Inter', sans-serif" }}>
+        <div className="min-h-screen bg-[#FFFFFF]" style={{ fontFamily: "'Inter', sans-serif" }}>
             
             {/* Header Banner */}
-            <div className="relative bg-gradient-to-r from-[#1E2E1A] to-[#3B5435] text-white py-16 px-6 md:px-12 overflow-hidden shadow-sm">
+            <div className="relative bg-gradient-to-r from-[#064E3B] to-[#047857] text-white py-16 px-6 md:px-12 overflow-hidden shadow-sm">
                 <div className="absolute inset-0 opacity-10 bg-[radial-gradient(#FDFAF6_1px,transparent_1px)] [background-size:16px_16px]"></div>
                 <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-8 relative z-10">
                     <div>
                         <span className="inline-flex items-center gap-1 bg-emerald-500/20 text-emerald-300 text-[11px] font-black tracking-widest uppercase px-3 py-1 rounded-full mb-3">
                             <Sparkles size={11} /> Premium Landscaping Inventory
                         </span>
-                        <h1 className="text-3xl md:text-5xl font-extrabold tracking-tight mb-3 font-serif">
+                        <h1 className="text-3xl md:text-5xl font-extrabold tracking-tight mb-3">
                             The Garden Studio Shop
                         </h1>
                         <p className="text-slate-300 max-w-lg text-sm md:text-base font-medium leading-relaxed">
@@ -365,9 +495,9 @@ export default function Shop() {
             </div>
 
             {/* Shop Category Navigation Tabs */}
-            <div className="border-b border-slate-200 bg-white sticky top-[60px] z-40 shadow-sm">
-                <div className="max-w-7xl mx-auto px-6 flex items-center justify-between overflow-x-auto gap-8">
-                    <div className="flex gap-2 py-3.5">
+            <div className="border-b border-slate-200 bg-white sticky top-0 z-40 shadow-sm">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 flex items-center justify-between overflow-x-auto gap-8">
+                    <div className="flex gap-2 py-3.5 shrink-0">
                         {['All', 'plant', 'furniture', 'hardscape'].map((tab) => (
                             <button
                                 key={tab}
@@ -378,9 +508,9 @@ export default function Shop() {
                                     setSelectedCares(new Set());
                                     setSelectedMaterials(new Set());
                                 }}
-                                className={`px-4 py-2 text-xs font-bold uppercase tracking-wider rounded-xl transition-all border-none cursor-pointer ${
+                                className={`px-4 py-2 text-xs font-bold uppercase tracking-wider rounded-xl transition-all border-none cursor-pointer whitespace-nowrap ${
                                     activeTab === tab
-                                        ? 'bg-[#4A7A3A] text-white shadow-sm'
+                                        ? 'bg-[#059669] text-white shadow-sm'
                                         : 'text-slate-500 bg-transparent hover:bg-slate-100 hover:text-slate-800'
                                 }`}
                             >
@@ -397,12 +527,23 @@ export default function Shop() {
             </div>
 
             {/* Main Layout Container */}
-            <div className="max-w-7xl mx-auto px-6 py-10 flex flex-col lg:flex-row gap-8">
+            <div className="max-w-7xl mx-auto px-0 sm:px-6 py-6 sm:py-10 flex flex-col lg:flex-row gap-5 lg:gap-8">
                 
                 {/* 1. FILTER SIDEBAR */}
-                <div className="w-full lg:w-[280px] shrink-0 bg-white p-6 rounded-3xl border border-slate-200 shadow-sm h-fit">
-                    <div className="flex items-center justify-between pb-4 border-b border-slate-100 mb-6">
-                        <h2 className="text-base font-extrabold text-slate-800 flex items-center gap-2">
+                <div className="w-full lg:w-[280px] shrink-0 bg-white p-4 sm:p-6 rounded-3xl border border-slate-200 shadow-sm h-fit">
+                    <div className={`flex items-center justify-between ${filtersOpen ? 'pb-4 border-b border-slate-100 mb-6' : 'lg:pb-4 lg:border-b lg:border-slate-100 lg:mb-6'}`}>
+                        {/* Phones/tablets: the heading opens and closes the panel */}
+                        <button
+                            type="button"
+                            onClick={() => setFiltersOpen(o => !o)}
+                            aria-expanded={filtersOpen}
+                            className="lg:hidden text-base font-extrabold text-slate-800 flex items-center gap-2 bg-transparent border-none p-0 cursor-pointer"
+                        >
+                            <Filter size={16} className="text-emerald-700" />
+                            Filters
+                            <ChevronDown size={16} className={`text-slate-400 transition-transform ${filtersOpen ? 'rotate-180' : ''}`} />
+                        </button>
+                        <h2 className="hidden lg:flex text-base font-extrabold text-slate-800 items-center gap-2">
                             <Filter size={16} className="text-emerald-700" />
                             Filters
                         </h2>
@@ -422,6 +563,7 @@ export default function Shop() {
                         )}
                     </div>
 
+                    <div className={filtersOpen ? '' : 'hidden lg:block'}>
                     {/* Search Field */}
                     <div className="flex flex-col gap-2 mb-6">
                         <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">Search Product</label>
@@ -540,10 +682,11 @@ export default function Shop() {
                             </div>
                         </div>
                     )}
+                    </div>
                 </div>
 
                 {/* 2. PRODUCT EXPERIENCE GRID */}
-                <div className="flex-1">
+                <div ref={productsRef} className="flex-1 min-w-0 scroll-mt-20">
                     
                     {loading ? (
                         <div className="py-20 text-center text-slate-400 font-medium">
@@ -557,88 +700,36 @@ export default function Shop() {
                         <div className="py-20 text-center text-slate-400 font-medium bg-slate-50 border border-dashed border-slate-200 rounded-3xl p-6">
                             No products match your search or filter settings. Try adjusting filters.
                         </div>
-                    ) : (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-6">
-                            {filteredProducts.map((product) => {
-                                const meta = PRODUCT_METADATA[product.name] || {};
-                                const imgUrl = meta.unsplashUrl || DEFAULT_LIFESTYLE_IMAGE;
-                                const isOutOfStock = product.stock_quantity <= 0;
-
+                    ) : showCategoryRows ? (
+                        <div className="flex flex-col gap-7">
+                            {CATEGORY_ROWS.map(({ key, label }) => {
+                                const items = filteredProducts.filter(p => p.category === key);
+                                if (!items.length) return null;
                                 return (
-                                    <div 
-                                        key={product.id}
-                                        onClick={() => setSelectedProduct(product)}
-                                        className="group bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md hover:-translate-y-1 transition-all duration-300 cursor-pointer flex flex-col"
-                                    >
-                                        {/* Lifestyle Image with zoom effect */}
-                                        <div className="relative aspect-square overflow-hidden bg-slate-100 shrink-0 flex items-center justify-center">
-                                            {getProductImage(product) ? (
-                                                <img
-                                                    src={getProductImage(product)}
-                                                    alt={product.name}
-                                                    loading="lazy"
-                                                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                                                />
-                                            ) : (
-                                                <div className="w-full h-full bg-[#F5F0E8] flex flex-col items-center justify-center gap-2 p-4 text-center border-b border-slate-200">
-                                                    <Leaf className="text-slate-400" size={28} />
-                                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Image Coming Soon</span>
-                                                </div>
-                                            )}
-                                            {/* Tag category badge */}
-                                            <span className="absolute top-3 left-3 px-2.5 py-1 bg-white/90 backdrop-blur-[4px] text-slate-800 text-[10px] font-black rounded-lg uppercase tracking-wider border border-slate-100 shadow-sm">
-                                                {product.category}
-                                            </span>
-                                            
-                                            {/* Stock badge */}
-                                            {isOutOfStock ? (
-                                                <span className="absolute top-3 right-3 px-2 py-0.5 bg-red-100 text-red-800 text-[9px] font-black rounded uppercase">
-                                                    Out of Stock
-                                                </span>
-                                            ) : product.stock_quantity < 10 ? (
-                                                <span className="absolute top-3 right-3 px-2 py-0.5 bg-amber-100 text-amber-800 text-[9px] font-black rounded uppercase">
-                                                    Only {product.stock_quantity} left
-                                                </span>
-                                            ) : null}
+                                    <section key={key} aria-label={label}>
+                                        <div className="flex items-center justify-between mb-3">
+                                            <h2 className="text-base font-extrabold text-slate-900 m-0">
+                                                {label} <span className="text-slate-400 font-semibold text-sm">({items.length})</span>
+                                            </h2>
+                                            <button
+                                                type="button"
+                                                onClick={() => openCategory(key)}
+                                                className="flex items-center gap-1 text-[13px] font-bold text-emerald-700 bg-transparent border-none cursor-pointer p-1"
+                                            >
+                                                See all <ArrowRight size={14} />
+                                            </button>
                                         </div>
-
-                                        {/* Content info block */}
-                                        <div className="p-4 flex-1 flex flex-col justify-between">
-                                            <div>
-                                                <h3 className="font-bold text-slate-900 text-sm group-hover:text-emerald-700 transition-colors mb-1 truncate">
-                                                    {product.name}
-                                                </h3>
-                                                <p className="text-slate-500 text-xs line-clamp-2 leading-relaxed mb-3">
-                                                    {product.description || "No description provided."}
-                                                </p>
-                                            </div>
-
-                                            <div className="flex items-center justify-between pt-2 border-t border-slate-100 mt-2">
-                                                <div className="flex flex-col">
-                                                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Unit Price</span>
-                                                    <span className="text-[#4A7A3A] font-black text-sm">
-                                                        ₱{parseFloat(product.unit_price).toLocaleString()}
-                                                    </span>
-                                                </div>
-
-                                                {/* Add to Cart Action */}
-                                                <button
-                                                    onClick={(e) => {
-                                                        e.stopPropagation(); // Avoid opening product modal
-                                                        if (!isOutOfStock) {
-                                                            addToCart(product, 1);
-                                                        }
-                                                    }}
-                                                    disabled={isOutOfStock}
-                                                    className="w-9 h-9 rounded-xl bg-emerald-50 hover:bg-emerald-600 hover:text-white text-emerald-700 flex items-center justify-center border-none cursor-pointer disabled:opacity-50 disabled:hover:bg-emerald-50 disabled:hover:text-emerald-700 transition-colors"
-                                                >
-                                                    <Plus size={16} />
-                                                </button>
-                                            </div>
+                                        {/* Bleeds to the screen edges; ~2.3 cards visible so the next one peeks in */}
+                                        <div className="-mx-4 px-4 flex gap-3 overflow-x-auto snap-x snap-mandatory scroll-px-4 pt-1 pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                                            {items.map(product => renderProductCard(product, { className: 'w-[42%] shrink-0 snap-start', showCategory: false }))}
                                         </div>
-                                    </div>
+                                    </section>
                                 );
                             })}
+                        </div>
+                    ) : (
+                        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-6">
+                            {filteredProducts.map(product => renderProductCard(product))}
                         </div>
                     )}
                 </div>
@@ -669,7 +760,7 @@ export default function Shop() {
                             </button>
 
                             {/* Left Col: Lifestyle Image */}
-                            <div className="w-full md:w-[45%] bg-[#F5F0E8] relative min-h-[250px] md:min-h-0 flex items-center justify-center">
+                            <div className="w-full md:w-[45%] bg-[#F1F5F9] relative min-h-[250px] md:min-h-0 flex items-center justify-center">
                                 {getProductImage(selectedProduct) ? (
                                     <img
                                         src={getProductImage(selectedProduct)}
@@ -695,9 +786,22 @@ export default function Shop() {
                                         <h3 className="text-xl md:text-2xl font-extrabold text-slate-900 mb-1 leading-tight">
                                             {selectedProduct.name}
                                         </h3>
-                                        <span className="text-[#4A7A3A] font-black text-lg">
+                                        <span className="text-[#059669] font-black text-lg">
                                             ₱{parseFloat(selectedProduct.unit_price).toLocaleString()}
                                         </span>
+                                        {selectedProduct.review_count > 0 && (
+                                            <div className="flex items-center gap-1 mt-1 text-xs font-bold text-slate-600">
+                                                {[1, 2, 3, 4, 5].map(n => (
+                                                    <Star key={n} size={13}
+                                                        className={n <= Math.round(selectedProduct.avg_rating) ? 'text-amber-400' : 'text-slate-200'}
+                                                        fill="currentColor" />
+                                                ))}
+                                                <span className="ml-1">{selectedProduct.avg_rating.toFixed(1)}</span>
+                                                <span className="text-slate-400 font-semibold">
+                                                    · {selectedProduct.review_count} review{selectedProduct.review_count > 1 ? 's' : ''}
+                                                </span>
+                                            </div>
+                                        )}
                                     </div>
 
                                     <div>
@@ -749,6 +853,45 @@ export default function Shop() {
                                                 <p className="text-[11px] text-slate-600 leading-relaxed font-medium">
                                                     {meta.careInstructions}
                                                 </p>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Customer Reviews */}
+                                    <div>
+                                        <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Customer Reviews</h4>
+                                        {productReviews === null ? (
+                                            <p className="text-[11px] text-slate-400 font-medium">Loading reviews…</p>
+                                        ) : productReviews.length === 0 ? (
+                                            <p className="text-[11px] text-slate-400 font-medium">No reviews yet. Customers can rate this item once their order is delivered.</p>
+                                        ) : (
+                                            <div className="space-y-2.5">
+                                                {productReviews.map(r => (
+                                                    <div key={r.id} className="bg-slate-50 rounded-xl p-3 border border-slate-100">
+                                                        <div className="flex items-center justify-between mb-1">
+                                                            <span className="text-[11px] font-bold text-slate-800">{r.reviewer_name}</span>
+                                                            <span className="flex gap-0.5">
+                                                                {[1, 2, 3, 4, 5].map(n => (
+                                                                    <Star key={n} size={10}
+                                                                        className={n <= r.rating ? 'text-amber-400' : 'text-slate-200'}
+                                                                        fill="currentColor" />
+                                                                ))}
+                                                            </span>
+                                                        </div>
+                                                        {r.comment && (
+                                                            <p className="text-[11px] text-slate-600 leading-relaxed font-medium m-0">{r.comment}</p>
+                                                        )}
+                                                        <span className="text-[10px] text-slate-400 font-semibold">
+                                                            Verified purchase · {new Date(r.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                                                        </span>
+                                                        {r.reply && (
+                                                            <div className="mt-2 pl-2.5 border-l-2 border-emerald-400">
+                                                                <p className="text-[10px] font-bold text-emerald-700 m-0">Response from Garden Studio</p>
+                                                                <p className="text-[11px] text-slate-600 leading-relaxed m-0">{r.reply}</p>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                ))}
                                             </div>
                                         )}
                                     </div>
@@ -826,7 +969,7 @@ export default function Shop() {
                                                         className="w-full h-full object-cover" 
                                                     />
                                                 ) : (
-                                                    <div className="w-full h-full bg-[#F5F0E8] flex items-center justify-center text-slate-400">
+                                                    <div className="w-full h-full bg-[#F1F5F9] flex items-center justify-center text-slate-400">
                                                         <Leaf size={16} />
                                                     </div>
                                                 )}
@@ -835,7 +978,7 @@ export default function Shop() {
                                             <div className="flex-1 flex flex-col justify-between">
                                                 <div>
                                                     <h4 className="font-bold text-slate-800 text-xs line-clamp-1">{c.product.name}</h4>
-                                                    <span className="text-[#4A7A3A] font-black text-xs block mt-0.5">
+                                                    <span className="text-[#059669] font-black text-xs block mt-0.5">
                                                         ₱{parseFloat(c.product.unit_price).toLocaleString()}
                                                     </span>
                                                 </div>
@@ -879,7 +1022,7 @@ export default function Shop() {
                                     </div>
                                     <div className="flex justify-between font-medium">
                                         <span>Shipping Fee (Bulky Flat Rate)</span>
-                                        <span className="font-bold text-slate-800">₱{SHIPPING_FEE.toLocaleString()}</span>
+                                        <span className="font-bold text-slate-800">₱{shippingFee.toLocaleString()}</span>
                                     </div>
                                     <div className="flex justify-between text-sm font-extrabold pt-2 border-t border-slate-200 text-slate-800">
                                         <span>Grand Total</span>
@@ -923,7 +1066,7 @@ export default function Shop() {
                         {/* Left Col: Customer Shipping Form */}
                         <div className="w-full md:w-[55%] p-6 md:p-8 overflow-y-auto max-h-[50vh] md:max-h-[90vh]">
                             <h3 className="text-lg md:text-xl font-extrabold text-slate-900 flex items-center gap-2 mb-2">
-                                <CreditCard style={{ color: '#4A7A3A' }} size={22} />
+                                <CreditCard style={{ color: '#059669' }} size={22} />
                                 Checkout Details
                             </h3>
                             <p className="text-slate-500 text-xs font-semibold mb-6">
@@ -1063,7 +1206,7 @@ export default function Shop() {
                                     </div>
                                     <div className="flex justify-between text-slate-500">
                                         <span>Shipping Fee (Bulky items)</span>
-                                        <span className="font-semibold text-slate-800">₱{SHIPPING_FEE.toLocaleString()}</span>
+                                        <span className="font-semibold text-slate-800">₱{shippingFee.toLocaleString()}</span>
                                     </div>
                                     <div className="flex justify-between text-sm font-extrabold pt-2 border-t border-slate-200 text-slate-800">
                                         <span>Grand Total</span>

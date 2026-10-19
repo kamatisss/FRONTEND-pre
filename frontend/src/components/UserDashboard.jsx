@@ -30,6 +30,7 @@ const getActiveStep = (status, hasDesign) => {
         case 'Preparing':
             return 4;
         case 'Installing':
+        case 'For Review':  // crew finished, awaiting office sign-off
             return 5;
         case 'Finished':
         case 'Completed':
@@ -312,7 +313,7 @@ const UserDashboard = () => {
     };
 
     // Calculate active/ongoing elements
-    const activeBooking = bookings.find(b => b.status !== 'Completed' && b.status !== 'Cancelled');
+    const activeBooking = bookings.find(b => !['Finished', 'Completed', 'Cancelled'].includes(b.status));
     const activeOrder = orders.find(o => o.status !== 'Delivered' && o.status !== 'Cancelled');
     const hasActiveActivity = activeBooking || activeOrder;
 
@@ -335,6 +336,7 @@ const UserDashboard = () => {
                 return { ...base, background: '#D1FAE5', color: '#065F46' };
             case 'In Progress':
             case 'Installing':
+            case 'For Review':
             case 'Shipped':
                 return { ...base, background: '#DBEAFE', color: '#1E40AF' };
             case 'Out for Delivery':
@@ -398,7 +400,7 @@ const UserDashboard = () => {
                     {/* Quick Actions Row */}
                     <div style={{ 
                         display: 'grid', 
-                        gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', 
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))', 
                         gap: '16px' 
                     }}>
                         <div 
@@ -484,7 +486,7 @@ const UserDashboard = () => {
                             backgroundColor: '#ffffff',
                             borderRadius: '16px',
                             border: '1px solid #e2e8f0',
-                            padding: '32px',
+                            padding: 'clamp(16px, 4vw, 32px)',
                             textAlign: 'center',
                             boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.05)'
                         }}>
@@ -512,7 +514,7 @@ const UserDashboard = () => {
                             </button>
                         </div>
                     ) : (
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '20px' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(360px, 100%), 1fr))', gap: '20px' }}>
                             {/* Active Booking */}
                             {activeBooking && (
                                 <div style={{
@@ -527,7 +529,7 @@ const UserDashboard = () => {
                                             <Calendar size={18} color="#10b981" />
                                             <span style={{ fontSize: '14px', fontWeight: '700', color: '#334155' }}>Booking: {activeBooking.service_type}</span>
                                         </div>
-                                        <span style={getStatusStyle(activeBooking.status)}>{activeBooking.status}</span>
+                                        <span style={getStatusStyle(activeBooking.status)}>{activeBooking.status === 'For Review' ? 'Final Inspection' : activeBooking.status}</span>
                                     </div>
                                     <p style={{ margin: '0 0 16px 0', fontSize: '13px', color: '#64748b' }}>Scheduled on: <strong>{new Date(activeBooking.scheduled_date).toLocaleDateString()}</strong></p>
                                     <BookingMilestoneTracker status={activeBooking.status} hasDesign={!!(activeBooking.design || activeBooking.design_details)} />
@@ -605,7 +607,7 @@ const UserDashboard = () => {
                             backgroundColor: '#ffffff',
                             borderRadius: '16px',
                             border: '1px solid #e2e8f0',
-                            padding: '32px',
+                            padding: 'clamp(16px, 4vw, 32px)',
                             textAlign: 'center',
                             boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.05)'
                         }}>
@@ -634,7 +636,7 @@ const UserDashboard = () => {
                                         borderRadius: '14px',
                                         border: '1px solid #e2e8f0',
                                         padding: '16px',
-                                        minWidth: '240px',
+                                        minWidth: 'min(240px, 100%)',
                                         width: '240px',
                                         boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.03)',
                                         display: 'flex',
@@ -693,7 +695,7 @@ const UserDashboard = () => {
                 </div>
 
                 {/* side-by-side recent bookings and orders */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '24px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(400px, 100%), 1fr))', gap: '24px' }}>
                     {/* Recent Bookings Panel */}
                     <div style={{ 
                         backgroundColor: '#ffffff',
@@ -734,7 +736,7 @@ const UserDashboard = () => {
                                                     <td style={{ padding: '10px 12px', fontWeight: '500', color: '#475569' }}>{new Date(b.scheduled_date).toLocaleDateString()}</td>
                                                     <td style={{ padding: '10px 12px', fontWeight: '600', color: '#334155', textTransform: 'capitalize' }}>{b.service_type}</td>
                                                     <td style={{ padding: '10px 12px', textAlign: 'center' }}>
-                                                        <span style={getStatusStyle(b.status)}>{b.status}</span>
+                                                        <span style={getStatusStyle(b.status)}>{b.status === 'For Review' ? 'Final Inspection' : b.status}</span>
                                                     </td>
                                                 </tr>
                                             ))}

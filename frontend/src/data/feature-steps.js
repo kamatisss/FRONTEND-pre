@@ -16,7 +16,7 @@ export const featureSteps = [
   },
   {
     title: 'Design in 3D',
-    description: 'Drag and drop 1,200+ premium plants, furniture, and materials into a live 3D scene.',
+    description: 'Drag and drop plants, stones and furniture into a live 3D scene, free and without signing up.',
     image: step3,
   },
   {

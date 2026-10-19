@@ -4,7 +4,7 @@ import { OrbitControls, ContactShadows, Environment, Html, Preload, Sky } from '
 import { EffectComposer, SSAO, Bloom, Vignette } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import {
-  Upload, AlertTriangle, Mountain, Sun, X, Pencil
+  Upload, AlertTriangle, Mountain, Sun, X, Pencil, Lock, CloudOff, Save
 } from 'lucide-react';
 
 import { useDesign } from '../context/DesignContext';
@@ -18,6 +18,9 @@ import PlacementPreview from './PlacementPreview';
 import PlacementControls from './PlacementControls';
 import ObjectTransformPanel from './ObjectTransformPanel';
 import ErrorBoundary from './ErrorBoundary';
+import StudioAITeaser from './StudioAITeaser';
+import { useIsPhone } from './ui/useMediaQuery';
+import { saveStudioDraft, loadStudioDraft, clearStudioDraft, trackFunnel } from '../services/guestSession';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SKY COLOR LOOKUP TABLE
@@ -254,6 +257,20 @@ const S = {
   analysisBody: { color: '#4B5563', fontSize: '0.9rem' },
   analysisWarn: { color: '#D97706', fontSize: '0.8rem', fontWeight: 500, marginTop: 4 },
   imgPreviewWrap: { display: 'flex', gap: 8 },
+  /* ── Phones: tools in a bottom tab bar, libraries in a bottom sheet ── */
+  phoneRoot: { flexDirection: 'column' },
+  phoneSidebar: {
+    order: 2, width: '100%', height: 60, flexDirection: 'row', justifyContent: 'space-around',
+    padding: '0 8px', borderRight: 'none', borderTop: '1px solid #E5E7EB', boxShadow: '0 -1px 4px rgba(0,0,0,0.04)',
+  },
+  phoneSidebarTop: { flexDirection: 'row', flex: 'none', gap: 0, justifyContent: 'space-around', width: '75%' },
+  phoneDrawer: (open) => ({
+    top: 'auto', left: 0, right: 0, bottom: 60, width: '100%', height: '62%',
+    borderRight: 'none', borderTop: '1px solid #E5E7EB', borderRadius: '20px 20px 0 0',
+    boxShadow: open ? '0 -8px 32px rgba(0,0,0,0.12)' : 'none',
+    transform: open ? 'translateY(0)' : 'translateY(110%)',
+  }),
+  phoneToolbar: { padding: '0 10px', gap: 8 },
   imgPreview: {
     width: '50%', height: 96, objectFit: 'cover', borderRadius: 8,
     border: '1px solid #F3F4F6', boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
@@ -287,9 +304,78 @@ const PlantIcon = () => (
 );
 
 // ── Main Component ────────────────────────────────────────────
-export default function GardenDesigner() {
+// guest: the free Studio on /try-studio. Everything that needs an account
+// (photo terrain, saving, checkout, AI) calls onGate(intent) instead, and the
+// work-in-progress is kept on this device until the visitor signs in.
+export default function GardenDesigner({ guest = false, onGate = () => {} }) {
   const { state, dispatch } = useDesign();
   const [openDrawer, setOpenDrawer] = useState(null);
+  const phone = useIsPhone();
+
+  // A guest draft is restored on /try-studio, or moved into the account on /studio.
+  // (After an in-app sign-in the items are often still in memory, so only load when empty.)
+  const [guestDraft] = useState(() => {
+    if (new URLSearchParams(window.location.search).get('design_id')) return null;
+    const draft = loadStudioDraft();
+    return draft?.placedItems.length ? draft : null;
+  });
+  // Guests always get their own draft; a signed-in user's in-memory work wins over it
+  const [draftToRestore] = useState(() => (guestDraft && (guest || !state.placedItems.length) ? guestDraft : null));
+  const [showImportBanner, setShowImportBanner] = useState(!guest && !!guestDraft);
+
+  useEffect(() => {
+    if (!guest && guestDraft) clearStudioDraft();
+    // Guest with no draft: anything still in memory belongs to whoever used this
+    // browser before (logout doesn't clear the Studio), so start clean
+    if (guest && !guestDraft && (state.placedItems.length || state.designId)) dispatch({ type: 'RESET' });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- mount only
+
+  useEffect(() => {
+    if (!draftToRestore) return;
+    dispatch({
+      type: 'LOAD_DESIGN',
+      payload: {
+        designId: null,
+        designName: draftToRestore.designName || 'My Garden',
+        placedItems: draftToRestore.placedItems,
+        dimensions: draftToRestore.dimensions || { width: 10, length: 15, terrainType: 'flat' },
+        terrainHeight: draftToRestore.terrainHeight ?? 1.5,
+        timeOfDay: draftToRestore.timeOfDay ?? 14,
+        depthData: null,
+        originalImageUrl: null,
+      },
+    });
+    // Now it lives in the signed-in Studio; mark unsaved so the save button nags
+    if (!guest) dispatch({ type: 'SET_DESIGN_META', payload: { isDirty: true } });
+  }, [draftToRestore, guest, dispatch]);
+
+  // Guests: keep the draft on this device as they work
+  useEffect(() => {
+    if (!guest) return;
+    const draft = {
+      designName: state.designName, placedItems: state.placedItems, dimensions: state.dimensions,
+      terrainHeight: state.terrainHeight, timeOfDay: state.timeOfDay,
+    };
+    const t = setTimeout(() => saveStudioDraft(draft), 400);
+    return () => clearTimeout(t);
+  }, [guest, state.placedItems, state.designName, state.dimensions, state.terrainHeight, state.timeOfDay]);
+
+  // Funnel: a guest placing an item. A restore or reset on mount changes the item
+  // count too, so ignore changes until the count settles at the expected value.
+  const settleAtRef = useRef(
+    draftToRestore ? draftToRestore.placedItems.length
+      : guest && !guestDraft && (state.placedItems.length || state.designId) ? 0 : null,
+  );
+  const itemCountRef = useRef(state.placedItems.length);
+  useEffect(() => {
+    const count = state.placedItems.length;
+    if (settleAtRef.current !== null) {
+      if (count === settleAtRef.current) settleAtRef.current = null;
+    } else if (guest && count > itemCountRef.current) {
+      trackFunnel('first_item_placed');
+    }
+    itemCountRef.current = count;
+  }, [guest, state.placedItems.length]);
 
   // Fetch live inventory items/products so placed objects can lookup model paths
   useEffect(() => {
@@ -481,11 +567,11 @@ export default function GardenDesigner() {
     : openDrawer ? `${openDrawer.charAt(0).toUpperCase() + openDrawer.slice(1)} Library` : '';
 
   return (
-    <div style={S.root}>
+    <div style={phone ? { ...S.root, ...S.phoneRoot } : S.root}>
 
-      {/* ── SLIM LEFT SIDEBAR ── */}
-      <div style={S.sidebar}>
-        <div style={S.sidebarTop}>
+      {/* ── SLIM LEFT SIDEBAR (bottom tab bar on phones) ── */}
+      <div style={phone ? { ...S.sidebar, ...S.phoneSidebar } : S.sidebar}>
+        <div style={phone ? { ...S.sidebarTop, ...S.phoneSidebarTop } : S.sidebarTop}>
           <button onClick={() => toggleDrawer('plant')} style={S.sidebarBtn(openDrawer === 'plant')} title="Plants">
             <PlantIcon />
           </button>
@@ -502,8 +588,8 @@ export default function GardenDesigner() {
       </div>
 
       {/* ── SLIDE-OUT DRAWER ── */}
-      <div style={S.drawer(!!openDrawer)}>
-        <div style={S.drawerInner}>
+      <div style={phone ? { ...S.drawer(!!openDrawer), ...S.phoneDrawer(!!openDrawer) } : S.drawer(!!openDrawer)}>
+        <div style={phone ? { ...S.drawerInner, padding: '16px 16px 8px' } : S.drawerInner}>
           <div style={S.drawerHeader}>
             <h3 style={S.drawerTitle}>{drawerTitle}</h3>
             <button onClick={() => setOpenDrawer(null)} style={S.drawerCloseBtn}>
@@ -576,14 +662,14 @@ export default function GardenDesigner() {
       </div>
 
       {/* ── MAIN CONTENT AREA ── */}
-      <div style={S.mainArea}>
+      <div style={{ ...S.mainArea, minWidth: 0, minHeight: 0 }}>
 
         {/* ── TOP TOOLBAR ── */}
-        <div style={S.toolbar}>
-          <div style={S.toolbarLeft}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <span style={S.projectBadge}>Project</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, position: 'relative' }}>
+        <div style={phone ? { ...S.toolbar, ...S.phoneToolbar } : S.toolbar}>
+          <div style={{ ...S.toolbarLeft, gap: phone ? 8 : 16, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+              {!phone && <span style={S.projectBadge}>Project</span>}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, position: 'relative', minWidth: 0 }}>
                 <input
                   type="text"
                   value={state.designName || ''}
@@ -592,24 +678,49 @@ export default function GardenDesigner() {
                   style={{
                     background: 'transparent', border: 'none', outline: 'none',
                     color: '#1f2937', fontWeight: 700, fontSize: '0.9rem',
-                    padding: '4px 8px', borderRadius: 6, width: 180,
+                    padding: '4px 8px', borderRadius: 6, width: phone ? '100%' : 180, minWidth: 0,
                     transition: 'box-shadow 0.2s, background 0.2s',
                   }}
                   onFocus={e => { e.target.style.boxShadow = '0 0 0 2px #10b981'; e.target.style.background = '#fff'; }}
                   onBlur={e => { e.target.style.boxShadow = 'none'; e.target.style.background = 'transparent'; }}
                 />
-                <Pencil size={14} style={{ color: '#9CA3AF', flexShrink: 0 }} />
+                {!phone && <Pencil size={14} style={{ color: '#9CA3AF', flexShrink: 0 }} />}
               </div>
             </div>
-            <label style={S.uploadBtn}>
-              <Upload size={16} />
-              Upload Photo
-              <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp"
-                onChange={handleImageUpload} disabled={state.loading} hidden />
-            </label>
+            {guest ? (
+              <button style={{ ...S.uploadBtn, flexShrink: 0 }} onClick={() => onGate('photo')} title="Turn a photo of your own yard into 3D terrain (free account needed)"
+                aria-label="Use my yard photo">
+                <Lock size={14} />
+                {phone ? 'Photo' : 'Use my yard photo'}
+              </button>
+            ) : (
+              <label style={{ ...S.uploadBtn, flexShrink: 0 }} title="Upload Photo" aria-label="Upload Photo">
+                <Upload size={16} />
+                {!phone && 'Upload Photo'}
+                <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp"
+                  onChange={handleImageUpload} disabled={state.loading} hidden />
+              </label>
+            )}
           </div>
-          <div style={S.toolbarRight}>
-            <SaveLoadPanel toolbarVariant />
+          <div style={{ ...S.toolbarRight, flexShrink: 0 }}>
+            {guest ? (
+              <>
+                {!phone && (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#6B7280', fontWeight: 600 }}
+                        title="Your design is kept in this browser until you save it to an account">
+                    <CloudOff size={14} /> Draft on this device
+                  </span>
+                )}
+                <button onClick={() => onGate('save')} style={{
+                  display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 8, border: 'none',
+                  background: '#059669', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                }}>
+                  <Save size={14} /> {phone ? 'Save' : 'Save to my account'}
+                </button>
+              </>
+            ) : (
+              <SaveLoadPanel toolbarVariant />
+            )}
           </div>
         </div>
 
@@ -682,9 +793,25 @@ export default function GardenDesigner() {
           )}
 
           {/* FAB for Project Summary */}
-          <div style={S.fabWrap}>
-            <ProjectSummaryPanel />
+          <div style={phone ? { ...S.fabWrap, bottom: 12, right: 12 } : S.fabWrap}>
+            <ProjectSummaryPanel onCheckout={guest ? () => onGate('checkout') : undefined} compact={phone} />
           </div>
+
+          {/* Let AI design this yard: carries lot size + chosen plants to the AI Designer */}
+          {!isPlacing && <StudioAITeaser guest={guest} onGate={onGate} />}
+
+          {/* Signed in after starting as a guest: the draft was moved in */}
+          {showImportBanner && (
+            <div style={{ ...S.analysisBar, display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px' }}>
+              <span style={{ fontSize: '0.9rem', color: '#065F46', fontWeight: 600 }}>
+                We brought over the design you started. Click <b>Save</b> to keep it in your account.
+              </span>
+              <button onClick={() => setShowImportBanner(false)} aria-label="Dismiss"
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280', padding: 0 }}>
+                <X size={16} />
+              </button>
+            </div>
+          )}
 
           {/* Object Transform (floating top-right) */}
           {/* <div style={S.transformWrap}>

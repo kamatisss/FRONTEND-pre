@@ -1,21 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Link, NavLink } from 'react-router-dom';
+import { Link, NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import {
-  Home,
-  Calendar,
-  CalendarDays,
-  Archive,
-  LayoutDashboard,
-  CalendarPlus,
-  LogOut,
-  Leaf,
-  User,
-  Settings,
-  ChevronDown,
-  Clock,
-  Sparkles,
-} from 'lucide-react';
+import { customerLinks, useStaffLinks } from './navLinks';
+import { LogOut, Leaf, User, Settings, ChevronDown, Menu, X } from 'lucide-react';
 
 /* ─── Avatar: shows first letter of first name, with green gradient ─── */
 function Avatar({ user }) {
@@ -190,8 +177,16 @@ function DropItem({ icon, label, onClick }) {
 ══════════════════════════════════════════════════════════════ */
 const TopNavbar = () => {
   const { user, logoutUser } = useAuth();
+  const location = useLocation();
   const [dropOpen, setDropOpen] = useState(false);
+  const [menu, setMenu] = useState({ open: false, path: location.pathname });
   const dropRef = useRef(null);
+  const staffLinks = useStaffLinks(user);
+
+  // The phone menu closes itself on navigation (it remembers the page it opened on).
+  const menuOpen = menu.open && menu.path === location.pathname + location.search;
+  const toggleMenu = () => setMenu({ open: !menuOpen, path: location.pathname + location.search });
+  const closeMenu = () => setMenu(m => ({ ...m, open: false }));
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -204,29 +199,25 @@ const TopNavbar = () => {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
+  // No page scroll behind the open menu; Escape closes it
+  useEffect(() => {
+    if (!menuOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (e) => { if (e.key === 'Escape') closeMenu(); };
+    window.addEventListener('keydown', onKey);
+    return () => { document.body.style.overflow = prev; window.removeEventListener('keydown', onKey); };
+  }, [menuOpen]);
+
   if (!user) return null;
 
   const isAdminOrStaff = user.is_staff || user.is_superuser;
-
-  const adminLinks = [
-    { to: user.is_superuser ? '/admin-dashboard' : '/staff-dashboard', icon: <LayoutDashboard size={16} />, label: 'Dashboard' },
-    ...(user.is_superuser ? [{ to: '/manage-users', icon: <User size={16} />, label: 'Manage Users' }] : []),
-    { to: '/manage-availability', icon: <CalendarDays size={16} />, label: 'Manage Availability' },
-    { to: '/view-bookings',       icon: <Calendar size={16} />,     label: 'View Bookings' },
-    { to: '/inventory',           icon: <Archive size={16} />,       label: 'Inventory' },
-    { to: user.is_superuser ? '/admin-attendance' : '/staff-attendance', icon: <Clock size={16} />, label: 'Attendance' },
-  ];
-
-  const userLinks = [
-    { to: '/user-dashboard', icon: <LayoutDashboard size={16} />, label: 'Dashboard' },
-    { to: '/studio',         icon: <Home size={16} />,             label: 'My 3D Studio' },
-    { to: '/ai-designer',    icon: <Sparkles size={16} />,         label: 'AI Designer' },
-    { to: '/book-service',   icon: <CalendarPlus size={16} />,     label: 'Book a Service' },
-    { to: '/my-bookings',    icon: <Calendar size={16} />,          label: 'My Bookings' },
-    { to: '/my-orders',      icon: <Archive size={16} />,           label: 'My Orders' },
-  ];
-
-  const links = isAdminOrStaff ? adminLinks : userLinks;
+  // Customers: menu button below lg (5 links don't fit a tablet). Staff: below md,
+  // where the sidebar is hidden.
+  const menuBp = isAdminOrStaff ? 'md' : 'lg';
+  const menuLinks = isAdminOrStaff
+    ? staffLinks
+    : customerLinks.map(l => ({ ...l, active: location.pathname === l.to }));
 
   return (
     <>
@@ -301,13 +292,22 @@ const TopNavbar = () => {
           flex-shrink: 0;
         }
 
-        @media (max-width: 900px) {
-          .tn-label { display: none !important; }
-          .tn-nav-link { padding: 8px 10px; }
+        @media (max-width: 640px) {
           .tn-username { display: none !important; }
         }
-        @media (max-width: 600px) {
+        @media (max-width: 340px) {
           .tn-brand-name { display: none !important; }
+        }
+        .tn-menu-link {
+          display: flex; align-items: center; gap: 12px;
+          padding: 12px 14px; border-radius: 12px;
+          font-size: 15px; font-weight: 600; color: #334155; text-decoration: none;
+        }
+        .tn-menu-link:hover { background: #f8fafc; color: #059669; }
+        .tn-menu-link.active { background: #ecfdf5; color: #047857; }
+        @keyframes tn-menu-in {
+          from { opacity: 0; transform: translateY(-8px); }
+          to   { opacity: 1; transform: translateY(0); }
         }
       `}</style>
 
@@ -324,7 +324,7 @@ const TopNavbar = () => {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        padding: '0 20px',
+        padding: '0 16px',
         gap: 12,
         fontFamily: "'Inter', system-ui, sans-serif",
         boxShadow: '0 1px 3px rgba(15,23,42,0.04)',
@@ -347,54 +347,25 @@ const TopNavbar = () => {
           </span>
         </Link>
 
-        {/* Center-Right Navigation Links */}
+        {/* Center-Right Navigation Links (desktop) */}
         {!isAdminOrStaff && (
-          <div className="flex items-center gap-6 ml-auto mr-8">
-            <NavLink 
-              to="/user-dashboard" 
-              className={({ isActive }) => 
-                `text-sm ${isActive ? 'font-semibold text-emerald-600' : 'font-medium text-slate-600'} hover:text-emerald-600 transition-colors duration-150 no-underline`
-              }
-            >
-              Dashboard
-            </NavLink>
-            <NavLink 
-              to="/ai-designer" 
-              className={({ isActive }) => 
-                `text-sm ${isActive ? 'font-semibold text-emerald-600' : 'font-medium text-slate-600'} hover:text-emerald-600 transition-colors duration-150 no-underline`
-              }
-            >
-              Design with AI
-            </NavLink>
-            <NavLink 
-              to="/shop" 
-              className={({ isActive }) => 
-                `text-sm ${isActive ? 'font-semibold text-emerald-600' : 'font-medium text-slate-600'} hover:text-emerald-600 transition-colors duration-150 no-underline`
-              }
-            >
-              Shop
-            </NavLink>
-            <NavLink 
-              to="/my-bookings" 
-              className={({ isActive }) => 
-                `text-sm ${isActive ? 'font-semibold text-emerald-600' : 'font-medium text-slate-600'} hover:text-emerald-600 transition-colors duration-150 no-underline`
-              }
-            >
-              My Bookings
-            </NavLink>
-            <NavLink 
-              to="/my-orders" 
-              className={({ isActive }) => 
-                `text-sm ${isActive ? 'font-semibold text-emerald-600' : 'font-medium text-slate-600'} hover:text-emerald-600 transition-colors duration-150 no-underline`
-              }
-            >
-              Order History
-            </NavLink>
+          <div className="hidden lg:flex items-center gap-6 ml-auto mr-8">
+            {customerLinks.filter(l => l.primary).map(l => (
+              <NavLink
+                key={l.to}
+                to={l.to}
+                className={({ isActive }) =>
+                  `text-sm ${isActive ? 'font-semibold text-emerald-600' : 'font-medium text-slate-600'} hover:text-emerald-600 transition-colors duration-150 no-underline whitespace-nowrap`
+                }
+              >
+                {l.label}
+              </NavLink>
+            ))}
           </div>
         )}
 
         {/* Far Right Profile Dropdown */}
-        <div ref={dropRef} style={{ position: 'relative', marginLeft: !isAdminOrStaff ? '0' : 'auto' }}>
+        <div ref={dropRef} className={isAdminOrStaff ? 'ml-auto' : 'ml-auto lg:ml-0'} style={{ position: 'relative' }}>
           <button
             onClick={() => setDropOpen(!dropOpen)}
             className="tn-profile-btn"
@@ -416,7 +387,52 @@ const TopNavbar = () => {
           )}
         </div>
 
+        {/* Menu button (phones / tablets) */}
+        <button
+          type="button"
+          onClick={toggleMenu}
+          aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+          aria-expanded={menuOpen}
+          aria-controls="tn-mobile-menu"
+          className={`${menuBp === 'lg' ? 'lg:hidden' : 'md:hidden'} flex items-center justify-center w-10 h-10 -mr-1 rounded-xl border border-slate-200 bg-white text-slate-700 cursor-pointer shrink-0`}
+        >
+          {menuOpen ? <X size={20} /> : <Menu size={20} />}
+        </button>
       </nav>
+
+      {menuOpen && (
+        <div className={menuBp === 'lg' ? 'lg:hidden' : 'md:hidden'}>
+          <div onClick={closeMenu} style={{ position: 'fixed', inset: '60px 0 0 0', background: 'rgba(15,23,42,0.35)', zIndex: 98 }} />
+          <nav
+            id="tn-mobile-menu"
+            aria-label="Main menu"
+            style={{
+              position: 'fixed', top: 60, left: 0, right: 0, zIndex: 99, background: 'white',
+              borderBottom: '1px solid #e2e8f0', boxShadow: '0 12px 32px rgba(15,23,42,0.12)',
+              padding: '10px 12px 14px', maxHeight: 'calc(100dvh - 60px)', overflowY: 'auto',
+              fontFamily: "'Inter', system-ui, sans-serif", animation: 'tn-menu-in 0.18s ease-out',
+            }}
+          >
+            {menuLinks.map(({ to, label, icon, active }) => { const Icon = icon; return (
+              <Link key={label} to={to} onClick={closeMenu} className={`tn-menu-link${active ? ' active' : ''}`}>
+                <Icon size={18} style={{ color: active ? '#059669' : '#94a3b8', flexShrink: 0 }} />
+                {label}
+              </Link>
+            ); })}
+            <div style={{ borderTop: '1px solid #f1f5f9', marginTop: 8, paddingTop: 8 }}>
+              <button
+                type="button"
+                onClick={() => { closeMenu(); logoutUser(); }}
+                className="tn-menu-link"
+                style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontFamily: 'inherit' }}
+              >
+                <LogOut size={18} style={{ flexShrink: 0 }} />
+                Sign out
+              </button>
+            </div>
+          </nav>
+        </div>
+      )}
     </>
   );
 };

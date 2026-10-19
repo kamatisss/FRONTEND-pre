@@ -1,34 +1,57 @@
-import React from "react";
+import React, { lazy, Suspense } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import { useAuth } from "./context/AuthContext";
 import { AuthProvider } from "./context/AuthContext";
 import { DesignProvider } from "./context/DesignContext";
-import GardenDesigner from "./components/GardenDesigner";
-import AIGardenDesigner from "./components/AIGardenDesigner";
 import Login from "./components/Login";
 import Register from "./components/Register";
 import RoleProtectedRoute from "./components/RoleProtectedRoute";
-import AdminDashboard from "./components/AdminDashboard";
-import ManageUsers from "./components/ManageUsers";
-import InventoryDashboard from "./components/InventoryDashboard";
-import StaffDashboard from "./components/StaffDashboard";
-import BookingManagement from "./components/BookingManagement";
 import DashboardLayout from "./components/DashboardLayout";
-import ManageAvailability from "./components/ManageAvailability";
-import BookService from "./components/BookService";
-import MyBookings from "./components/MyBookings";
-import UserOrders from "./components/UserOrders";
-import OrderSuccess from "./components/OrderSuccess";
 import LandingPage from "./components/LandingPage";
 import ForgotPassword from "./components/ForgotPassword";
-import StaffAttendance from "./components/StaffAttendance";
-import AdminAttendance from "./components/AdminAttendance";
-import UserDashboard from "./components/UserDashboard";
-import AdminSettings from "./components/AdminSettings";
 import { CartProvider } from "./context/CartContext";
-import Shop from "./components/Shop";
 import "./App.css";
 
+// Pages load on demand: the landing page stays light, and three.js / the dashboards
+// only download when someone opens them.
+const GardenDesigner = lazy(() => import("./components/GardenDesigner"));
+const AIGardenDesigner = lazy(() => import("./components/AIGardenDesigner"));
+const AdminDashboard = lazy(() => import("./components/AdminDashboard"));
+const ManageUsers = lazy(() => import("./components/ManageUsers"));
+const InventoryDashboard = lazy(() => import("./components/InventoryDashboard"));
+const StaffDashboard = lazy(() => import("./components/StaffDashboard"));
+const BookingManagement = lazy(() => import("./components/BookingManagement"));
+const ManageAvailability = lazy(() => import("./components/ManageAvailability"));
+const BookService = lazy(() => import("./components/BookService"));
+const MyBookings = lazy(() => import("./components/MyBookings"));
+const UserOrders = lazy(() => import("./components/UserOrders"));
+const OrderSuccess = lazy(() => import("./components/OrderSuccess"));
+const StaffAttendance = lazy(() => import("./components/StaffAttendance"));
+const AdminAttendance = lazy(() => import("./components/AdminAttendance"));
+const UserDashboard = lazy(() => import("./components/UserDashboard"));
+const AdminSettings = lazy(() => import("./components/AdminSettings"));
+const Shop = lazy(() => import("./components/Shop"));
+const PortfolioManager = lazy(() => import("./components/PortfolioManager"));
+const ReviewModeration = lazy(() => import("./components/ReviewModeration"));
+const PricingSettings = lazy(() => import("./components/PricingSettings"));
+const TrackRecord = lazy(() => import("./components/TrackRecord"));
+const TryStudio = lazy(() => import("./components/TryStudio"));
+const AIDesignerGate = lazy(() => import("./components/AIDesignerGate"));
+const ProjectGallery = lazy(() => import("./components/ProjectHub").then(m => ({ default: m.ProjectGallery })));
+const ProjectDetail = lazy(() => import("./components/ProjectHub").then(m => ({ default: m.ProjectDetail })));
+
+function PageLoading() {
+  return (
+    // Light, full-screen: App.css paints the body dark navy, which flashes between light pages
+    <div style={{ position: "fixed", inset: 0, zIndex: 1, background: "#f8fafc", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ width: 36, height: 36, border: "4px solid #10b981", borderTopColor: "transparent", borderRadius: "50%", animation: "app-spin 0.9s linear infinite" }} />
+      <style>{`@keyframes app-spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
+// The AI runs on a paid Gemini quota, so it needs an account; visitors get an
+// explainer page (and the free 3D Studio) instead.
 function AIDesignerRoute() {
   const { user } = useAuth();
   if (user) {
@@ -38,7 +61,7 @@ function AIDesignerRoute() {
       </DashboardLayout>
     );
   }
-  return <AIGardenDesigner />;
+  return <AIDesignerGate />;
 }
 
 function App() {
@@ -48,12 +71,18 @@ function App() {
         <CartProvider>
           <DesignProvider>
             <div className="app-root">
+            <Suspense fallback={<PageLoading />}>
             <Routes>
               {/* Public routes */}
               <Route path="/login" element={<Login />} />
               <Route path="/register" element={<Register />} />
               <Route path="/order-success" element={<OrderSuccess />} />
               <Route path="/forgot-password" element={<ForgotPassword />} />
+
+              {/* Project Hub — public portfolio of finished gardens */}
+              <Route path="/projects" element={<ProjectGallery />} />
+              <Route path="/projects/:slug" element={<ProjectDetail />} />
+              <Route path="/track-record" element={<TrackRecord />} />
 
               {/* User Dashboard / Studio */}
               <Route
@@ -87,8 +116,11 @@ function App() {
                 }
               />
 
-              {/* AI Designer — public, guest-accessible */}
+              {/* AI Designer — sign-in required (explainer page for visitors) */}
               <Route path="/ai-designer" element={<AIDesignerRoute />} />
+
+              {/* Free 3D Studio — no account needed */}
+              <Route path="/try-studio" element={<TryStudio />} />
 
               {/* Shop (User) */}
               <Route
@@ -234,6 +266,42 @@ function App() {
                 }
               />
 
+              {/* Project Portfolio curation (Office Admin / Admin) */}
+              <Route
+                path="/portfolio-manager"
+                element={
+                  <RoleProtectedRoute allowedRoles={['admin', 'staff']}>
+                    <DashboardLayout>
+                      <PortfolioManager />
+                    </DashboardLayout>
+                  </RoleProtectedRoute>
+                }
+              />
+
+              {/* Rate card (Office Admin / Admin) */}
+              <Route
+                path="/pricing-settings"
+                element={
+                  <RoleProtectedRoute allowedRoles={['admin', 'staff']}>
+                    <DashboardLayout>
+                      <PricingSettings />
+                    </DashboardLayout>
+                  </RoleProtectedRoute>
+                }
+              />
+
+              {/* Customer review moderation (Office Admin / Admin) */}
+              <Route
+                path="/review-moderation"
+                element={
+                  <RoleProtectedRoute allowedRoles={['admin', 'staff']}>
+                    <DashboardLayout>
+                      <ReviewModeration />
+                    </DashboardLayout>
+                  </RoleProtectedRoute>
+                }
+              />
+
               {/* Inventory Management (Admin/Staff) */}
               <Route
                 path="/inventory"
@@ -249,6 +317,7 @@ function App() {
               {/* Landing Page */}
               <Route path="/" element={<LandingPage />} />
             </Routes>
+            </Suspense>
             </div>
           </DesignProvider>
         </CartProvider>

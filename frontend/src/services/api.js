@@ -268,4 +268,255 @@ export const clockOut = async (attendanceData) => {
   }
 };
 
+// ─── Crew progress photos (before / during / after) ─────────────
+const errorOf = (err, fallback) => new Error(err.response?.data?.error || err.response?.data?.detail || err.message || fallback);
+
+export const listProgressPhotos = async (bookingId) => {
+  try {
+    const res = await api.get(`/bookings/${bookingId}/progress-media/`);
+    return res.data;
+  } catch (err) { throw errorOf(err, 'Failed to load photos'); }
+};
+
+export const uploadProgressPhoto = async (bookingId, { file, phase, description }) => {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('construction_phase', phase);
+  form.append('description', description || '');
+  try {
+    const res = await api.post(`/bookings/${bookingId}/progress-media/`, form, { timeout: 120000 });
+    return res.data;
+  } catch (err) { throw errorOf(err, 'Photo upload failed'); }
+};
+
+export const deleteProgressPhoto = async (bookingId, mediaId) => {
+  try {
+    await api.delete(`/bookings/${bookingId}/progress-media/${mediaId}/`);
+  } catch (err) { throw errorOf(err, 'Failed to delete photo'); }
+};
+
+// ─── Project Hub (portfolio) ─────────────────────────────────────
+// Public — no login needed. A stale saved token makes the server answer 401 even
+// on public endpoints, so retry those anonymously.
+const publicGet = async (url, config = {}) => {
+  try {
+    return await api.get(url, config);
+  } catch (err) {
+    if (err.response?.status !== 401) throw err;
+    return axios.get(`${API_BASE_URL}${url}`, { ...config, headers: { Accept: 'application/json' } });
+  }
+};
+
+export const getPublicProjects = async (params = {}) => {
+  try {
+    const res = await publicGet('/portfolio/public/', { params });
+    return res.data; // { results, filters }
+  } catch (err) { throw errorOf(err, 'Failed to load projects'); }
+};
+
+export const getPublicProject = async (slug) => {
+  try {
+    const res = await publicGet(`/portfolio/public/${slug}/`);
+    return res.data;
+  } catch (err) { throw errorOf(err, 'Project not found'); }
+};
+
+export const getTrackRecord = async () => {
+  try {
+    const res = await publicGet('/portfolio/track-record/');
+    return res.data; // { stats, credentials, as_of }
+  } catch (err) { throw errorOf(err, 'Failed to load track record'); }
+};
+
+// ─── Free 3D Studio funnel (office admin) ────────────────────────
+export const getFunnelSummary = async (days = 30) => {
+  try {
+    const res = await api.get('/funnel-events/summary/', { params: { days } });
+    return res.data; // { days, steps: [{name, label, count, rate}], conversion_rate }
+  } catch (err) { throw errorOf(err, 'Failed to load funnel'); }
+};
+
+// ─── Rate card & estimates ───────────────────────────────────────
+export const getPricing = async () => {
+  try {
+    const res = await publicGet('/pricing/');
+    return res.data; // rates + { vat_registered, service_area, is_sample, updated_at }
+  } catch (err) { throw errorOf(err, 'Failed to load pricing'); }
+};
+
+// mode: 'install' | 'plants' → { bands: [{label, min, max}], suggested: { low, high } | null }
+export const getBudgetSuggestion = async (areaSqm, mode = 'install') => {
+  try {
+    const res = await publicGet('/pricing/suggest/', { params: { area_sqm: areaSqm, mode } });
+    return res.data;
+  } catch (err) { throw errorOf(err, 'Failed to load budget suggestions'); }
+};
+
+// Office admin
+export const updatePricing = async (data) => {
+  try {
+    const res = await api.patch('/pricing/', data);
+    return res.data;
+  } catch (err) { throw fieldErrors(err, 'Failed to save pricing'); }
+};
+
+// items: [{ product_id, quantity }]; area_sqm: garden area → { lines, total, low, high, is_sample_rates }
+export const getEstimate = async (items, areaSqm) => {
+  try {
+    const res = await axios.post(`${API_BASE_URL}/pricing/estimate/`, { items, area_sqm: areaSqm });
+    return res.data;
+  } catch (err) { throw errorOf(err, 'Failed to estimate'); }
+};
+
+// ─── AI Designer health (office admin) ───────────────────────────
+export const getAIDesignerHealth = async (days = 30) => {
+  try {
+    const res = await api.get('/ai-designer/health/', { params: { days } });
+    return res.data; // { days, total, statuses: [{status, label, count}], ai_share, avg_ms, mode, paused }
+  } catch (err) { throw errorOf(err, 'Failed to load AI Designer health'); }
+};
+
+// ─── Customer reviews ────────────────────────────────────────────
+// source: 'all' | 'service' | 'product'
+export const getReviewHighlights = async (source = 'all') => {
+  try {
+    const res = await publicGet('/review-highlights/', { params: { source } });
+    return res.data; // { summary: { service, product }, results }
+  } catch (err) { throw errorOf(err, 'Failed to load reviews'); }
+};
+
+// Office admin: params { source, status, rating, q, page }
+export const listReviewsForModeration = async (params = {}) => {
+  try {
+    const res = await api.get('/review-moderation/', { params });
+    return res.data; // { count, page, pages, needs_reply, results }
+  } catch (err) { throw errorOf(err, 'Failed to load reviews'); }
+};
+
+// data: any of { is_hidden, is_featured, reply }
+export const moderateReview = async (source, id, data) => {
+  try {
+    const res = await api.patch(`/review-moderation/${source}/${id}/`, data);
+    return res.data;
+  } catch (err) { throw errorOf(err, 'Failed to update review'); }
+};
+
+// Office admin — permits, registrations, awards (Track Record page)
+const fieldErrors = (err, fallback) => {
+  const data = err.response?.data;
+  if (data && typeof data === 'object' && !data.error && !data.detail) {
+    return new Error(Object.entries(data).map(([f, m]) => `${f}: ${Array.isArray(m) ? m[0] : m}`).join(', '));
+  }
+  return errorOf(err, fallback);
+};
+
+export const listCredentials = async () => {
+  try {
+    const res = await api.get('/business-credentials/');
+    return res.data;
+  } catch (err) { throw errorOf(err, 'Failed to load credentials'); }
+};
+
+// data: FormData (with a document file) or a plain object
+export const saveCredential = async (id, data) => {
+  try {
+    const res = id ? await api.patch(`/business-credentials/${id}/`, data) : await api.post('/business-credentials/', data);
+    return res.data;
+  } catch (err) { throw fieldErrors(err, 'Failed to save'); }
+};
+
+export const deleteCredential = async (id) => {
+  try {
+    await api.delete(`/business-credentials/${id}/`);
+  } catch (err) { throw errorOf(err, 'Failed to delete'); }
+};
+
+// Customer
+export const getMyPortfolio = async () => {
+  try {
+    const res = await api.get('/portfolio/mine/');
+    return res.data;
+  } catch (err) { throw errorOf(err, 'Failed to load your garden stories'); }
+};
+
+export const answerPortfolioConsent = async (projectId, body) => {
+  try {
+    const res = await api.post(`/portfolio/mine/${projectId}/consent/`, body);
+    return res.data;
+  } catch (err) { throw errorOf(err, 'Could not save your choice'); }
+};
+
+// Office admin
+export const listPortfolio = async () => {
+  try {
+    const res = await api.get('/portfolio/');
+    return res.data;
+  } catch (err) { throw errorOf(err, 'Failed to load portfolio'); }
+};
+
+export const listPortfolioCandidates = async () => {
+  try {
+    const res = await api.get('/portfolio/candidates/');
+    return res.data;
+  } catch (err) { throw errorOf(err, 'Failed to load finished jobs'); }
+};
+
+export const createPortfolioEntry = async (bookingId) => {
+  try {
+    const res = await api.post('/portfolio/', { booking: bookingId });
+    return res.data;
+  } catch (err) { throw errorOf(err, 'Failed to create entry'); }
+};
+
+export const updatePortfolioEntry = async (id, data) => {
+  try {
+    const res = await api.patch(`/portfolio/${id}/`, data);
+    return res.data;
+  } catch (err) {
+    const data = err.response?.data;
+    if (data && typeof data === 'object' && !data.error) {
+      throw new Error(Object.entries(data).map(([f, m]) => `${f}: ${Array.isArray(m) ? m[0] : m}`).join(', '));
+    }
+    throw errorOf(err, 'Failed to save');
+  }
+};
+
+export const deletePortfolioEntry = async (id) => {
+  try {
+    await api.delete(`/portfolio/${id}/`);
+  } catch (err) { throw errorOf(err, 'Failed to delete entry'); }
+};
+
+// action: 'publish' | 'unpublish' | 'archive' | 'request-consent' | 'sync-media'
+export const portfolioAction = async (id, action) => {
+  try {
+    const res = await api.post(`/portfolio/${id}/${action}/`);
+    return res.data;
+  } catch (err) { throw errorOf(err, 'Action failed'); }
+};
+
+export const uploadPortfolioPhoto = async (id, { file, kind, caption }) => {
+  const form = new FormData();
+  form.append('image', file);
+  form.append('kind', kind);
+  form.append('caption', caption || '');
+  try {
+    const res = await api.post(`/portfolio/${id}/media/`, form, { timeout: 120000 });
+    return res.data;
+  } catch (err) { throw errorOf(err, 'Photo upload failed'); }
+};
+
+export const updatePortfolioPhoto = async (id, mediaId, data) => {
+  try {
+    const res = await api.patch(`/portfolio/${id}/media/${mediaId}/`, data);
+    return res.data;
+  } catch (err) { throw errorOf(err, 'Failed to update photo'); }
+};
+
+export const deletePortfolioPhoto = async (id, mediaId) => {
+  try {
+    await api.delete(`/portfolio/${id}/media/${mediaId}/`);
+  } catch (err) { throw errorOf(err, 'Failed to remove photo'); }
+};
+
 export default api;

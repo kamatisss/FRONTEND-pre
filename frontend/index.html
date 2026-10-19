@@ -8,6 +8,10 @@
     <title>Garden Design Studio — 3D Virtual Landscaping</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- All app fonts in one early, non-blocking request (was four render-blocking @imports
+         in component CSS). Text paints at once in the fallback font, then swaps to Inter. -->
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Playfair+Display:ital,wght@0,700;0,800;1,700&display=swap" onload="this.onload=null;this.rel='stylesheet'" />
+    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Playfair+Display:ital,wght@0,700;0,800;1,700&display=swap" /></noscript>
   </head>
   <body>
     <div id="root"></div>

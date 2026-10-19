@@ -2,11 +2,24 @@ import { useState } from 'react';
 import { Star, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
-export default function ServiceRatingModal({ bookingId, onClose, onSuccess }) {
+// Defaults review a service booking; pass `endpoint` + `payload` (and copy props)
+// to reuse the same modal for other reviews, e.g. delivered shop products.
+export default function ServiceRatingModal({
+  bookingId,
+  onClose,
+  onSuccess,
+  endpoint = '/reviews/',
+  payload,
+  title = 'How was your experience?',
+  subtitle = 'Your feedback helps us improve and helps other homeowners choose confidently.',
+  commentLabel = 'Service Comments',
+  placeholder = 'Tell us about your experience — what went well, what could improve…',
+}) {
   const { authTokens } = useAuth();
   const [rating, setRating]   = useState(0);
   const [hovered, setHovered] = useState(0);
   const [comment, setComment] = useState('');
+  const [keepPrivate, setKeepPrivate] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
 
@@ -18,19 +31,19 @@ export default function ServiceRatingModal({ bookingId, onClose, onSuccess }) {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch(`${apiBase}/reviews/`, {
+      const res = await fetch(`${apiBase}${endpoint}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${authTokens.access}`,
         },
-        body: JSON.stringify({ booking: bookingId, rating, comment }),
+        body: JSON.stringify({ ...(payload || { booking: bookingId }), rating, comment, is_public: !keepPrivate }),
       });
       const data = await res.json();
       if (res.ok) {
         onSuccess(data);
       } else {
-        const msg = data?.booking?.[0] || data?.rating?.[0] || data?.detail || 'Submission failed.';
+        const msg = data?.booking?.[0] || data?.order_item?.[0] || data?.rating?.[0] || data?.detail || 'Submission failed.';
         setError(msg);
       }
     } catch {
@@ -61,14 +74,17 @@ export default function ServiceRatingModal({ bookingId, onClose, onSuccess }) {
         .srm-submit{margin-top:20px;width:100%;padding:13px;background:#10b981;color:#fff;font-size:.95rem;font-weight:700;border:none;border-radius:12px;cursor:pointer;transition:background .15s}
         .srm-submit:hover:not(:disabled){background:#059669}
         .srm-submit:disabled{opacity:.6;cursor:not-allowed}
+        .srm-privacy{margin-top:14px;padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px}
+        .srm-privacy-text{font-size:.75rem;color:#64748b;line-height:1.5;margin:0 0 6px}
+        .srm-privacy-check{display:flex;align-items:center;gap:6px;font-size:.8rem;font-weight:600;color:#334155;cursor:pointer}
         .srm-rating-label{font-size:.85rem;font-weight:600;color:#10b981;margin-left:8px;min-width:80px}
       `}</style>
 
       <div className="srm-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
         <div className="srm-card">
           <button className="srm-close" onClick={onClose}><X size={18} /></button>
-          <p className="srm-title">How was your experience?</p>
-          <p className="srm-sub">Your feedback helps us improve and helps other homeowners choose confidently.</p>
+          <p className="srm-title">{title}</p>
+          <p className="srm-sub">{subtitle}</p>
 
           <form onSubmit={handleSubmit}>
             <span className="srm-label">Your Rating</span>
@@ -101,14 +117,27 @@ export default function ServiceRatingModal({ bookingId, onClose, onSuccess }) {
               </span>
             </div>
 
-            <span className="srm-label">Service Comments</span>
+            <span className="srm-label">{commentLabel}</span>
             <textarea
               className="srm-textarea"
-              placeholder="Tell us about your experience — what went well, what could improve…"
+              placeholder={placeholder}
               value={comment}
               onChange={e => setComment(e.target.value)}
               maxLength={1000}
             />
+
+            {/* Data Privacy Act: tell customers exactly how a review is shown, and let them opt out */}
+            <div className="srm-privacy">
+              <p className="srm-privacy-text">
+                {keepPrivate
+                  ? 'Only the Garden Studio team will see this review.'
+                  : 'Reviews appear on our website with your first name and last initial (and your city for garden projects). Never your full name, address or contact details.'}
+              </p>
+              <label className="srm-privacy-check">
+                <input type="checkbox" checked={keepPrivate} onChange={e => setKeepPrivate(e.target.checked)} />
+                Keep my review private
+              </label>
+            </div>
 
             {error && <p className="srm-error">{error}</p>}
 

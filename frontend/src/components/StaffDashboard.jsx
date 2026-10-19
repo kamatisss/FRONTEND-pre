@@ -11,6 +11,7 @@ import {
   CheckCircle, XCircle, Layers, Bell, UserCheck,
 } from 'lucide-react';
 import ThreeGardenCanvas from './ThreeGardenCanvas';
+import ProjectBillingModal from './ProjectBillingModal';
 
 /* ─── Toast notification system ─────────────────────────────────────────── */
 function useToast() {
@@ -69,8 +70,9 @@ const STATUS_STYLES = {
   Pending:          'bg-amber-50   text-amber-700   border-amber-200',
   Preparing:        'bg-blue-50    text-blue-700    border-blue-200',
   Installing:       'bg-orange-50  text-orange-700  border-orange-200',
+  'For Review':     'bg-violet-50  text-violet-700  border-violet-200',
   Finished:         'bg-emerald-50 text-emerald-700 border-emerald-200',
-  Paid:             'bg-emerald-50 text-emerald-700 border-emerald-200',
+  Paid:            'bg-emerald-50 text-emerald-700 border-emerald-200',
   Shipped:          'bg-blue-50    text-blue-700    border-blue-200',
   'Out for Delivery':'bg-sky-50    text-sky-700     border-sky-200',
   Delivered:        'bg-emerald-50 text-emerald-700 border-emerald-200',
@@ -180,6 +182,7 @@ const StaffDashboard = () => {
   const [bookingSubTab,      setBookingSubTab]      = useState('awaiting');
   const [bookingSubTabInited,setBookingSubTabInited] = useState(false);
   const [crewViewMode,       setCrewViewMode]       = useState('today'); // 'today' | 'all'
+  const [billingBooking,     setBillingBooking]     = useState(null);    // booking open in Project & Billing
 
   const API = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
 
@@ -251,12 +254,13 @@ const StaffDashboard = () => {
   /* Smart-default the booking sub-tab to the most urgent category on first load */
   useEffect(() => {
     if (bookingSubTabInited || !bookings.length || isFieldCrew) return;
+    const hasReview   = bookings.some(b => b.status === 'For Review');
     const hasPending  = bookings.some(b => b.status === 'Pending');
     const hasDispatch = bookings.some(b =>
       ['Preparing', 'Installing'].includes(b.status) &&
       (!Array.isArray(b.assigned_crew) || b.assigned_crew.length === 0)
     );
-    setBookingSubTab(hasPending ? 'awaiting' : hasDispatch ? 'dispatch' : 'all');
+    setBookingSubTab(hasReview ? 'review' : hasPending ? 'awaiting' : hasDispatch ? 'dispatch' : 'all');
     setBookingSubTabInited(true);
   }, [bookings]);
 
@@ -337,8 +341,15 @@ const StaffDashboard = () => {
         headers: { ...headers, 'Content-Type': 'application/json' },
         body: JSON.stringify({ status }),
       });
-      if (r.ok) { await refreshBookings(); toast(`Booking updated to ${status}.`); }
-      else       { toast('Failed to update booking.', 'error'); }
+      const messages = {
+        Finished: 'Job signed off — the customer can now leave a review.',
+        Installing: 'Sent back to the crew for more work.',
+      };
+      if (r.ok) { await refreshBookings(); toast(messages[status] || `Booking updated to ${status}.`); }
+      else {
+        const d = await r.json().catch(() => ({}));
+        toast(d.error || d.detail || 'Failed to update booking.', 'error');
+      }
     } catch {
       toast('Network error — please try again.', 'error');
     }
@@ -580,12 +591,12 @@ const StaffDashboard = () => {
         </div>
 
         {/* ── Tab Navigation Bar (desktop + OFFICE_ADMIN) ── */}
-        <div className="flex items-center gap-1 mb-6 bg-white border border-slate-200 rounded-2xl p-1.5 shadow-sm w-fit">
+        <div className="flex items-center gap-1 mb-6 bg-white border border-slate-200 rounded-2xl p-1.5 shadow-sm w-fit max-w-full overflow-x-auto">
           {TABS.map(({ key, label, Icon, badge }) => (
             <button
               key={key}
               onClick={() => setActiveTab(key)}
-              className={`relative flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 cursor-pointer border-none
+              className={`relative flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 cursor-pointer border-none shrink-0 whitespace-nowrap
                 ${activeTab === key
                   ? 'bg-emerald-600 text-white shadow-sm'
                   : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50 bg-transparent'}`}
@@ -754,6 +765,7 @@ const StaffDashboard = () => {
             { key: 'awaiting',  label: 'Awaiting Confirmation', count: bookings.filter(b => b.status === 'Pending').length },
             { key: 'dispatch',  label: 'Needs Dispatch',        count: bookings.filter(needsDispatch).length },
             { key: 'active',    label: 'Active in Field',       count: bookings.filter(b => ['Preparing', 'Installing'].includes(b.status) && Array.isArray(b.assigned_crew) && b.assigned_crew.length > 0).length },
+            { key: 'review',    label: 'Awaiting Sign-off',     count: bookings.filter(b => b.status === 'For Review').length },
             { key: 'completed', label: 'Completed',             count: bookings.filter(b => ['Finished','Cancelled'].includes(b.status)).length },
           ];
 
@@ -762,6 +774,7 @@ const StaffDashboard = () => {
               case 'awaiting':  return bookings.filter(b => b.status === 'Pending');
               case 'dispatch':  return bookings.filter(needsDispatch);
               case 'active':    return bookings.filter(b => ['Preparing', 'Installing'].includes(b.status) && Array.isArray(b.assigned_crew) && b.assigned_crew.length > 0);
+              case 'review':    return bookings.filter(b => b.status === 'For Review');
               case 'completed': return bookings.filter(b => ['Finished','Cancelled'].includes(b.status));
               default:          return bookings;
             }
@@ -773,7 +786,7 @@ const StaffDashboard = () => {
             const bom   = booking.design_details?.plant_breakdown || [];
             // Assign Crew block: only render on dispatch/all sub-tabs to keep other views compact
             const showAssignCrew = !isFieldCrew
-              && !['Finished', 'Cancelled'].includes(booking.status)
+              && !['For Review', 'Finished', 'Cancelled'].includes(booking.status)
               && crewList.length > 0
               && (bookingSubTab === 'dispatch' || bookingSubTab === 'all');
 
@@ -854,7 +867,73 @@ const StaffDashboard = () => {
                     </div>
                   )}
 
+                  {/* Project & billing summary — office admin only */}
+                  {!isFieldCrew && booking.status !== 'Cancelled' && (
+                    booking.tracker ? (
+                      <button
+                        type="button"
+                        onClick={() => setBillingBooking(booking)}
+                        className="mt-3 w-full text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl px-3 py-2.5 cursor-pointer transition-colors"
+                      >
+                        <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1">
+                          <span>Project &amp; Billing</span>
+                          <span className="text-blue-700 normal-case">{booking.tracker.status_display}</span>
+                        </div>
+                        <div className="flex items-baseline justify-between gap-2 text-xs">
+                          <span className="text-slate-600">
+                            <strong className="text-slate-800">₱{booking.tracker.amount_paid.toLocaleString()}</strong> of ₱{booking.tracker.total_price.toLocaleString()} paid
+                          </span>
+                          {booking.tracker.remaining_balance > 0 ? (
+                            <span className="font-bold text-amber-700">₱{booking.tracker.remaining_balance.toLocaleString()} due</span>
+                          ) : booking.tracker.total_price > 0 ? (
+                            <span className="font-bold text-emerald-700">Fully paid</span>
+                          ) : (
+                            <span className="font-bold text-amber-700">No price set</span>
+                          )}
+                        </div>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setBillingBooking(booking)}
+                        className="mt-3 w-full py-2 bg-white hover:bg-slate-50 text-slate-600 text-xs font-bold rounded-xl border border-dashed border-slate-300 cursor-pointer transition-colors"
+                      >
+                        + Set up project billing
+                      </button>
+                    )
+                  )}
+
                   <div className="flex flex-col gap-2 mt-3">
+                    {/* OFFICE_ADMIN ONLY: sign off work the crew submitted as finished */}
+                    {!isFieldCrew && booking.status === 'For Review' && (
+                      <div className="bg-violet-50 border border-violet-200 rounded-xl p-3 flex flex-col gap-2">
+                        <p className="text-xs text-violet-800 m-0 leading-relaxed">
+                          <strong>Crew submitted this job as finished.</strong> Check the progress photos, then sign off or send it back.
+                        </p>
+                        {booking.tracker?.remaining_balance > 0 && (
+                          <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5 m-0">
+                            ⚠ ₱{booking.tracker.remaining_balance.toLocaleString()} balance is still unpaid.
+                          </p>
+                        )}
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => updateBookingStatus(booking.id, 'Installing')}
+                            disabled={isAct}
+                            className="flex-1 py-2 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-xl border border-slate-300 cursor-pointer transition-colors disabled:opacity-50"
+                          >
+                            Send back to crew
+                          </button>
+                          <button
+                            onClick={() => updateBookingStatus(booking.id, 'Finished')}
+                            disabled={isAct}
+                            className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl border-none cursor-pointer transition-colors disabled:opacity-50"
+                          >
+                            {isAct ? 'Saving…' : '✓ Approve & close'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
                     {/* OFFICE_ADMIN PERMITTED: Confirm & Prepare */}
                     {booking.status === 'Pending' && (
                       <div className="flex gap-2">
@@ -1155,6 +1234,18 @@ const StaffDashboard = () => {
           setArMode={setModalArMode}
           onClose={() => setDesignModal(null)}
           toCanvasPlants={toCanvasPlants}
+        />
+      )}
+
+      {/* ── Project & Billing Modal ── */}
+      {billingBooking && (
+        <ProjectBillingModal
+          booking={billingBooking}
+          apiBase={API}
+          headers={headers}
+          toast={toast}
+          onChanged={refreshBookings}
+          onClose={() => setBillingBooking(null)}
         />
       )}
     </div>
