@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
 import { getPricing } from '../services/api';
+import { normalizePhMobile, codBlockReason, PHONE_HINT } from '../services/checkout';
 import { useIsPhone } from './ui/useMediaQuery';
 import { 
     Search, Filter, ShoppingBag, ShoppingCart, Plus, Minus, X, Check, ArrowRight, Leaf, 
@@ -197,16 +198,26 @@ export default function Shop() {
         phone: '',
         address: ''
     });
-    const [paymentMethod, setPaymentMethod] = useState('stripe'); // 'stripe' or 'cod'
+    const [paymentMethod, setPaymentMethod] = useState('online'); // 'online' (PayMongo) or 'cod'
     const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
     const [checkoutError, setCheckoutError] = useState('');
 
     // Delivery fee from the admin rate card; the server prices the order itself, this is for display
     const [shippingFee, setShippingFee] = useState(150);
+    const [codMax, setCodMax] = useState(5000);
     useEffect(() => {
-        getPricing().then(p => setShippingFee(Number(p.shipping_fee))).catch(() => {});
+        getPricing().then(p => {
+            setShippingFee(Number(p.shipping_fee));
+            setCodMax(Number(p.cod_max_amount ?? 5000));
+        }).catch(() => {});
     }, []);
     const grandTotal = cartSubtotal > 0 ? cartSubtotal + shippingFee : 0;
+
+    const codBlocked = codBlockReason({ total: grandTotal, codMax, loggedIn: !!user });
+    useEffect(() => {
+        if (codBlocked && paymentMethod === 'cod') setPaymentMethod('online');
+    }, [codBlocked, paymentMethod]);
+    const phoneInvalid = checkoutForm.phone.trim() !== '' && !normalizePhMobile(checkoutForm.phone);
 
     // Fetch Products on Mount
     useEffect(() => {
@@ -288,6 +299,11 @@ export default function Shop() {
             setCheckoutError('Please provide both delivery address and contact number.');
             return;
         }
+        const phone = normalizePhMobile(checkoutForm.phone);
+        if (!phone) {
+            setCheckoutError(PHONE_HINT);
+            return;
+        }
 
         setIsSubmittingOrder(true);
         setCheckoutError('');
@@ -308,7 +324,7 @@ export default function Shop() {
                 body: JSON.stringify({
                     customer_name: checkoutForm.name,
                     customer_email: checkoutForm.email,
-                    customer_phone: checkoutForm.phone,
+                    customer_phone: phone,
                     customer_address: checkoutForm.address,
                     payment_method: paymentMethod,
                     items: orderItems,
@@ -322,9 +338,11 @@ export default function Shop() {
                 // Clear cart locally
                 clearCart();
 
-                if (paymentMethod === 'stripe') {
-                    // Redirect to online Stripe checkout
-                    const stripeRes = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/create-checkout-session/`, {
+                const receiptUrl = `/order-success?order_id=${orderId}&token=${data.receipt_token}`;
+
+                if (paymentMethod === 'online') {
+                    // Redirect to PayMongo's hosted checkout (QR Ph / GCash / Maya / Card)
+                    const payRes = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/create-checkout-session/`, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
@@ -332,17 +350,17 @@ export default function Shop() {
                         },
                         body: JSON.stringify({ order_id: orderId })
                     });
-                    if (stripeRes.ok) {
-                        const stripeData = await stripeRes.json();
-                        if (stripeData.checkout_url) {
-                            window.location.href = stripeData.checkout_url;
+                    if (payRes.ok) {
+                        const payData = await payRes.json();
+                        if (payData.checkout_url) {
+                            window.location.href = payData.checkout_url;
                             return;
                         }
                     }
-                    setCheckoutError('Order placed, but failed to initialize Stripe payment. Please contact staff.');
+                    // The order exists; its receipt page offers "Pay now" to retry
+                    navigate(`${receiptUrl}&cancelled=1`);
                 } else {
-                    // Redirect directly to order success screen for COD
-                    navigate(`/order-success?order_id=${orderId}&total=${data.total_price ?? grandTotal}&name=${encodeURIComponent(checkoutForm.name)}&method=cod`);
+                    navigate(receiptUrl);
                 }
             } else {
                 const errData = await res.json();
@@ -1113,9 +1131,15 @@ export default function Shop() {
                                         value={checkoutForm.phone}
                                         onChange={(e) => setCheckoutForm({...checkoutForm, phone: e.target.value})}
                                         placeholder="e.g. 09171234567"
-                                        className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:border-emerald-500 outline-none"
+                                        inputMode="tel"
+                                        className={`w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-medium outline-none ${
+                                            phoneInvalid ? 'border-red-400 focus:border-red-500' : 'border-slate-200 focus:border-emerald-500'
+                                        }`}
                                         required
                                     />
+                                    {phoneInvalid && (
+                                        <span className="text-[10px] font-medium text-red-600">{PHONE_HINT}</span>
+                                    )}
                                 </div>
 
                                 {/* Address */}
@@ -1136,35 +1160,39 @@ export default function Shop() {
                                     <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wide block mb-2">Payment Method</label>
                                     <div className="grid grid-cols-2 gap-4">
                                         <label className={`border rounded-2xl p-4 flex flex-col items-center justify-center gap-2 cursor-pointer transition-all ${
-                                            paymentMethod === 'stripe' ? 'border-emerald-600 bg-emerald-50/40 text-emerald-800' : 'border-slate-200 hover:bg-slate-50'
+                                            paymentMethod === 'online' ? 'border-emerald-600 bg-emerald-50/40 text-emerald-800' : 'border-slate-200 hover:bg-slate-50'
                                         }`}>
-                                            <input 
-                                                type="radio" 
-                                                name="payment" 
-                                                value="stripe" 
-                                                checked={paymentMethod === 'stripe'}
-                                                onChange={() => setPaymentMethod('stripe')}
+                                            <input
+                                                type="radio"
+                                                name="payment"
+                                                value="online"
+                                                checked={paymentMethod === 'online'}
+                                                onChange={() => setPaymentMethod('online')}
                                                 className="sr-only"
                                             />
-                                            <CreditCard size={20} className={paymentMethod === 'stripe' ? 'text-emerald-700' : 'text-slate-400'} />
+                                            <CreditCard size={20} className={paymentMethod === 'online' ? 'text-emerald-700' : 'text-slate-400'} />
                                             <span className="text-xs font-bold text-center">Online Payment</span>
-                                            <span className="text-[9px] text-slate-400 text-center font-medium">Stripe / Card / E-wallet</span>
+                                            <span className="text-[9px] text-slate-400 text-center font-medium">QR Ph / GCash / Maya / Card</span>
                                         </label>
 
-                                        <label className={`border rounded-2xl p-4 flex flex-col items-center justify-center gap-2 cursor-pointer transition-all ${
-                                            paymentMethod === 'cod' ? 'border-emerald-600 bg-emerald-50/40 text-emerald-800' : 'border-slate-200 hover:bg-slate-50'
+                                        <label className={`border rounded-2xl p-4 flex flex-col items-center justify-center gap-2 transition-all ${
+                                            codBlocked ? 'border-slate-200 bg-slate-50 opacity-60 cursor-not-allowed'
+                                            : paymentMethod === 'cod' ? 'border-emerald-600 bg-emerald-50/40 text-emerald-800 cursor-pointer' : 'border-slate-200 hover:bg-slate-50 cursor-pointer'
                                         }`}>
-                                            <input 
-                                                type="radio" 
-                                                name="payment" 
-                                                value="cod" 
+                                            <input
+                                                type="radio"
+                                                name="payment"
+                                                value="cod"
                                                 checked={paymentMethod === 'cod'}
                                                 onChange={() => setPaymentMethod('cod')}
+                                                disabled={!!codBlocked}
                                                 className="sr-only"
                                             />
                                             <DollarSign size={20} className={paymentMethod === 'cod' ? 'text-emerald-700' : 'text-slate-400'} />
                                             <span className="text-xs font-bold text-center">Cash on Delivery</span>
-                                            <span className="text-[9px] text-slate-400 text-center font-medium">Pay upon delivery</span>
+                                            <span className={`text-[9px] text-center font-medium ${codBlocked ? 'text-amber-700' : 'text-slate-400'}`}>
+                                                {codBlocked || 'Pay upon delivery'}
+                                            </span>
                                         </label>
                                     </div>
                                 </div>
@@ -1174,7 +1202,7 @@ export default function Shop() {
                                     disabled={isSubmittingOrder}
                                     className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-300 text-white text-xs font-bold rounded-xl border-none cursor-pointer shadow-md transition-all mt-4"
                                 >
-                                    {isSubmittingOrder ? 'Processing Order...' : paymentMethod === 'stripe' ? 'Pay Now & Complete Order' : 'Confirm Order (COD)'}
+                                    {isSubmittingOrder ? 'Processing Order...' : paymentMethod === 'online' ? 'Pay Now & Complete Order' : 'Confirm Order (COD)'}
                                 </button>
                             </form>
                         </div>
@@ -1221,7 +1249,7 @@ export default function Shop() {
                                     <Shield size={16} className="text-emerald-700 shrink-0" />
                                     <div>
                                         <div className="font-bold text-[10px] uppercase text-slate-700">Safe & Secure checkout</div>
-                                        <div className="text-[10px] text-slate-400 leading-normal font-medium">Your connection is fully encrypted. Stripe tokenization guarantees security.</div>
+                                        <div className="text-[10px] text-slate-400 leading-normal font-medium">You pay on PayMongo's secure page. We never see your card or e-wallet details.</div>
                                     </div>
                                 </div>
                                 <div className="flex gap-2.5 items-start">

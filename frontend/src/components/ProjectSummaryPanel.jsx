@@ -6,6 +6,8 @@ import {
   ChevronUp, ChevronDown, Package,
 } from 'lucide-react';
 import { submitOrder, createCheckoutSession, getPricing, getEstimate } from '../services/api';
+import { normalizePhMobile, codBlockReason, PHONE_HINT } from '../services/checkout';
+import { useAuth } from '../context/AuthContext';
 
 /* ─────────────────────────────────────────────────────────────────────────
    GLOBAL STYLES
@@ -256,14 +258,25 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
   const [collapsed, setCollapsed]       = useState(compact);
   const [showCheckout, setShowCheckout] = useState(false);
   const [formData, setFormData]         = useState({ name: '', email: '', phone: '', address: '' });
-  const [payMethod, setPayMethod]       = useState('stripe');
+  const [payMethod, setPayMethod]       = useState('online');
   const [loading, setLoading]           = useState(false);
   const [shippingFee, setShippingFee]   = useState(150);   // from the admin rate card
+  const [codMax, setCodMax]             = useState(5000);  // COD cap, also from the rate card
+  const { user } = useAuth() || {};
   const [installEst, setInstallEst]     = useState(null);  // { low, high } with crew installation
 
   useEffect(() => {
-    getPricing().then(p => setShippingFee(Number(p.shipping_fee))).catch(() => {});
+    getPricing().then(p => {
+      setShippingFee(Number(p.shipping_fee));
+      setCodMax(Number(p.cod_max_amount ?? 5000));
+    }).catch(() => {});
   }, []);
+
+  const codBlocked = codBlockReason({ total: totalCost + shippingFee, codMax, loggedIn: !!user });
+  useEffect(() => {
+    if (codBlocked && payMethod === 'cod') setPayMethod('online');
+  }, [codBlocked, payMethod]);
+  const phoneInvalid = formData.phone.trim() !== '' && !normalizePhMobile(formData.phone);
 
   // Installed-by-our-crew estimate from the rate card (debounced while the design changes)
   const itemCounts = JSON.stringify(placedItems.reduce((acc, i) => {
@@ -317,6 +330,8 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
   const handleCheckout = async (e) => {
     e.preventDefault();
     if (!placedItems.length) return;
+    const phone = normalizePhMobile(formData.phone);
+    if (!phone) { alert(PHONE_HINT); return; }
     setLoading(true);
     try {
       const items = costBreakdown.map(item => {
@@ -327,7 +342,7 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
       const orderPayload = {
         customer_name: formData.name,
         customer_email: formData.email,
-        customer_phone: formData.phone,
+        customer_phone: phone,
         customer_address: formData.address,
         payment_method: payMethod,
         items,
@@ -335,10 +350,16 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
 
       const orderResult = await submitOrder(orderPayload);
 
-      if (payMethod === 'stripe') {
-        const sessionData = await createCheckoutSession(orderResult.order_id);
+      if (payMethod === 'online') {
+        const receiptUrl = `/order-success?order_id=${orderResult.order_id}&token=${orderResult.receipt_token}`;
         dispatch({ type: 'CLEAR_DESIGN' });
-        window.location.href = sessionData.checkout_url;
+        try {
+          const sessionData = await createCheckoutSession(orderResult.order_id);
+          window.location.href = sessionData.checkout_url;
+        } catch {
+          // The order exists; its receipt page offers "Pay now" to retry
+          window.location.href = `${receiptUrl}&cancelled=1`;
+        }
       } else {
         dispatch({ type: 'CLEAR_DESIGN' });
         setShowCheckout(false);
@@ -759,9 +780,13 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
                   <label style={{ display: 'block', marginBottom: 6 }}><Label>Phone</Label></label>
                   <input
                     required type="tel" className="w-full px-4 py-2 bg-gray-50 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#10b981] focus:border-transparent transition-all duration-200"
-                    value={formData.phone} placeholder="09XX XXX XXXX"
+                    value={formData.phone} placeholder="09XX XXX XXXX" inputMode="tel"
                     onChange={e => setFormData(f => ({ ...f, phone: e.target.value }))}
+                    style={phoneInvalid ? { borderColor: '#f87171' } : undefined}
                   />
+                  {phoneInvalid && (
+                    <p style={{ margin: '4px 0 0', fontSize: 10.5, color: '#dc2626', fontWeight: 500 }}>{PHONE_HINT}</p>
+                  )}
                 </div>
               </div>
 
@@ -786,25 +811,29 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
               <div style={{ display: 'flex', gap: 10 }}>
                 {[
                   {
-                    id: 'stripe',
+                    id: 'online',
                     icon: <CreditCard size={20} />,
                     label: 'Online Payment',
-                    sub: 'Visa · GCash · Maya',
+                    sub: 'QR Ph · GCash · Maya · Card',
                   },
                   {
                     id: 'cod',
                     icon: <Truck size={20} />,
                     label: 'Cash on Delivery',
-                    sub: 'Pay upon arrival',
+                    sub: codBlocked || 'Pay upon arrival',
+                    disabled: !!codBlocked,
                   },
-                ].map(({ id, icon, label, sub }) => {
+                ].map(({ id, icon, label, sub, disabled }) => {
                   const active = payMethod === id;
                   return (
                     <div
                       key={id}
                       className="psp-pay-card"
-                      onClick={() => setPayMethod(id)}
+                      onClick={() => !disabled && setPayMethod(id)}
+                      aria-disabled={disabled || undefined}
                       style={{
+                        opacity: disabled ? 0.55 : 1,
+                        cursor: disabled ? 'not-allowed' : undefined,
                         background: active
                           ? 'linear-gradient(135deg, #ecfdf5 0%, #f0fdf4 100%)'
                           : C.surface,
@@ -835,7 +864,7 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
                         <p style={{ margin: 0, fontSize: '0.75rem', fontWeight: 800, color: active ? C.text : C.textMid, lineHeight: 1.2 }}>
                           {label}
                         </p>
-                        <p style={{ margin: '3px 0 0', fontSize: 9.5, color: C.textDim, fontWeight: 500 }}>
+                        <p style={{ margin: '3px 0 0', fontSize: 9.5, color: disabled ? '#b45309' : C.textDim, fontWeight: 500 }}>
                           {sub}
                         </p>
                       </div>
@@ -888,7 +917,7 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
                     <Loader2 size={17} style={{ animation: 'psp-spin 0.8s linear infinite' }} />
                     Processing…
                   </>
-                ) : payMethod === 'stripe' ? (
+                ) : payMethod === 'online' ? (
                   <><CreditCard size={16} strokeWidth={2.5} /> Pay Securely Online</>
                 ) : (
                   <><Truck size={16} strokeWidth={2.5} /> Confirm — Pay on Delivery</>

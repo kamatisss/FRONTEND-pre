@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { useLocation } from 'react-router-dom';
-import { Calendar, Check, Clock, MapPin, AlertTriangle, Star, CalendarPlus, CheckCircle2, CalendarCheck, Sparkles, X, AlertCircle } from 'lucide-react';
+import { Link, useLocation } from 'react-router-dom';
+import { Calendar, Check, Clock, MapPin, AlertTriangle, Star, CalendarPlus, CheckCircle2, CalendarCheck, Sparkles, X, AlertCircle, CreditCard } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
 import ServiceRatingModal from './ServiceRatingModal';
@@ -870,6 +870,24 @@ const MyBookings = () => {
                         ))}
                     </div>
                 )}
+
+                {/* Payments the office has requested (downpayment etc.), payable online */}
+                {b.tracker?.pending_payments?.map(p => (
+                    <div key={p.id} style={{ marginTop: '12px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '10px', padding: '12px 16px', background: '#FFFBEB', borderRadius: '12px', border: '1.5px solid #FDE68A' }}>
+                        <div>
+                            <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#B45309', textTransform: 'uppercase', display: 'block', marginBottom: '2px' }}>Payment requested</span>
+                            <span style={{ fontSize: '0.9rem', fontWeight: 700, color: '#1E293B' }}>
+                                {p.label} · ₱{p.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                            </span>
+                        </div>
+                        <Link
+                            to={`/pay/${p.token}`}
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 16px', background: '#059669', color: '#fff', borderRadius: 999, fontSize: '0.8rem', fontWeight: 700, textDecoration: 'none' }}
+                        >
+                            <CreditCard size={14} /> Pay now
+                        </Link>
+                    </div>
+                ))}
 
                 {/* Notes section if present */}
                 {b.notes && (

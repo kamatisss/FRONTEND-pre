@@ -26,6 +26,7 @@ const BookService = lazy(() => import("./components/BookService"));
 const MyBookings = lazy(() => import("./components/MyBookings"));
 const UserOrders = lazy(() => import("./components/UserOrders"));
 const OrderSuccess = lazy(() => import("./components/OrderSuccess"));
+const ProjectPayment = lazy(() => import("./components/ProjectPayment"));
 const StaffAttendance = lazy(() => import("./components/StaffAttendance"));
 const AdminAttendance = lazy(() => import("./components/AdminAttendance"));
 const UserDashboard = lazy(() => import("./components/UserDashboard"));
@@ -77,6 +78,7 @@ function App() {
               <Route path="/login" element={<Login />} />
               <Route path="/register" element={<Register />} />
               <Route path="/order-success" element={<OrderSuccess />} />
+              <Route path="/pay/:token" element={<ProjectPayment />} />
               <Route path="/forgot-password" element={<ForgotPassword />} />
 
               {/* Project Hub — public portfolio of finished gardens */}

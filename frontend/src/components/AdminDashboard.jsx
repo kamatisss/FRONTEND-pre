@@ -427,9 +427,13 @@ const AdminDashboard = () => {
                                                         <span className="inline-flex items-center gap-x-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800 border border-amber-200/50">
                                                             COD
                                                         </span>
-                                                    ) : (
+                                                    ) : order.payment_status === 'Paid' ? (
                                                         <span className="inline-flex items-center gap-x-1.5 rounded-full bg-green-50 px-2.5 py-1 text-xs font-semibold text-green-800 border border-green-200/50">
                                                             Paid Online
+                                                        </span>
+                                                    ) : (
+                                                        <span className="inline-flex items-center gap-x-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 border border-slate-200">
+                                                            Online · {order.payment_status === 'Pending' ? 'Unpaid' : order.payment_status}
                                                         </span>
                                                     )}
                                                 </td>

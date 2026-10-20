@@ -29,6 +29,7 @@ const GROUPS = [
   { title: 'Tax & shop', note: null, fields: [
     ['vat_percent', 'VAT rate (only if VAT-registered)', '%'],
     ['shipping_fee', 'Shop delivery fee per order', '₱'],
+    ['cod_max_amount', 'Cash on Delivery limit per order (0 = no limit)', '₱'],
   ] },
 ];
 

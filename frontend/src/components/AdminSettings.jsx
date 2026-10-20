@@ -8,7 +8,7 @@ export default function AdminSettings() {
     aiModel: 'gemini-2.5-flash',
     aiTemperature: 0.2,
     defaultBudget: 5000,
-    enableStripe: true,
+    enableOnlinePayments: true,
     notificationEmail: 'admin@gardenstudio.com',
     alertLowStock: 10,
   });

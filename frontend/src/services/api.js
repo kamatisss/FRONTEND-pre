@@ -154,7 +154,7 @@ export const submitOrder = async (orderData) => {
   }
 };
 
-// ─── Stripe Payment ───────────────────────────────────────────────
+// ─── Online Payment (PayMongo: QR Ph / GCash / Maya / Card) ──────────
 export const createCheckoutSession = async (orderId) => {
   try {
     const res = await api.post('/create-checkout-session/', { order_id: orderId });
@@ -164,6 +164,35 @@ export const createCheckoutSession = async (orderId) => {
       throw new Error(err.response.data.error);
     }
     throw new Error(err.message || 'Failed to create checkout session');
+  }
+};
+
+// Project payment links (/pay/<token>): staff-requested downpayments and other installments
+export const getProjectPayment = async (token) => {
+  try {
+    const res = await api.get(`/project-payments/${token}/`);
+    return res.data;
+  } catch (err) {
+    throw new Error(err.response?.data?.error || err.message || 'Could not load this payment.');
+  }
+};
+
+export const startProjectPayment = async (token) => {
+  try {
+    const res = await api.post(`/project-payments/${token}/checkout/`);
+    return res.data; // { checkout_url }
+  } catch (err) {
+    throw new Error(err.response?.data?.error || err.message || 'Could not open the payment page.');
+  }
+};
+
+// Real order + payment state for the order-success page (token lets guests in)
+export const getOrderReceipt = async (orderId, token) => {
+  try {
+    const res = await api.get(`/order-receipt/${orderId}/`, { params: token ? { token } : {} });
+    return res.data;
+  } catch (err) {
+    throw new Error(err.response?.data?.error || err.message || 'Could not load the order.');
   }
 };
 

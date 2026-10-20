@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
-import { X, Wallet, History, Flag } from 'lucide-react';
+import { X, Wallet, History, Flag, Link2, Copy, Check, Mail } from 'lucide-react';
 
 /* ═══════════════════════════════════════════════════════════════════════
    PROJECT & BILLING — office-admin view of a booking's ProjectTracker
    ─────────────────────────────────────────────────────────────────────
    • Contract price (paid amount is preserved when the price changes)
    • Record payments → reduces the balance, logged in the audit history
+   • Request online payments → a /pay/<token> link for the customer (PayMongo);
+     paid requests lower the balance on their own
    • Advance the project stage, with remarks
    • Immutable history log (stage changes, payments, price changes)
    ═══════════════════════════════════════════════════════════════════════ */
@@ -45,6 +47,10 @@ export default function ProjectBillingModal({ booking, apiBase, headers, onClose
   const [payNote, setPayNote] = useState('');
   const [stage, setStage] = useState('');
   const [stageNote, setStageNote] = useState('');
+  const [requests, setRequests] = useState([]);
+  const [reqAmount, setReqAmount] = useState('');
+  const [reqLabel, setReqLabel] = useState('Downpayment');
+  const [copiedId, setCopiedId] = useState(null);
 
   const jsonHeaders = { ...headers, 'Content-Type': 'application/json' };
   const estimate = Number(booking.design_details?.total_cost || 0);
@@ -64,6 +70,15 @@ export default function ProjectBillingModal({ booking, apiBase, headers, onClose
       .finally(() => setLoading(false));
   }, [trackerId]);
 
+  // Payment requests change on their own when the customer pays, so reload them with the tracker
+  useEffect(() => {
+    if (!tracker) return;
+    fetch(`${apiBase}/projects/${tracker.id}/payment-requests/`, { headers })
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setRequests)
+      .catch(() => {});
+  }, [tracker]);
+
   // Runs a request; on success refreshes this view and the booking list
   const run = async (request, successMsg) => {
     setBusy(true);
@@ -77,9 +92,9 @@ export default function ProjectBillingModal({ booking, apiBase, headers, onClose
         setError(msg);
         return false;
       }
-      const fresh = await fetch(`${apiBase}/projects/${data.id ?? tracker?.id}/`, { headers }).then((r) => r.json());
+      const fresh = await fetch(`${apiBase}/projects/${tracker?.id ?? data.id}/`, { headers }).then((r) => r.json());
       applyTracker(fresh);
-      toast?.(successMsg);
+      toast?.(typeof successMsg === 'function' ? successMsg(data) : successMsg);
       onChanged?.();
       return true;
     } catch {
@@ -117,6 +132,34 @@ export default function ProjectBillingModal({ booking, apiBase, headers, onClose
     if (ok) { setPayAmount(''); setPayNote(''); }
   };
 
+  const requestPayment = async () => {
+    const ok = await run(() => fetch(`${apiBase}/projects/${tracker.id}/payment-requests/`, {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ amount: reqAmount, label: reqLabel }),
+    }), (data) => `Payment link created. ${data.email_message}`);
+    if (ok) { setReqAmount(''); setReqLabel('Downpayment'); }
+  };
+
+  const cancelRequest = (req) => {
+    if (!window.confirm(`Cancel the ${peso(req.amount)} "${req.label}" request? Its link will stop working.`)) return;
+    run(() => fetch(`${apiBase}/projects/${tracker.id}/payment-requests/${req.id}/cancel/`, {
+      method: 'POST', headers: jsonHeaders,
+    }), 'Payment request cancelled.');
+  };
+
+  const emailLink = (req) => run(() => fetch(`${apiBase}/projects/${tracker.id}/payment-requests/${req.id}/send-email/`, {
+    method: 'POST', headers: jsonHeaders,
+  }), (data) => data.email_message);
+
+  const copyLink = async (req) => {
+    try {
+      await navigator.clipboard.writeText(req.pay_url);
+      setCopiedId(req.id);
+      setTimeout(() => setCopiedId((id) => (id === req.id ? null : id)), 2000);
+    } catch {
+      window.prompt('Copy this payment link:', req.pay_url);
+    }
+  };
+
   const updateStage = async () => {
     const ok = await run(() => fetch(`${apiBase}/projects/${tracker.id}/update-status/`, {
       method: 'PATCH', headers: jsonHeaders, body: JSON.stringify({ status: stage, remarks: stageNote }),
@@ -129,6 +172,13 @@ export default function ProjectBillingModal({ booking, apiBase, headers, onClose
   const paid = total - balance;
   const paidPct = total > 0 ? Math.round((paid / total) * 100) : 0;
   const completing = ['COMPLETED', 'CUSTOMER_FEEDBACK'].includes(stage) && stage !== tracker?.status;
+  const requested = requests.filter((r) => r.status === 'PENDING').reduce((sum, r) => sum + r.amount, 0);
+  const requestable = Math.max(0, Math.round((balance - requested) * 100) / 100);
+  const quickAmounts = [
+    ['30%', Math.round(total * 0.3 * 100) / 100],
+    ['50%', Math.round(total * 0.5 * 100) / 100],
+    ['Rest', requestable],
+  ].filter(([, v]) => v > 0 && v <= requestable);
 
   const input = 'w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:border-emerald-500 bg-white';
   const btn = 'px-4 py-2 text-sm font-bold rounded-lg border-none cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
@@ -203,6 +253,72 @@ export default function ProjectBillingModal({ booking, apiBase, headers, onClose
                     </div>
                   </div>
                 </div>
+              </section>
+
+              {/* Online payment links */}
+              <section className="border-t border-slate-100 pt-5">
+                <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1.5"><Link2 size={13} /> Request an online payment</h4>
+                <p className="text-[11px] text-slate-400 mt-0 mb-3">
+                  The customer is emailed a link to pay with QR Ph, GCash, Maya or card. When they pay, the balance updates by itself.
+                </p>
+                {requestable > 0 ? (
+                  <div className="grid sm:grid-cols-[1.2fr_1fr_auto] gap-2">
+                    <input type="text" placeholder="What for (e.g. Downpayment 50%)" value={reqLabel}
+                      onChange={(e) => setReqLabel(e.target.value)} className={input} maxLength={120} />
+                    <div>
+                      <input type="number" min="0" step="0.01" placeholder={`Up to ${peso(requestable)}`}
+                        value={reqAmount} onChange={(e) => setReqAmount(e.target.value)} className={input} />
+                      {quickAmounts.length > 0 && (
+                        <div className="flex gap-1.5 mt-1.5">
+                          {quickAmounts.map(([label, v]) => (
+                            <button key={label} type="button" onClick={() => setReqAmount(String(v))}
+                              className="px-2 py-0.5 text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full cursor-pointer hover:bg-emerald-100">
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <button onClick={requestPayment} disabled={busy || !(Number(reqAmount) > 0) || !reqLabel.trim()}
+                      className={`${btn} bg-emerald-600 hover:bg-emerald-700 text-white self-start`}>Create link</button>
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-500 m-0">
+                    {balance > 0 ? 'The whole balance already has open payment links.' : 'Nothing left to collect.'}
+                  </p>
+                )}
+
+                {requests.length > 0 && (
+                  <ul className="m-0 mt-4 p-0 list-none space-y-2">
+                    {requests.map((r) => (
+                      <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
+                        <span className="font-semibold text-slate-700 flex-1 min-w-[140px]">{r.label} · {peso(r.amount)}</span>
+                        <span className={`font-bold px-2 py-0.5 rounded-full ${
+                          r.status === 'PAID' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          : r.status === 'PENDING' ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                          : 'bg-slate-100 text-slate-500 border border-slate-200'}`}>
+                          {r.status === 'PENDING' ? 'Waiting for payment' : r.status_display}
+                        </span>
+                        {r.status === 'PENDING' && (
+                          <>
+                            <button onClick={() => copyLink(r)}
+                              className="inline-flex items-center gap-1 font-bold text-emerald-700 bg-transparent border-none cursor-pointer p-0">
+                              {copiedId === r.id ? <><Check size={12} /> Copied</> : <><Copy size={12} /> Copy link</>}
+                            </button>
+                            <button onClick={() => emailLink(r)} disabled={busy}
+                              className="inline-flex items-center gap-1 font-bold text-emerald-700 bg-transparent border-none cursor-pointer p-0 disabled:opacity-50">
+                              <Mail size={12} /> Email
+                            </button>
+                            <button onClick={() => cancelRequest(r)} disabled={busy}
+                              className="font-bold text-red-600 bg-transparent border-none cursor-pointer p-0 disabled:opacity-50">
+                              Cancel
+                            </button>
+                          </>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </section>
 
               {/* Stage */}

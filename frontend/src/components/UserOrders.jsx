@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Package, Calendar, CreditCard, Truck, Box, X, Star } from 'lucide-react';
 import ServiceRatingModal from './ServiceRatingModal';
+import { createCheckoutSession } from '../services/api';
 import SwipeCarousel from './ui/SwipeCarousel';
 import { useIsPhone } from './ui/useMediaQuery';
 
@@ -24,6 +25,18 @@ const UserOrders = () => {
     const [toasts, setToasts] = useState([]);
     const [activeTab, setActiveTab] = useState('All');
     const [ratingTarget, setRatingTarget] = useState(null); // { orderItemId, name } or null
+    const [payingId, setPayingId] = useState(null);
+
+    const handlePayNow = async (orderId) => {
+        setPayingId(orderId);
+        try {
+            const { checkout_url } = await createCheckoutSession(orderId);
+            window.location.href = checkout_url;
+        } catch (err) {
+            showToast(err.message, 'error');
+            setPayingId(null);
+        }
+    };
 
     const handleReviewSuccess = (review) => {
         // Mark the reviewed line in place so the Rate button turns into a rating badge
@@ -65,7 +78,8 @@ const UserOrders = () => {
                     setOrders(prevOrders => prevOrders.filter(order => order.id !== orderId));
                     showToast("Order cancelled successfully.", "info");
                 } else {
-                    alert("Failed to cancel order.");
+                    const data = await res.json().catch(() => ({}));
+                    alert(data.error || "Failed to cancel order.");
                 }
             } catch (err) {
                 console.error("Error cancelling order:", err);
@@ -325,7 +339,20 @@ const UserOrders = () => {
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: isPhone ? 'flex-start' : 'flex-end', gap: 10 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                            {order.status.toLowerCase() === 'pending' && (
+                            {order.payment_method === 'online' && order.payment_status === 'Pending' && order.status === 'Pending' && (
+                                <button
+                                    onClick={() => handlePayNow(order.id)}
+                                    disabled={payingId === order.id}
+                                    style={{
+                                        fontSize: '0.75rem', fontWeight: 700, color: '#fff',
+                                        background: '#059669', border: 'none', borderRadius: 999,
+                                        padding: '5px 14px', cursor: 'pointer', opacity: payingId === order.id ? 0.6 : 1,
+                                    }}
+                                >
+                                    {payingId === order.id ? 'Opening…' : 'Pay Now'}
+                                </button>
+                            )}
+                            {order.status === 'Pending' && order.payment_status !== 'Paid' && (
                                 <button 
                                     onClick={() => handleCancelOrder(order.id)}
                                     style={{
@@ -345,8 +372,18 @@ const UserOrders = () => {
                             {order.payment_method === 'cod' ? (
                                 <><Truck size={14} color="#D97706" /> Cash on Delivery</>
                             ) : (
-                                <><CreditCard size={14} color="#059669" /> Online Payment (Stripe)</>
+                                <><CreditCard size={14} color="#059669" /> QR Ph / GCash / Maya / Card</>
                             )}
+                            <span style={{
+                                marginLeft: 4, padding: '1px 8px', borderRadius: 999, fontSize: '11px', fontWeight: 700,
+                                ...(order.payment_status === 'Paid'
+                                    ? { background: '#ECFDF5', color: '#059669', border: '1px solid #A7F3D0' }
+                                    : order.payment_status === 'Pending'
+                                        ? { background: '#FFFBEB', color: '#B45309', border: '1px solid #FDE68A' }
+                                        : { background: '#F1F5F9', color: '#64748B', border: '1px solid #E2E8F0' }),
+                            }}>
+                                {order.payment_status === 'Pending' ? 'Unpaid' : order.payment_status}
+                            </span>
                         </div>
                     </div>
                 </div>
