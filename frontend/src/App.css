@@ -35,8 +35,11 @@
     font-family: var(--font-sans);
     background: var(--color-neutral-bg);
     color: var(--color-neutral-ink);
-    min-height: 100vh;
-    overflow: hidden;
+    min-height: 100dvh;
+    /* The page scrolls normally. (It used to be locked, with screens scrolling inside boxes: on
+       phones that stuck and jumped, kept the address bar from hiding, and let the keyboard cover
+       form fields.) Desktop dashboards still scroll inside <main>: DashboardLayout. */
+    overflow-x: clip;
   }
 
   /* Landing page needs free-scroll — override the global overflow:hidden */

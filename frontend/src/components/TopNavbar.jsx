@@ -1,9 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Link, NavLink, useLocation } from 'react-router-dom';
+import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { customerLinks, useStaffLinks } from './navLinks';
 import NotificationBell from './ui/NotificationBell';
-import { LogOut, Leaf, User, Settings, ChevronDown, Menu, X } from 'lucide-react';
+import { LogOut, Leaf, ChevronDown, Menu, X, Download, LayoutDashboard } from 'lucide-react';
+import { useInstall } from '../pwa/useInstall';
+import InstallAppSheet from './ui/InstallAppSheet';
+import { dashboardPath } from '../data/roleHome';
 
 /* ─── Avatar: shows first letter of first name, with green gradient ─── */
 function Avatar({ user }) {
@@ -38,7 +41,8 @@ function Avatar({ user }) {
 }
 
 /* ─── Dropdown menu for the profile section ─── */
-function ProfileDropdown({ user, logoutUser, onClose }) {
+function ProfileDropdown({ user, logoutUser, onClose, onInstall, canInstall }) {
+  const navigate = useNavigate();
   const displayName = user?.first_name
     ? `${user.first_name}${user.last_name ? ' ' + user.last_name : ''}`
     : user?.username;
@@ -110,8 +114,8 @@ function ProfileDropdown({ user, logoutUser, onClose }) {
 
       {/* Menu items */}
       <div style={{ padding: '8px 0' }}>
-        <DropItem icon={<User size={15} />} label="My Profile" onClick={onClose} />
-        <DropItem icon={<Settings size={15} />} label="Settings" onClick={onClose} />
+        <DropItem icon={<LayoutDashboard size={15} />} label="My dashboard" onClick={() => { onClose(); navigate(dashboardPath(user)); }} />
+        {canInstall && <DropItem icon={<Download size={15} />} label="Install app" onClick={() => { onClose(); onInstall(); }} />}
       </div>
 
       {/* Logout */}
@@ -180,6 +184,10 @@ const TopNavbar = () => {
   const { user, logoutUser } = useAuth();
   const location = useLocation();
   const [dropOpen, setDropOpen] = useState(false);
+  // "Install app": the browser's own prompt (Android / desktop), or the steps on iPhone
+  const { available: canInstall, install } = useInstall();
+  const [installSteps, setInstallSteps] = useState(false);
+  const startInstall = async () => { if (await install() === 'steps') setInstallSteps(true); };
   const [menu, setMenu] = useState({ open: false, path: location.pathname });
   const dropRef = useRef(null);
   const staffLinks = useStaffLinks(user);
@@ -386,6 +394,8 @@ const TopNavbar = () => {
               user={user}
               logoutUser={logoutUser}
               onClose={() => setDropOpen(false)}
+              canInstall={canInstall}
+              onInstall={startInstall}
             />
           )}
         </div>
@@ -424,6 +434,13 @@ const TopNavbar = () => {
               </Link>
             ); })}
             <div style={{ borderTop: '1px solid #f1f5f9', marginTop: 8, paddingTop: 8 }}>
+              {canInstall && (
+                <button type="button" onClick={() => { closeMenu(); startInstall(); }} className="tn-menu-link"
+                  style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', color: '#047857', fontFamily: 'inherit' }}>
+                  <Download size={18} style={{ flexShrink: 0 }} />
+                  Install app
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => { closeMenu(); logoutUser(); }}
@@ -437,6 +454,7 @@ const TopNavbar = () => {
           </nav>
         </div>
       )}
+      {installSteps && <InstallAppSheet onClose={() => setInstallSteps(false)} />}
     </>
   );
 };

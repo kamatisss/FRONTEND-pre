@@ -374,10 +374,16 @@ export default function CrewDashboardView({
     <div className="min-h-screen bg-slate-50" style={{ paddingBottom: 'calc(84px + env(safe-area-inset-bottom))' }}>
       <div className="max-w-2xl mx-auto px-4 py-5">
         {!online && (
-          <div role="status" className="sticky top-2 z-30 mb-4 flex items-start gap-3 bg-slate-900 text-white rounded-2xl p-3.5 shadow-lg">
-            <WifiOff size={18} className="shrink-0 mt-0.5" />
-            <p className="m-0 text-sm leading-snug"><b>No signal.</b> Your jobs are saved on this phone. Starting or ending a job, deliveries and problem reports are kept and sent when the signal is back. Photos and "On my way" need signal.</p>
-          </div>
+          <>
+            {/* One line stays pinned while scrolling; the details are shown once, not pinned */}
+            <div role="status" className="sticky top-[68px] md:top-2 z-30 mb-2 flex items-center gap-2 bg-slate-900 text-white rounded-full px-4 py-2.5 shadow-lg text-sm">
+              <WifiOff size={16} className="shrink-0" />
+              <span><b>No signal.</b> Your work is saved and sent later.</span>
+            </div>
+            <p className="m-0 mb-4 px-1 text-xs text-slate-600 leading-snug">
+              Your jobs are saved on this phone. Starting or ending a job, deliveries and problem reports are sent when the signal is back. Photos and "On my way" need signal.
+            </p>
+          </>
         )}
         {(savedAt || deliveriesSavedAt) && (
           <p className="m-0 mb-3 text-xs font-semibold text-slate-500">

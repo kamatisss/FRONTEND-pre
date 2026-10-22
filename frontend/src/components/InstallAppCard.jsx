@@ -1,13 +1,12 @@
 import { useState } from 'react';
-import { Download, Share, PlusSquare, X, Smartphone } from 'lucide-react';
-import { isIos, promptInstall } from '../pwa/pwa';
-import { usePwa } from '../pwa/usePwa';
+import { Download, X, Smartphone } from 'lucide-react';
+import { useInstall } from '../pwa/useInstall';
+import { IosInstallSteps } from './ui/InstallAppSheet';
 
 /*
- * "Install Garden Studio" — puts the app on the home screen (opens full-screen, works on weak signal,
- * and on iPhone it is required for job alerts). Hidden once installed, or after "Not now".
- *   Android / desktop Chrome: one tap (the browser's own install prompt)
- *   iPhone / iPad Safari: a two-step how-to (Apple has no install button)
+ * "Install Garden Studio" card on the crew "Me" tab and the customer dashboard (opens full-screen,
+ * works on weak signal, and on iPhone it's needed for job alerts). Hidden once installed, or for
+ * 14 days after "Not now". The account menu has the same action for everyone (TopNavbar).
  */
 const DISMISS_KEY = 'installCardDismissedAt';
 const DISMISS_DAYS = 14;
@@ -20,19 +19,19 @@ function dismissedRecently() {
 }
 
 export default function InstallAppCard({ reason = 'Opens full-screen like an app and loads faster on weak signal.' }) {
-  const { installEvent, installed } = usePwa();
+  const { available, ios, install } = useInstall();
   const [hidden, setHidden] = useState(dismissedRecently);
   const [iosSteps, setIosSteps] = useState(false);
-  const ios = isIos();
-  if (installed || hidden || (!installEvent && !ios)) return null;
+  if (!available || hidden) return null;
 
   const dismiss = () => {
     try { localStorage.setItem(DISMISS_KEY, String(Date.now())); } catch { /* fine: it shows again next time */ }
     setHidden(true);
   };
-  const install = async () => {
-    if (ios) { setIosSteps(true); return; }
-    if (await promptInstall() === 'accepted') setHidden(true);
+  const onInstall = async () => {
+    const outcome = await install();
+    if (outcome === 'steps') setIosSteps(true);
+    if (outcome === 'accepted') setHidden(true);
   };
 
   return (
@@ -49,15 +48,9 @@ export default function InstallAppCard({ reason = 'Opens full-screen like an app
         </div>
       </div>
       {iosSteps ? (
-        <ol className="m-0 mt-4 pl-0 list-none flex flex-col gap-2 text-sm text-slate-700">
-          <li className="flex items-center gap-2"><span className="w-6 h-6 rounded-full bg-emerald-600 text-white text-xs font-bold flex items-center justify-center shrink-0">1</span>
-            In Safari, tap <Share size={16} className="text-sky-600 shrink-0" aria-label="the Share button" /> <b>Share</b> at the bottom of the screen.</li>
-          <li className="flex items-center gap-2"><span className="w-6 h-6 rounded-full bg-emerald-600 text-white text-xs font-bold flex items-center justify-center shrink-0">2</span>
-            Choose <PlusSquare size={16} className="shrink-0" aria-hidden="true" /> <b>Add to Home Screen</b>, then <b>Add</b>.</li>
-          <li className="text-xs text-slate-500 pl-8">Using Chrome on iPhone? Open this page in Safari first.</li>
-        </ol>
+        <div className="mt-4"><IosInstallSteps /></div>
       ) : (
-        <button type="button" onClick={install}
+        <button type="button" onClick={onInstall}
           className="mt-4 h-11 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold border-none cursor-pointer inline-flex items-center gap-2">
           <Download size={17} /> {ios ? 'Show me how' : 'Install app'}
         </button>

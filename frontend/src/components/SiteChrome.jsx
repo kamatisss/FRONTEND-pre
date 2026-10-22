@@ -4,6 +4,8 @@ import { Leaf, Menu, X, MapPin, Phone, Mail, ArrowRight } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useBusiness } from '../services/business';
 import { dashboardPath } from '../data/roleHome';
+import { useInstall } from '../pwa/useInstall';
+import InstallAppSheet from './ui/InstallAppSheet';
 import { prefetchStudio } from '../services/prefetch';
 
 /*
@@ -114,6 +116,8 @@ const CHROME_CSS = `
  */
 export function SiteHeader({ overlay = false }) {
   const { user } = useAuth();
+  const { available: canInstall, install } = useInstall();
+  const [installSteps, setInstallSteps] = useState(false);
   const BUSINESS = useBusiness();
   const location = useLocation();
   const goToSection = useSectionLink();
@@ -187,8 +191,15 @@ export function SiteHeader({ overlay = false }) {
               <Link to="/register" className="sh-menu-cta">Sign Up Free</Link>
             </>
           )}
+          {canInstall && (
+            <button type="button" className="sh-link" style={{ color: '#047857', background: 'none', border: 'none', borderTop: '1px solid #f1f5f9', marginTop: 10, cursor: 'pointer', fontFamily: 'inherit' }}
+              onClick={async () => { if (await install() === 'steps') setInstallSteps(true); }}>
+              Install the app
+            </button>
+          )}
         </nav>
       )}
+      {installSteps && <InstallAppSheet onClose={() => setInstallSteps(false)} />}
       {!overlay && <div className="sh-spacer" aria-hidden="true" />}
     </>
   );
@@ -196,6 +207,8 @@ export function SiteHeader({ overlay = false }) {
 
 export function SiteFooter() {
   const { user } = useAuth();
+  const { available: canInstall, install } = useInstall();
+  const [installSteps, setInstallSteps] = useState(false);
   const BUSINESS = useBusiness();  // the owner edits it in Business profile
   const goToSection = useSectionLink();
   const onHome = useHomeLink();
@@ -257,7 +270,14 @@ export function SiteFooter() {
             <div className="sf-start">
               <Link to="/try-studio" className="sh-primary" onPointerEnter={prefetchStudio}>Design my garden free</Link>
               <Link to="/projects" className="sf-more">See finished projects <ArrowRight size={14} /></Link>
+              {canInstall && (
+                <button type="button" className="sf-more" style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}
+                  onClick={async () => { if (await install() === 'steps') setInstallSteps(true); }}>
+                  Install the app <ArrowRight size={14} />
+                </button>
+              )}
             </div>
+            {installSteps && <InstallAppSheet onClose={() => setInstallSteps(false)} />}
           </div>
         </div>
 

@@ -506,7 +506,7 @@ export default function Shop() {
             </div>
 
             {/* Shop Category Navigation Tabs */}
-            <div className="border-b border-slate-200 bg-white sticky top-0 z-40 shadow-sm">
+            <div className="border-b border-slate-200 bg-white sticky top-[60px] md:top-0 z-40 shadow-sm">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 flex items-center justify-between overflow-x-auto gap-8">
                     <div className="flex gap-2 py-3.5 shrink-0">
                         {['All', 'plant', 'furniture', 'hardscape'].map((tab) => (

@@ -90,13 +90,14 @@ export default function GuestAuthModal({
           position: fixed; inset: 0; z-index: 1000;
           background: rgba(15,23,42,0.55);
           backdrop-filter: blur(4px);
-          display: flex; align-items: center; justify-content: center;
+          display: flex; align-items: flex-start; justify-content: center;
           padding: 16px;
+          overflow-y: auto; overscroll-behavior: contain;   /* phone keyboard open: the form scrolls */
         }
         .gam-card {
           background: #fff;
           border-radius: 24px;
-          width: 100%; max-width: 440px;
+          width: 100%; max-width: 440px; margin: auto 0;   /* centred when it fits, scrolls when it doesn't */
           box-shadow: 0 24px 64px rgba(15,23,42,0.18), 0 4px 16px rgba(15,23,42,0.08);
           overflow: hidden;
           position: relative;

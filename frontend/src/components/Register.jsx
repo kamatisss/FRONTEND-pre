@@ -1,7 +1,19 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { User, Lock, Mail, AlertCircle, CheckCircle2, UserCircle } from 'lucide-react';
+import { User, Lock, Mail, AlertCircle, CheckCircle2, UserCircle, Leaf } from 'lucide-react';
+import { useBusiness } from '../services/business';
 import { API_BASE_URL as API_ROOT } from '../config';
+
+
+function BrandLink() {
+  const { name } = useBusiness();
+  return (
+    <Link to="/" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginBottom: 28, color: '#0f172a', fontWeight: 800, fontSize: 16, textDecoration: 'none' }}>
+      <span style={{ width: 32, height: 32, borderRadius: 10, background: '#10b981', color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><Leaf size={17} /></span>
+      {name}
+    </Link>
+  );
+}
 
 export default function Register() {
   const navigate = useNavigate();
@@ -70,12 +82,13 @@ export default function Register() {
   };
 
   return (
-    <div style={{ display: 'flex', height: '100vh', width: '100vw', fontFamily: "'Inter', sans-serif" }}>
+    <div style={{ display: 'flex', minHeight: '100dvh', width: '100%', fontFamily: "'Inter', sans-serif" }}>
       
       {/* Left Side: Form Area */}
-      <div style={{ flex: 1, backgroundColor: '#ffffff', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', padding: '40px' }}>
+      <div style={{ flex: 1, backgroundColor: '#ffffff', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', padding: 'clamp(20px, 5vw, 40px)' }}>
         <div style={{ width: '100%', maxWidth: '400px' }}>
-          
+          {/* Way back to the site (on phones the photo panel with the branding is hidden) */}
+          <BrandLink />
           <div style={{ marginBottom: '32px', textAlign: 'left' }}>
             <h1 style={{ color: '#1e293b', fontSize: '32px', fontWeight: '800', margin: '0 0 8px 0' }}>Create Account</h1>
             <p style={{ color: '#64748b', fontSize: '16px', margin: 0 }}>Join Garden Design Studio today</p>

@@ -248,12 +248,15 @@ export default function ScrollStory() {
   useEffect(() => {
     if (chapter !== 3) { setHour(chapter > 3 ? 16.5 : 10.5); return undefined; }
     if (reducedMotion() || !onScreen) { setHour(19.5); return undefined; }
-    let raf, start;
+    let raf, start, shown = null;
     const DAY_MS = 9000;
     const tick = (now) => {
       start ??= now;
       const t = ((now - start) % (DAY_MS + 1200)) / DAY_MS; // a short pause at night before the next sunrise
-      setHour(6 + Math.min(1, t) * 14);
+      // Redraw in 0.1 h steps (~15 a second) rather than every frame: the light still glides, and
+      // phones keep the main thread free for scrolling
+      const next = Math.round((6 + Math.min(1, t) * 14) * 10) / 10;
+      if (next !== shown) { shown = next; setHour(next); }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
