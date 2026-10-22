@@ -11,6 +11,9 @@ import CrewMe from './CrewMe';
 import PushAlertsCard from './PushAlertsCard';
 import { SERVICE, TIME, TIME_SHORT, statusOf, dayLabel, clockTime, groupJobs, navUrl, telOf, todayIso } from '../data/crewJobs';
 import { API_BASE_URL as API_ROOT } from '../config';
+import OutboxBar from '../crew/OutboxBar';
+import { useOutbox } from '../crew/useOutbox';
+import { cachedGet, flushOutbox, sendAction, withPendingAttendance, withPendingDeliveries } from '../crew/outbox';
 
 /*
  * Field crew app (phone first). Four tabs, all in the URL so links from notifications and the
@@ -79,8 +82,8 @@ function Empty({ icon: Icon, title, sub }) {
 }
 
 export default function CrewDashboardView({
-  bookings, loading, activeAttendance, refreshActiveAttendance, authTokens, user, actionLoading, toast,
-  updateBookingStatus, reloadBookings,
+  bookings, loading, serverAttendance, refreshActiveAttendance, authTokens, user, actionLoading, toast,
+  updateBookingStatus, reloadBookings, savedAt,
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -104,14 +107,18 @@ export default function CrewDashboardView({
   // Weak signal on site: say so plainly, and catch up by itself when the signal comes back
   const [online, setOnline] = useState(() => navigator.onLine !== false);
 
-  /* Deliveries the office gave this crew member */
-  const [deliveries, setDeliveries] = useState(null);
+  // Actions waiting for signal (crew/outbox.js): show them as done meanwhile
+  const outbox = useOutbox();
+  const activeAttendance = withPendingAttendance(serverAttendance, outbox);
+
+  /* Deliveries the office gave this crew member (saved on the phone for no-signal) */
+  const [serverDeliveries, setDeliveries] = useState(null);
+  const [deliveriesSavedAt, setDeliveriesSavedAt] = useState(null);
   const [deliveriesLoading, setDeliveriesLoading] = useState(false);
   const fetchDeliveries = useCallback(() => (!token ? Promise.resolve() :
-    fetch(`${API}/orders/my_deliveries/`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => (r.ok ? r.json() : null))
-      .then(d => { if (d) setDeliveries(d); })
-      .catch(() => {})), [API, token]);
+    cachedGet('/orders/my_deliveries/', 'deliveries')
+      .then(({ data, savedAt: at }) => { if (data) setDeliveries(data); setDeliveriesSavedAt(at); })), [token]);
+  const deliveries = withPendingDeliveries(serverDeliveries, outbox);
   const reloadDeliveries = () => {
     setDeliveriesLoading(true);
     fetchDeliveries().finally(() => setDeliveriesLoading(false));
@@ -130,6 +137,22 @@ export default function CrewDashboardView({
     await Promise.all([reloadBookings?.(), fetchDeliveries(), refreshActiveAttendance?.()]).catch(() => {});
     setRefreshing(false);
   };
+
+  // Send what waited for signal: now, when the signal returns, when the app comes back to the front,
+  // and every 20 s while something is waiting. Then refresh so the screens show the server's view.
+  const waiting = outbox.some(e => e.state === 'waiting');
+  useEffect(() => {
+    const send = () => flushOutbox().then((sent) => {
+      if (!sent.length) return;
+      toast(sent.length === 1 ? `Sent: ${sent[0].label}.` : `Sent ${sent.length} saved actions.`);
+      return Promise.all([reloadBookings?.(), fetchDeliveries(), refreshActiveAttendance?.()]);
+    }).catch(() => {});
+    if (waiting) send();
+    const onVisible = () => { if (document.visibilityState === 'visible' && waiting) send(); };
+    document.addEventListener('visibilitychange', onVisible);
+    const timer = waiting ? setInterval(send, 20000) : null;
+    return () => { document.removeEventListener('visibilitychange', onVisible); if (timer) clearInterval(timer); };
+  }, [waiting, online]); // eslint-disable-line react-hooks/exhaustive-deps -- re-run when something waits or the signal changes
 
   useEffect(() => {
     const goOffline = () => setOnline(false);
@@ -166,9 +189,14 @@ export default function CrewDashboardView({
 
   const clockOutNow = async () => {
     if (!window.confirm('Clock out now? Do this when you leave the site for the day.')) return;
-    const r = await fetch(`${API}/attendance/clock_out/`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: '{}' }).catch(() => null);
-    if (r?.ok) { toast('Clocked out. See you next time!'); await Promise.all([refreshActiveAttendance?.(), reloadBookings?.()]); }
-    else toast('Could not clock out. Check your signal and try again.', 'error');
+    try {
+      const res = await sendAction({ label: 'Clock out', path: '/attendance/clock_out/', kind: 'clock_out' });
+      if (res.queued) { toast('No signal: clock-out saved with the time you tapped. It will be sent when you have signal.'); return; }
+      toast('Clocked out. See you next time!');
+      await Promise.all([refreshActiveAttendance?.(), reloadBookings?.()]);
+    } catch (e) {
+      toast(e.message, 'error');
+    }
   };
 
   const shiftJob = session?.booking ? bookings.find(b => b.id === session.booking) : null;
@@ -348,9 +376,15 @@ export default function CrewDashboardView({
         {!online && (
           <div role="status" className="sticky top-2 z-30 mb-4 flex items-start gap-3 bg-slate-900 text-white rounded-2xl p-3.5 shadow-lg">
             <WifiOff size={18} className="shrink-0 mt-0.5" />
-            <p className="m-0 text-sm leading-snug"><b>No signal.</b> You can still read your jobs. Starting, photos and messages will work again when the signal is back.</p>
+            <p className="m-0 text-sm leading-snug"><b>No signal.</b> Your jobs are saved on this phone. Starting or ending a job, deliveries and problem reports are kept and sent when the signal is back. Photos and "On my way" need signal.</p>
           </div>
         )}
+        {(savedAt || deliveriesSavedAt) && (
+          <p className="m-0 mb-3 text-xs font-semibold text-slate-500">
+            Showing what was saved at {new Date(savedAt || deliveriesSavedAt).toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' })}.
+          </p>
+        )}
+        <OutboxBar online={online} />
         {loading && !bookings.length && activeTab !== 'me' && activeTab !== 'deliveries' ? (
           <div className="flex flex-col gap-3">{[0, 1, 2].map(i => <div key={i} className="h-28 bg-white border border-slate-200 rounded-2xl animate-pulse" />)}</div>
         ) : jobId && activeTab === 'projects' ? renderJob()

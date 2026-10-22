@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import PushAlertsCard from './PushAlertsCard';
 import InstallAppCard from './InstallAppCard';
 import { clockTime } from '../data/crewJobs';
+import { sendAction } from '../crew/outbox';
 
 /*
  * Crew "Me" tab: shift status and clock-out, hours this week, recent shifts, phone alerts, the
@@ -48,9 +49,8 @@ export default function CrewMe({ user, activeAttendance, api, headers, toast, re
     if (!window.confirm('Clock out now? Do this when you leave the site for the day.')) return;
     setBusy(true);
     try {
-      const r = await fetch(`${api}/attendance/clock_out/`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: '{}' });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(d.error || 'Could not clock out. Try again.');
+      const res = await sendAction({ label: 'Clock out', path: '/attendance/clock_out/', kind: 'clock_out' });
+      if (res.queued) { toast?.('No signal: clock-out saved with the time you tapped. It will be sent when you have signal.'); setBusy(false); return; }
       toast?.('Clocked out. See you next time!');
       await Promise.all([refreshActiveAttendance?.(), onChanged?.()]);
     } catch (e) {

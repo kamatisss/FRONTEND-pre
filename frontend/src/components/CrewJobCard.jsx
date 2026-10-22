@@ -8,6 +8,7 @@ import ProblemSheet from './ui/ProblemSheet';
 import { uploadProgressPhoto } from '../services/api';
 import { SERVICE, TIME, statusOf, dayLabel, clockTime, navUrl as mapsUrl, telOf } from '../data/crewJobs';
 import { productImage } from '../data/productImage';
+import { sendAction } from '../crew/outbox';
 
 /*
  * One crew job, phone-first. Top to bottom: who and when → where (Navigate / Call) → the customer's
@@ -30,15 +31,8 @@ function locate(timeout = 10000) {
   });
 }
 
-async function postJson(url, headers, body) {
-  const r = await fetch(url, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.error || data.detail || 'Something went wrong. Try again.');
-  return data;
-}
-
 /* ── Start the job / on the job / clock out ─────────────────────────────── */
-export function JobShift({ booking, todayIso, activeAttendance, api, headers, toast, onChanged, refreshActiveAttendance }) {
+export function JobShift({ booking, todayIso, activeAttendance, toast, onChanged, refreshActiveAttendance }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const session = activeAttendance?.clocked_in ? activeAttendance.attendance : null;
@@ -54,7 +48,9 @@ export function JobShift({ booking, todayIso, activeAttendance, api, headers, to
   const start = () => run(async () => {
     const pos = await locate();
     if (!pos && booking.site_lat != null) throw new Error('Turn on location (GPS): this job checks that you are at the site.');
-    await postJson(`${api}/attendance/clock_in/`, headers, { booking_id: booking.id, ...(pos || {}) });
+    const res = await sendAction({ label: `Start job #${booking.id}`, path: '/attendance/clock_in/', kind: 'clock_in',
+      body: { booking_id: booking.id, ...(pos || {}) }, ref: { bookingId: booking.id } });
+    if (res.queued) { toast?.(`No signal: job #${booking.id} start saved with the time and place you tapped. It will be sent when you have signal.`); return; }
     toast?.(`Job #${booking.id} started. You are clocked in.`);
     await Promise.all([refreshActiveAttendance?.(), onChanged?.()]);
   });
@@ -62,7 +58,8 @@ export function JobShift({ booking, todayIso, activeAttendance, api, headers, to
   const clockOut = (id) => run(async () => {
     if (!window.confirm(`Clock out of booking #${id}? Do this when you leave the site for the day.`)) return;
     const pos = await locate(6000);
-    await postJson(`${api}/attendance/clock_out/`, headers, pos || {});
+    const res = await sendAction({ label: `Clock out of job #${id}`, path: '/attendance/clock_out/', kind: 'clock_out', body: pos || {} });
+    if (res.queued) { toast?.('No signal: clock-out saved with the time you tapped. It will be sent when you have signal.'); return; }
     toast?.('Clocked out. See you next time!');
     await Promise.all([refreshActiveAttendance?.(), onChanged?.()]);
   });
@@ -72,7 +69,7 @@ export function JobShift({ booking, todayIso, activeAttendance, api, headers, to
     body = (
       <div className="flex items-center gap-3 bg-emerald-50 border border-emerald-200 rounded-xl p-3">
         <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0 animate-pulse" />
-        <p className="flex-1 m-0 text-sm text-emerald-900"><b>On the job</b> since {clockTime(session.clock_in_time)}</p>
+        <p className="flex-1 m-0 text-sm text-emerald-900"><b>On the job</b> since {clockTime(session.clock_in_time)}{session.pending && <span className="block text-xs text-amber-800 font-semibold">Waiting for signal to send</span>}</p>
         <button type="button" disabled={busy} onClick={() => clockOut(booking.id)}
           className="min-h-[44px] px-4 rounded-xl bg-white border border-emerald-300 text-emerald-800 text-sm font-bold cursor-pointer inline-flex items-center gap-1.5 disabled:opacity-50">
           <LogOut size={15} /> Clock out

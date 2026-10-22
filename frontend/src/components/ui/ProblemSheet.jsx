@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
+import { API_BASE_URL } from '../../config';
+import { sendAction } from '../../crew/outbox';
 
 /*
  * "What went wrong?" bottom sheet for the field crew: pick a reason, add an optional note, and the
  * office is told. Used for deliveries (orders/:id/report_problem) and jobs (bookings/:id/report_problem).
  */
-export default function ProblemSheet({ title = 'What went wrong?', subtitle, reasons, url, authHeaders, toast, successMessage, onClose }) {
+export default function ProblemSheet({ title = 'What went wrong?', subtitle, reasons, url, toast, successMessage, onClose }) {
   const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
   const [sending, setSending] = useState(false);
@@ -19,13 +21,13 @@ export default function ProblemSheet({ title = 'What went wrong?', subtitle, rea
   const send = async () => {
     setSending(true);
     try {
-      const r = await fetch(url, {
-        method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify({ reason, note }),
-      });
-      if (r.ok) { toast(successMessage || 'The office has been told.'); onClose(); }
-      else toast((await r.json().catch(() => ({}))).error || 'Could not send the report.', 'error');
-    } catch {
-      toast('No connection. Try again when you have signal.', 'error');
+      // Kept and sent later if there's no signal; the office sees when it really happened
+      const res = await sendAction({ label: `Problem: ${reason}${subtitle ? ` (${subtitle})` : ''}`,
+        path: url.replace(API_BASE_URL, ''), body: { reason, note }, kind: 'problem' });
+      toast(res.queued ? 'No signal: your report is saved and will be sent when you have signal.' : (successMessage || 'The office has been told.'));
+      onClose();
+    } catch (e) {
+      toast(e.message || 'Could not send the report.', 'error');
     }
     setSending(false);
   };

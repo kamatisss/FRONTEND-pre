@@ -1,6 +1,7 @@
 import { createContext, useState, useEffect, useContext } from 'react';
 import { jwtDecode } from 'jwt-decode';
 import { disablePush } from '../services/push';
+import { clearCrewOffline } from '../crew/outbox';
 import { useNavigate } from 'react-router-dom';
 import { API_BASE_URL as API_ROOT } from '../config';
 
@@ -66,6 +67,7 @@ export const AuthProvider = ({ children }) => {
     setAuthTokens(null);
     setUser(null);
     localStorage.removeItem('authTokens');
+    clearCrewOffline();   // saved jobs and unsent actions belong to this person only
     navigate('/', { replace: true });
   };
 

@@ -15,6 +15,7 @@ import ProjectBillingModal from './ProjectBillingModal';
 import OrderQueue from './OrderQueue';
 import BookingQueue from './BookingQueue';
 import CashDesk from './CashDesk';
+import { cachedGet } from '../crew/outbox';
 import { DEFAULT_TIME_OF_DAY } from '../data/studioLight';
 import { API_BASE_URL as API_ROOT } from '../config';
 
@@ -136,6 +137,7 @@ const StaffDashboard = () => {
   const [designs,          setDesigns]          = useState([]);
   const [orderCounts,      setOrderCounts]      = useState(null); // queue badges; the list itself is paged (OrderQueue)
   const [bookings,         setBookings]         = useState([]);   // field crew only: their own jobs
+  const [crewSavedAt,      setCrewSavedAt]      = useState(null); // crew: showing the copy saved on the phone (no signal)
   const [cashOrders,       setCashOrders]       = useState(0);    // office: COD deliveries whose cash isn't handed in
   const [bookingCounts,    setBookingCounts]    = useState(null); // office: queue badges (BookingQueue pages the list)
   const [bookingReload,    setBookingReload]    = useState(0);
@@ -169,11 +171,23 @@ const StaffDashboard = () => {
   const headers = { Authorization: `Bearer ${authTokens?.access}` };
 
   const refreshActiveAttendance = async () => {
+    if (isFieldCrew) {
+      const { data } = await cachedGet('/attendance/current/', 'attendance');
+      if (data) setActiveAttendance(data);
+      return;
+    }
     try {
       const r = await fetch(`${API}/attendance/current/`, { headers });
       if (r.ok) setActiveAttendance(await r.json());
     } catch { /* silent */ }
   };
+
+  // Crew: fresh jobs, or the copy saved on the phone when there's no signal
+  const applyCrewBookings = ({ data, savedAt }) => {
+    if (data) setBookings(data);
+    setCrewSavedAt(savedAt);
+  };
+  const loadCrewBookings = () => cachedGet('/bookings/', 'bookings').then(applyCrewBookings);
 
   useEffect(() => {
     if (!authTokens) return;
@@ -182,7 +196,7 @@ const StaffDashboard = () => {
       refreshActiveAttendance(),
     ];
     if (isFieldCrew) {
-      fetches.push(get('/bookings/').then(setBookings).catch(() => {}));
+      fetches.push(loadCrewBookings());
     } else {
       fetches.push(
         get('/bookings/counts/').then(setBookingCounts).catch(() => {}),
@@ -200,7 +214,7 @@ const StaffDashboard = () => {
   useEffect(() => {
     if (firstVisit.current) { firstVisit.current = false; return; }
     if (!isFieldCrew || !authTokens) return;
-    fetch(`${API}/bookings/`, { headers }).then(r => (r.ok ? r.json() : Promise.reject())).then(setBookings).catch(() => {});
+    cachedGet('/bookings/', 'bookings').then(applyCrewBookings);
   }, [location.key]); // eslint-disable-line react-hooks/exhaustive-deps -- refetch per navigation only
 
   /* ── Derived counts ── */
@@ -253,6 +267,7 @@ const StaffDashboard = () => {
   };
 
   const refreshBookings = async () => {
+    if (isFieldCrew) return loadCrewBookings();
     const r = await fetch(`${API}/bookings/`, { headers });
     if (r.ok) setBookings(await r.json());
   };
@@ -339,8 +354,9 @@ const StaffDashboard = () => {
         <CrewDashboardView
           bookings={bookings}
           loading={loading}
-          activeAttendance={activeAttendance}
+          serverAttendance={activeAttendance}
           refreshActiveAttendance={refreshActiveAttendance}
+          savedAt={crewSavedAt}
           authTokens={authTokens}
           user={user}
           actionLoading={actionLoading}

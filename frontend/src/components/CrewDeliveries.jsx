@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Truck, Phone, Navigation, Banknote, CheckCircle2, AlertTriangle, RefreshCw, Package, Wallet } from 'lucide-react';
 import ProblemSheet from './ui/ProblemSheet';
+import { sendAction } from '../crew/outbox';
 
 /* Field crew delivery run (our own crew deliver shop orders).
    Shipped → "Start delivery" (Out for Delivery) → "Delivered". Marking a Cash on Delivery
@@ -34,20 +35,20 @@ export default function CrewDeliveries({ api, authHeaders, toast, run, loading, 
     }
     setBusy(order.id);
     try {
-      const r = await fetch(`${api}/orders/${order.id}/update_status/`, {
-        method: 'PATCH', headers: { ...authHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify({ status }),
+      const res = await sendAction({
+        label: status === 'Delivered' ? `Delivered order #${order.id}` : `On the way with order #${order.id}`,
+        path: `/orders/${order.id}/update_status/`, method: 'PATCH', body: { status }, kind: 'order_status', ref: { orderId: order.id },
       });
-      const d = await r.json().catch(() => ({}));
-      if (r.ok) {
+      if (res.queued) {
+        toast(`No signal: saved with the time you tapped. It will be sent when you have signal.`);
+      } else {
         toast(status === 'Delivered'
           ? (isCod(order) ? `Order #${order.id} delivered. ${peso(order.total_price)} added to your cash for today.` : `Order #${order.id} delivered.`)
           : `On the way to ${order.customer_name}.`);
         reload();
-      } else {
-        toast(d.error || 'Could not update the delivery.', 'error');
       }
-    } catch {
-      toast('No connection. Try again when you have signal.', 'error');
+    } catch (e) {
+      toast(e.message || 'Could not update the delivery.', 'error');
     }
     setBusy(null);
   };
@@ -173,7 +174,7 @@ export default function CrewDeliveries({ api, authHeaders, toast, run, loading, 
               <li key={o.id} className="px-4 py-3 flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-slate-800 truncate">#{o.id} · {o.customer_name}</p>
-                  <p className="text-xs text-slate-400">{o.delivered_at && new Date(o.delivered_at).toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' })}</p>
+                  <p className="text-xs text-slate-400">{o.delivered_at && new Date(o.delivered_at).toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' })}{o.pending && <span className="text-amber-700 font-semibold"> · waiting for signal to send</span>}</p>
                 </div>
                 <span className={`text-sm font-bold shrink-0 ${isCod(o) ? 'text-amber-700' : 'text-emerald-700'}`}>{isCod(o) ? `${peso(o.total_price)} cash` : 'Paid online'}</span>
               </li>
