@@ -8,6 +8,7 @@ import PageHero from './ui/PageHero';
 import { color, cardStyle, inputStyle, labelStyle, radius } from './ui/tokens';
 import { useCart } from '../context/CartContext';
 import { lotPlantsToStudioItems } from '../data/sampleGarden';
+import { API_BASE_URL as API_ROOT } from '../config';
 import { plantBudgetFromAllIn } from '../data/pricing';
 import ThreeGardenCanvas from './ThreeGardenCanvas';
 import { useDesign } from '../context/DesignContext';
@@ -261,7 +262,7 @@ export default function AIGardenDesigner() {
     try {
       const form = new FormData();
       form.append('image', file);
-      const API_BASE_URL = import.meta.env?.VITE_API_BASE_URL || 'http://localhost:8000/api';
+      const API_BASE_URL = API_ROOT;
       const res = await axios.post(`${API_BASE_URL}/scan-zones/`, form, { headers: authHeaders() });
       if (scanFileRef.current !== file) return; // a newer photo replaced this one
       const zones = res.data.zones || [];
@@ -295,7 +296,7 @@ export default function AIGardenDesigner() {
     setLoading(true);
     setNotice('');
     setError('');
-    const API_BASE_URL = import.meta.env?.VITE_API_BASE_URL || 'http://localhost:8000/api';
+    const API_BASE_URL = API_ROOT;
     const headers = {};
     const storedAuth = localStorage.getItem('authTokens');
     if (storedAuth) {
@@ -446,7 +447,7 @@ export default function AIGardenDesigner() {
       return;
     }
     setBookingLoading(true);
-    const API_BASE_URL = import.meta.env?.VITE_API_BASE_URL || 'http://localhost:8000/api';
+    const API_BASE_URL = API_ROOT;
     const storedAuth = localStorage.getItem('authTokens');
     const tokens = storedAuth ? JSON.parse(storedAuth) : null;
     const authHeader = tokens?.access ? { Authorization: `Bearer ${tokens.access}` } : {};
