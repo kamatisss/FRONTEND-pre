@@ -1,7 +1,7 @@
 import { useLocation } from 'react-router-dom';
 import {
-  LayoutDashboard, Paintbrush, Calendar, Package, Clock, Layers, Users, Settings,
-  Image as ImageIcon, MessageSquare, Calculator, Sparkles, ShoppingBag, Archive, Home, CalendarPlus,
+  LayoutDashboard, Paintbrush, Calendar, Package, Clock, Layers, Users, Banknote, ScrollText, Building2, BarChart3,
+  Image as ImageIcon, MessageSquare, Calculator, Sparkles, ShoppingBag, Archive, Home, CalendarPlus, Truck, Sun, Briefcase, UserRound,
 } from 'lucide-react';
 
 // Customer navigation. `primary` links sit in the top bar on desktop; all of them
@@ -24,12 +24,26 @@ export function useStaffLinks(user) {
   const on = (path) => location.pathname === path;
   const staffTab = (t) => on('/staff-dashboard') && tab === t;
 
+  // Field crew only see their own screens (same tabs as the crew bottom bar)
+  if (user?.staff_role === 'FIELD_CREW') {
+    const crewTab = (t) => on('/staff-dashboard') && (new URLSearchParams(location.search).get('tab') || 'home') === t;
+    return [
+      { label: 'Today', icon: Sun, to: '/staff-dashboard?tab=home', active: crewTab('home') },
+      { label: 'Jobs', icon: Briefcase, to: '/staff-dashboard?tab=projects', active: crewTab('projects') },
+      { label: 'Deliveries', icon: Truck, to: '/staff-dashboard?tab=deliveries', active: crewTab('deliveries') },
+      { label: 'Me', icon: UserRound, to: '/staff-dashboard?tab=me', active: crewTab('me') || on('/staff-attendance') },
+    ];
+  }
+
   return [
-    { label: 'Overview / Dashboard', icon: LayoutDashboard, to: isAdmin ? '/admin-dashboard' : '/staff-dashboard?tab=overview',
+    { label: isAdmin ? 'Business overview' : 'Overview / Dashboard', icon: LayoutDashboard, to: isAdmin ? '/admin-dashboard' : '/staff-dashboard?tab=overview',
       active: on('/admin-dashboard') || staffTab('overview') },
     { label: 'Design Queue', icon: Paintbrush, to: '/staff-dashboard?tab=designs', active: staffTab('designs') },
     { label: 'Appointments', icon: Calendar, to: '/staff-dashboard?tab=bookings', active: staffTab('bookings') },
     { label: 'Order Fulfillment', icon: Package, to: '/staff-dashboard?tab=orders', active: staffTab('orders') },
+    ...(user?.staff_role !== 'FIELD_CREW' ? [
+      { label: 'Cash from Crew', icon: Banknote, to: '/staff-dashboard?tab=cash', active: staffTab('cash') },
+    ] : []),
     { label: 'Attendance Tracking', icon: Clock, to: isAdmin ? '/admin-attendance' : '/staff-attendance',
       active: on('/admin-attendance') || on('/staff-attendance') },
     { label: 'Inventory Management', icon: Layers, to: '/inventory', active: on('/inventory') },
@@ -41,7 +55,9 @@ export function useStaffLinks(user) {
     ] : []),
     ...(isAdmin ? [
       { label: 'User Accounts', icon: Users, to: '/manage-users', active: on('/manage-users') },
-      { label: 'Global Settings', icon: Settings, to: '/admin-settings', active: on('/admin-settings') },
+      { label: 'Reports', icon: BarChart3, to: '/admin-reports', active: on('/admin-reports') },
+      { label: 'Activity Log', icon: ScrollText, to: '/admin-activity', active: on('/admin-activity') },
+      { label: 'Business Profile', icon: Building2, to: '/admin-settings', active: on('/admin-settings') },
     ] : []),
   ];
 }

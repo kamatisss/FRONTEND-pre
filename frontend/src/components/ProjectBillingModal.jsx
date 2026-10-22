@@ -45,6 +45,7 @@ export default function ProjectBillingModal({ booking, apiBase, headers, onClose
   const [priceInput, setPriceInput] = useState('');
   const [payAmount, setPayAmount] = useState('');
   const [payNote, setPayNote] = useState('');
+  const [payMethod, setPayMethod] = useState('cash');  // how it was paid: the Money in report splits by this
   const [stage, setStage] = useState('');
   const [stageNote, setStageNote] = useState('');
   const [requests, setRequests] = useState([]);
@@ -127,7 +128,7 @@ export default function ProjectBillingModal({ booking, apiBase, headers, onClose
 
   const recordPayment = async () => {
     const ok = await run(() => fetch(`${apiBase}/projects/${tracker.id}/record-payment/`, {
-      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ amount: payAmount, remarks: payNote }),
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ amount: payAmount, method: payMethod, remarks: payNote }),
     }), 'Payment recorded.');
     if (ok) { setPayAmount(''); setPayNote(''); }
   };
@@ -184,7 +185,7 @@ export default function ProjectBillingModal({ booking, apiBase, headers, onClose
   const btn = 'px-4 py-2 text-sm font-bold rounded-lg border-none cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <div className="sticky top-0 bg-white border-b border-slate-100 px-6 py-4 flex items-start justify-between gap-4 z-10">
@@ -246,6 +247,12 @@ export default function ProjectBillingModal({ booking, apiBase, headers, onClose
                     <label className="text-xs font-bold text-slate-600 block">Record a payment (₱)</label>
                     <input type="number" min="0" step="0.01" placeholder={balance > 0 ? `Up to ${peso(balance)}` : 'Fully paid'}
                       value={payAmount} onChange={(e) => setPayAmount(e.target.value)} className={input} disabled={balance <= 0} />
+                    <select aria-label="How it was paid" value={payMethod} onChange={(e) => setPayMethod(e.target.value)} className={input} disabled={balance <= 0}>
+                      <option value="cash">Cash</option>
+                      <option value="bank">Bank transfer</option>
+                      <option value="ewallet">GCash / Maya transfer</option>
+                      <option value="other">Other</option>
+                    </select>
                     <div className="flex gap-2">
                       <input type="text" placeholder="Note (e.g. Downpayment, GCash ref)" value={payNote}
                         onChange={(e) => setPayNote(e.target.value)} className={input} disabled={balance <= 0} maxLength={120} />

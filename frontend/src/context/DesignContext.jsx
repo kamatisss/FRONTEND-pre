@@ -1,4 +1,5 @@
 import { createContext, useContext, useReducer, useCallback } from 'react';
+import { DEFAULT_TIME_OF_DAY } from '../data/studioLight';
 
 const DesignContext = createContext(null);
 
@@ -23,7 +24,7 @@ const initialState = {
 
   // Design settings
   terrainHeight: 1.5,
-  timeOfDay: 14,
+  timeOfDay: DEFAULT_TIME_OF_DAY,
   dimensions: { width: 10, length: 15, terrainType: 'flat' },
 
   // Save/load
@@ -74,7 +75,7 @@ function reducer(state, action) {
           unit_price: Number(product.unit_price),
           position: { x: randomX, y: 0, z: randomZ },
           rotation: { x: 0, y: Math.random() * Math.PI * 2, z: 0 },
-          scale: { x: 0.8, y: 0.8, z: 0.8 },
+          scale: { x: 1, y: 1, z: 1 },   // real size (data/modelSizing.js)
         },
       };
     }

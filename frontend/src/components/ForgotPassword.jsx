@@ -1,263 +1,137 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Mail, User, Lock, Leaf, AlertCircle, CheckCircle2, ArrowLeft, Loader2, Eye, EyeOff } from 'lucide-react';
-import { resetPassword } from '../services/api';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Mail, Lock, Leaf, AlertCircle, CheckCircle2, ArrowLeft, Loader2, Eye, EyeOff } from 'lucide-react';
+import { requestPasswordReset, confirmPasswordReset } from '../services/api';
 
-export default function ForgotPassword() {
-  const [step, setStep]               = useState(1); // 1 = identify, 2 = new password
-  const [username, setUsername]       = useState('');
-  const [email, setEmail]             = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPwd, setConfirmPwd]   = useState('');
-  const [showPwd, setShowPwd]         = useState(false);
-  const [loading, setLoading]         = useState(false);
-  const [success, setSuccess]         = useState(false);
-  const [error, setError]             = useState('');
+/*
+ * Forgot password, in two steps:
+ *   /forgot-password                       enter your email → we email a one-time link
+ *   /reset-password?uid=…&token=…          (that link) choose a new password
+ * The server never says whether an email has an account, and each link works once.
+ * (It used to reset a password for anyone who typed a username + email: removed for security.)
+ */
 
-  // Step 1: Verify identity (username + email)
-  const handleVerify = (e) => {
+const INPUT = 'w-full h-12 pl-11 pr-3 rounded-xl border border-slate-300 bg-white text-slate-900 text-[15px] focus:outline-none focus:border-emerald-500';
+
+function Shell({ children }) {
+  return (
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4 py-10" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
+      <div className="w-full max-w-md bg-white border border-slate-200 rounded-2xl shadow-sm p-6 md:p-8">
+        <Link to="/" className="inline-flex items-center gap-2 text-slate-900 font-extrabold no-underline mb-6">
+          <span className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center"><Leaf size={18} /></span> Garden Studio
+        </Link>
+        {children}
+        <Link to="/login" className="mt-6 inline-flex items-center gap-1.5 text-sm font-semibold text-emerald-700 no-underline">
+          <ArrowLeft size={15} /> Back to sign in
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+function Alert({ type, children }) {
+  const ok = type === 'ok';
+  return (
+    <p role={ok ? 'status' : 'alert'} className={`m-0 mb-4 flex gap-2 text-sm font-semibold rounded-xl px-4 py-3 border
+      ${ok ? 'text-emerald-800 bg-emerald-50 border-emerald-200' : 'text-red-700 bg-red-50 border-red-200'}`}>
+      {ok ? <CheckCircle2 size={18} className="shrink-0" /> : <AlertCircle size={18} className="shrink-0" />}{children}
+    </p>
+  );
+}
+
+function RequestLink() {
+  const [email, setEmail] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState('');
+  const [error, setError] = useState('');
+
+  const submit = async (e) => {
     e.preventDefault();
     setError('');
-    if (!username.trim() || !email.trim()) {
-      setError('Please enter both your username and email.');
-      return;
-    }
-    setStep(2);
-  };
-
-  // Step 2: Submit new password
-  const handleReset = async (e) => {
-    e.preventDefault();
-    setError('');
-
-    if (newPassword.length < 8) {
-      setError('Password must be at least 8 characters.');
-      return;
-    }
-    if (newPassword !== confirmPwd) {
-      setError('Passwords do not match.');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      await resetPassword({ username, email, new_password: newPassword });
-      setSuccess(true);
-    } catch (err) {
-      setError(err.message || 'Something went wrong. Please try again.');
-    } finally {
-      setLoading(false);
-    }
+    if (!email.trim()) { setError('Enter the email on your account.'); return; }
+    setBusy(true);
+    try { setSent((await requestPasswordReset(email.trim())).message); }
+    catch (err) { setError(err.message); }
+    finally { setBusy(false); }
   };
 
   return (
-    <div className="auth-page-wrapper">
-      {/* Background blobs */}
-      <div className="auth-bg-blob auth-bg-blob--top" />
-      <div className="auth-bg-blob auth-bg-blob--bottom" />
-
-      <motion.div
-        initial={{ opacity: 0, y: 30 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, ease: 'easeOut' }}
-        className="auth-card-container"
-      >
-        <div className="auth-card">
-          {/* Logo */}
-          <div className="auth-logo-section">
-            <div className="auth-logo-icon">
-              <Leaf size={32} className="auth-logo-leaf" />
-            </div>
-            <h1 className="auth-title">Reset Password</h1>
-            <p className="auth-subtitle">
-              {step === 1
-                ? "Enter your username and email to verify your account."
-                : "Choose a new password for your account."}
-            </p>
+    <Shell>
+      <h1 className="m-0 text-2xl font-extrabold text-slate-900 tracking-tight">Forgot your password?</h1>
+      <p className="m-0 mt-1 mb-5 text-sm text-slate-500">Enter the email on your account and we'll send you a link to choose a new one.</p>
+      {sent ? <Alert type="ok">{sent}</Alert> : (
+        <form onSubmit={submit} noValidate>
+          {error && <Alert>{error}</Alert>}
+          <label htmlFor="fp-email" className="block text-xs font-bold text-slate-600 mb-1">Email</label>
+          <div className="relative mb-4">
+            <Mail size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input id="fp-email" type="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} className={INPUT} placeholder="you@example.com" />
           </div>
-
-          {/* Error Banner */}
-          <AnimatePresence>
-            {error && (
-              <motion.div
-                key="error"
-                initial={{ opacity: 0, y: -10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                className="auth-error-banner"
-              >
-                <AlertCircle size={18} />
-                <span>{error}</span>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Success State */}
-          {success ? (
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="auth-success-block"
-            >
-              <div className="auth-success-icon-wrap">
-                <CheckCircle2 size={36} className="auth-success-icon" />
-              </div>
-              <h2 className="auth-success-title">Password updated!</h2>
-              <p className="auth-success-body">
-                Your password has been reset successfully. You can now log in with your new password.
-              </p>
-              <Link to="/login" className="auth-btn auth-btn--primary auth-btn--full">
-                <ArrowLeft size={16} /> Go to Login
-              </Link>
-            </motion.div>
-          ) : (
-            <AnimatePresence mode="wait">
-              {/* ── Step 1: Identity Verification ── */}
-              {step === 1 && (
-                <motion.form
-                  key="step1"
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: 20 }}
-                  transition={{ duration: 0.25 }}
-                  onSubmit={handleVerify}
-                  className="auth-form"
-                >
-                  {/* Username */}
-                  <div className="auth-field">
-                    <label className="auth-label">Username</label>
-                    <div className="auth-input-wrap">
-                      <User size={18} className="auth-input-icon" />
-                      <input
-                        id="fp-username"
-                        type="text"
-                        placeholder="Your username"
-                        value={username}
-                        onChange={(e) => setUsername(e.target.value)}
-                        required
-                        autoComplete="username"
-                        className="auth-input auth-input--icon"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Email */}
-                  <div className="auth-field">
-                    <label className="auth-label">Email Address</label>
-                    <div className="auth-input-wrap">
-                      <Mail size={18} className="auth-input-icon" />
-                      <input
-                        id="fp-email"
-                        type="email"
-                        placeholder="your@email.com"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        required
-                        autoComplete="email"
-                        className="auth-input auth-input--icon"
-                      />
-                    </div>
-                  </div>
-
-                  <button type="submit" className="auth-btn auth-btn--primary auth-btn--full">
-                    Verify Account →
-                  </button>
-
-                  <p className="auth-footer-text">
-                    Remember your password?{' '}
-                    <Link to="/login" className="auth-link">Sign in →</Link>
-                  </p>
-                </motion.form>
-              )}
-
-              {/* ── Step 2: New Password ── */}
-              {step === 2 && (
-                <motion.form
-                  key="step2"
-                  initial={{ opacity: 0, x: 20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -20 }}
-                  transition={{ duration: 0.25 }}
-                  onSubmit={handleReset}
-                  className="auth-form"
-                >
-                  {/* Step indicator */}
-                  <div className="fp-step-info">
-                    <button
-                      type="button"
-                      onClick={() => { setStep(1); setError(''); }}
-                      className="fp-back-btn"
-                    >
-                      <ArrowLeft size={14} /> Back
-                    </button>
-                    <span className="fp-step-label">Resetting for <strong>{username}</strong></span>
-                  </div>
-
-                  {/* New Password */}
-                  <div className="auth-field">
-                    <label className="auth-label">New Password</label>
-                    <div className="auth-input-wrap">
-                      <Lock size={18} className="auth-input-icon" />
-                      <input
-                        id="fp-new-password"
-                        type={showPwd ? 'text' : 'password'}
-                        placeholder="Min. 8 characters"
-                        value={newPassword}
-                        onChange={(e) => setNewPassword(e.target.value)}
-                        required
-                        autoComplete="new-password"
-                        className="auth-input auth-input--icon auth-input--icon-right"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPwd(p => !p)}
-                        className="auth-toggle-pwd"
-                        aria-label={showPwd ? 'Hide password' : 'Show password'}
-                      >
-                        {showPwd ? <EyeOff size={18} /> : <Eye size={18} />}
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Confirm Password */}
-                  <div className="auth-field">
-                    <label className="auth-label">Confirm New Password</label>
-                    <div className="auth-input-wrap">
-                      <Lock size={18} className="auth-input-icon" />
-                      <input
-                        id="fp-confirm-password"
-                        type={showPwd ? 'text' : 'password'}
-                        placeholder="Repeat your new password"
-                        value={confirmPwd}
-                        onChange={(e) => setConfirmPwd(e.target.value)}
-                        required
-                        autoComplete="new-password"
-                        className="auth-input auth-input--icon"
-                      />
-                    </div>
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={loading}
-                    className="auth-btn auth-btn--primary auth-btn--full"
-                  >
-                    {loading ? (
-                      <><Loader2 size={18} className="auth-spinner" /> Resetting...</>
-                    ) : 'Reset Password'}
-                  </button>
-                </motion.form>
-              )}
-            </AnimatePresence>
-          )}
-        </div>
-
-        {/* Back to Landing */}
-        <p className="auth-back-link">
-          <Link to="/">← Back to Garden Studio</Link>
-        </p>
-      </motion.div>
-    </div>
+          <button type="submit" disabled={busy}
+            className="w-full h-12 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-bold border-none cursor-pointer flex items-center justify-center gap-2">
+            {busy && <Loader2 size={18} className="animate-spin" />} Send me a reset link
+          </button>
+        </form>
+      )}
+      <p className="m-0 mt-4 text-xs text-slate-500">No email on your account, or staff? Ask the owner to set a new password for you.</p>
+    </Shell>
   );
+}
+
+function ChooseNewPassword({ uid, token }) {
+  const navigate = useNavigate();
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (password.length < 8) { setError('Use at least 8 characters.'); return; }
+    if (password !== confirm) { setError('The two passwords do not match.'); return; }
+    setBusy(true);
+    try {
+      const res = await confirmPasswordReset({ uid, token, new_password: password });
+      navigate('/login', { replace: true, state: { message: res.message } });
+    } catch (err) { setError(err.message); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Shell>
+      <h1 className="m-0 text-2xl font-extrabold text-slate-900 tracking-tight">Choose a new password</h1>
+      <p className="m-0 mt-1 mb-5 text-sm text-slate-500">At least 8 characters, not all numbers, and not a common password.</p>
+      <form onSubmit={submit} noValidate>
+        {error && <Alert>{error}{/link/.test(error) && <> <Link to="/forgot-password" className="underline">Get a new link</Link></>}</Alert>}
+        {[['fp-new', 'New password', password, setPassword, 'new-password'], ['fp-confirm', 'Type it again', confirm, setConfirm, 'new-password']].map(([id, label, value, set, ac]) => (
+          <div key={id} className="mb-4">
+            <label htmlFor={id} className="block text-xs font-bold text-slate-600 mb-1">{label}</label>
+            <div className="relative">
+              <Lock size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input id={id} type={show ? 'text' : 'password'} autoComplete={ac} value={value} onChange={e => set(e.target.value)} className={`${INPUT} pr-11`} />
+              {id === 'fp-new' && (
+                <button type="button" onClick={() => setShow(s => !s)} aria-label={show ? 'Hide password' : 'Show password'}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 flex items-center justify-center bg-transparent border-none text-slate-500 cursor-pointer">
+                  {show ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+        <button type="submit" disabled={busy}
+          className="w-full h-12 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-bold border-none cursor-pointer flex items-center justify-center gap-2">
+          {busy && <Loader2 size={18} className="animate-spin" />} Save new password
+        </button>
+      </form>
+    </Shell>
+  );
+}
+
+export default function ForgotPassword() {
+  const [params] = useSearchParams();
+  const uid = params.get('uid');
+  const token = params.get('token');
+  return uid && token ? <ChooseNewPassword uid={uid} token={token} /> : <RequestLink />;
 }

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { CheckCircle, Clock, XCircle, Leaf, CreditCard, Loader2, Shield } from 'lucide-react';
 import { getProjectPayment, startProjectPayment } from '../services/api';
+import { usePageScroll } from './ui/usePageScroll';
 
 const POLL_MS = 3000;
 const MAX_POLLS = 10; // ~30s for the e-wallet/bank confirmation to reach us
@@ -31,6 +32,7 @@ export default function ProjectPayment() {
   const [polls, setPolls]     = useState(0);
   const [paying, setPaying]   = useState(false);
   const [payError, setPayError] = useState('');
+  usePageScroll();
 
   useEffect(() => {
     getProjectPayment(token).then(setReq).catch(e => setError(e.message));

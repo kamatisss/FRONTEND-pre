@@ -186,7 +186,7 @@ function EnhancedAssetCard({ product, isSelected, onClick }) {
 /* ══════════════════════════════════════════════════════════════
    MAIN COMPONENT
 ══════════════════════════════════════════════════════════════ */
-export default function AssetLibrarySidebar({ category }) {
+export default function AssetLibrarySidebar({ category, onPick }) {
   const { state, dispatch } = useDesign();
   const [search, setSearch]             = useState('');
   const [activeTab, setActiveTab]       = useState(category || 'all');
@@ -227,6 +227,7 @@ export default function AssetLibrarySidebar({ category }) {
     }
     if (isPlacing) dispatch({ type: 'CANCEL_PLACEMENT' });
     dispatch({ type: 'START_PLACING', payload: product });
+    onPick?.(product);   // phones: close the full library so the ground is tappable
   };
 
   // Count per tab

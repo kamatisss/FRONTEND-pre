@@ -328,8 +328,8 @@ const BookingManagement = () => {
                     {loading && bookings.length === 0 ? (
                         <p style={{ color: '#64748b', textAlign: 'center', margin: 0, padding: 'clamp(16px, 4vw, 32px)' }}>Loading bookings data...</p>
                     ) : (
-                        <div style={{ borderRadius: '12px', overflow: 'hidden', border: '1px solid #e2e8f0' }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                        <div className="rs-scroll-x" style={{ borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+                            <table style={{ width: '100%', minWidth: 1000, borderCollapse: 'collapse', textAlign: 'left' }}>
                                 <thead>
                                     <tr style={{ background: '#f8fafc' }}>
                                         <th style={thStyle}>Booking #</th>

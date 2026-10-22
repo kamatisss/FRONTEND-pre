@@ -16,6 +16,7 @@ import { useAuth } from '../context/AuthContext';
 import { saveGuestDesign, loadGuestDesign, loadAiPrefill, clearAiPrefill } from '../services/guestSession';
 import GuestAuthModal from './GuestAuthModal';
 import { useIsPhone, useMediaQuery } from './ui/useMediaQuery';
+import { DEFAULT_TIME_OF_DAY } from '../data/studioLight';
 
 const LOADING_PHASES = [
   'Analyzing your garden space…',
@@ -113,7 +114,12 @@ export default function AIGardenDesigner() {
   // Coming from the 3D Studio's "Let AI design it": reuse its yard size and plants
   const [prefill] = useState(() => (user ? loadAiPrefill() : null));
   const [prefillNote, setPrefillNote] = useState(!!prefill);
-  useEffect(() => { if (prefill) clearAiPrefill(); }, [prefill]);
+  useEffect(() => {
+    if (!prefill) return;
+    clearAiPrefill();
+    if (typeof prefill.install === 'boolean') setInstall(prefill.install);
+    if (prefill.budgetRange?.max) setBudgetRange(prefill.budgetRange);
+  }, [prefill]);
 
   const [lotWidth, setLotWidth] = useState(prefill?.lotWidth || 10.0);
   const [lotLength, setLotLength] = useState(prefill?.lotLength || 10.0);
@@ -377,7 +383,7 @@ export default function AIGardenDesigner() {
         depthData: null,
         originalImageUrl: null,
         terrainHeight: 1.5,
-        timeOfDay: 14,
+        timeOfDay: DEFAULT_TIME_OF_DAY,
       },
     });
     dispatch({ type: 'SET_DESIGN_META', payload: { isDirty: true } });
@@ -809,8 +815,10 @@ export default function AIGardenDesigner() {
           }}>
             <Sparkles size={16} style={{ flexShrink: 0 }} />
             <span style={{ flex: 1 }}>
-              We filled in your {prefill.lotWidth} × {prefill.lotLength} m yard
-              {prefill.plantIds?.length ? ` and the ${prefill.plantIds.length} plant type${prefill.plantIds.length > 1 ? 's' : ''} you picked` : ''} from the 3D Studio. Set your budget and generate.
+              {prefill.source === 'estimate'
+                ? <>We filled in your {prefill.lotWidth} × {prefill.lotLength} m yard and the budget from your estimate. Adjust anything, then generate.</>
+                : <>We filled in your {prefill.lotWidth} × {prefill.lotLength} m yard
+                  {prefill.plantIds?.length ? ` and the ${prefill.plantIds.length} plant type${prefill.plantIds.length > 1 ? 's' : ''} you picked` : ''} from the 3D Studio. Set your budget and generate.</>}
             </span>
             <button onClick={() => setPrefillNote(false)} aria-label="Dismiss"
               style={{ border: 'none', background: 'none', color: '#065F46', cursor: 'pointer', fontWeight: 800 }}>×</button>

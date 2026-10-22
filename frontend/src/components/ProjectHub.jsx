@@ -1,54 +1,60 @@
 import React, { lazy, Suspense, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
-  Leaf, MapPin, Ruler, CalendarCheck, Clock, Tag, ShieldCheck, Star, Quote,
-  ArrowLeft, ArrowRight, Users, Sprout, X, Image as ImageIcon, Eye, Box, ShoppingBag,
+  MapPin, Ruler, CalendarCheck, Clock, Tag, ShieldCheck, Star, Quote,
+  ArrowLeft, ArrowRight, Users, Sprout, X, Image as ImageIcon, Eye, Box, ShoppingBag, ChevronRight, Sparkles,
 } from 'lucide-react';
 // Lazy: the landing page and gallery use ProjectCard and shouldn't pull in three.js
 const ThreeGardenCanvas = lazy(() => import('./ThreeGardenCanvas'));
 import { useAuth } from '../context/AuthContext';
+import { usePageScroll } from './ui/usePageScroll';
+import { SiteHeader, SiteFooter } from './SiteChrome';
 import { getPublicProjects, getPublicProject } from '../services/api';
 import { fmtDate, fmtArea, peso, toCanvasPlants } from '../data/projectHub';
 
 /* Project Hub — public portfolio of finished, customer-approved gardens. */
 
-// body is overflow:hidden app-wide (App.css); public pages scroll like the landing page
-function usePageScroll() {
-  useEffect(() => {
-    const { html, body } = { html: document.documentElement, body: document.body };
-    const prev = [html.style.overflow, html.style.height, body.style.overflow, body.style.height];
-    html.style.overflow = 'auto'; html.style.height = 'auto';
-    body.style.overflow = 'auto'; body.style.height = 'auto';
-    return () => {
-      [html.style.overflow, html.style.height, body.style.overflow, body.style.height] = prev;
-    };
-  }, []);
+// The public site's shared header (same as the landing page), for full-page public screens
+export function PublicHeader() {
+  usePageScroll();
+  return <SiteHeader />;
 }
 
-const dashboardPath = (user) =>
-  user?.is_superuser ? '/admin-dashboard' : user?.is_staff ? '/staff-dashboard' : '/user-dashboard';
-
-export function PublicHeader() {
-  const { user } = useAuth();
-  usePageScroll();
+// Where every public page ends: a next step instead of a dead end, then the site footer
+export function PageEnd({ title, text, children }) {
   return (
-    <header className="sticky top-0 z-30 bg-white/90 backdrop-blur border-b border-slate-200">
-      <div className="max-w-6xl mx-auto px-4 md:px-6 h-16 flex items-center justify-between gap-4">
-        <Link to="/" className="flex items-center gap-2 no-underline text-slate-900 font-black text-lg tracking-tight">
-          <Leaf size={22} color="#10b981" /> Garden Studio
-        </Link>
-        <nav className="flex items-center gap-2 md:gap-4 text-sm font-semibold">
-          <Link to="/projects" className="text-slate-600 hover:text-emerald-600 no-underline">Projects</Link>
-          <Link to="/track-record" className="hidden sm:inline text-slate-600 hover:text-emerald-600 no-underline">Track Record</Link>
-          <Link to="/ai-designer" className="hidden sm:inline text-slate-600 hover:text-emerald-600 no-underline">AI Designer</Link>
-          {user ? (
-            <Link to={dashboardPath(user)} className="px-4 py-2 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white no-underline">My Dashboard</Link>
-          ) : (
-            <Link to="/login" className="px-4 py-2 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white no-underline">Log In</Link>
-          )}
-        </nav>
-      </div>
-    </header>
+    <>
+      <section className="bg-slate-900">
+        <div className="max-w-6xl mx-auto px-4 md:px-6 py-12 md:py-14 flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+          <div>
+            <h2 className="text-2xl md:text-3xl font-black text-white tracking-tight m-0 mb-2">{title}</h2>
+            <p className="text-slate-300 m-0 max-w-xl leading-relaxed">{text}</p>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-3 shrink-0">{children}</div>
+        </div>
+      </section>
+      <SiteFooter />
+    </>
+  );
+}
+const endPrimary = 'inline-flex items-center justify-center gap-2 min-h-[48px] px-6 rounded-full bg-emerald-500 hover:bg-emerald-400 text-white font-bold no-underline border-none cursor-pointer text-base';
+const endSecondary = 'inline-flex items-center justify-center gap-2 min-h-[48px] px-6 rounded-full border border-white/30 hover:border-emerald-300 bg-transparent text-white font-bold no-underline cursor-pointer text-base';
+
+function Breadcrumbs({ title }) {
+  return (
+    <nav aria-label="Breadcrumb" className="mb-5">
+      <ol className="flex items-center gap-1.5 text-sm font-semibold text-slate-500 list-none m-0 p-0 min-w-0">
+        <li className="shrink-0"><Link to="/" className="text-slate-500 hover:text-emerald-600 no-underline">Home</Link></li>
+        <li className="shrink-0" aria-hidden="true"><ChevronRight size={14} className="text-slate-300 block" /></li>
+        <li className="shrink-0"><Link to="/projects" className="text-slate-500 hover:text-emerald-600 no-underline">Projects</Link></li>
+        {title && (
+          <>
+            <li className="shrink-0" aria-hidden="true"><ChevronRight size={14} className="text-slate-300 block" /></li>
+            <li aria-current="page" className="text-slate-800 truncate min-w-0">{title}</li>
+          </>
+        )}
+      </ol>
+    </nav>
   );
 }
 
@@ -183,6 +189,11 @@ export function ProjectGallery() {
           </div>
         )}
       </main>
+
+      <PageEnd title="Picture one of these in your yard" text="Design your garden in 3D for free, or let our AI lay it out for your budget.">
+        <Link to="/try-studio" className={endPrimary}>Design my garden free <ArrowRight size={16} /></Link>
+        <Link to="/ai-designer" className={endSecondary}><Sparkles size={16} /> Let AI design it</Link>
+      </PageEnd>
     </div>
   );
 }
@@ -195,11 +206,19 @@ export function ProjectDetail() {
   const [loaded,   setLoaded]   = useState({ slug: null });
   const [lightbox, setLightbox] = useState(null);
   const [show3d,   setShow3d]   = useState(false);
+  const [others,   setOthers]   = useState([]);
 
   useEffect(() => {
     getPublicProject(slug)
       .then(project => setLoaded({ slug, project }))
       .catch(e => setLoaded({ slug, error: e.message }));
+  }, [slug]);
+
+  // "More projects": a way onward at the end of the page, same kind of project first
+  useEffect(() => {
+    getPublicProjects({ limit: 7 })
+      .then(d => setOthers(d.results.filter(p => p.slug !== slug)))
+      .catch(() => {});
   }, [slug]);
 
   // Ignore a previous project's result while the next slug loads
@@ -223,16 +242,20 @@ export function ProjectDetail() {
 
   if (error || !project) {
     return (
-      <div className="min-h-screen bg-slate-50">
+      <div className="min-h-screen bg-slate-50 flex flex-col" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
         <PublicHeader />
-        <div className="max-w-3xl mx-auto px-4 py-20 text-center">
-          {error ? (
-            <>
-              <p className="text-xl font-bold text-slate-800">This project isn't available.</p>
-              <Link to="/projects" className="text-emerald-600 font-semibold">See all projects</Link>
-            </>
-          ) : <p className="text-slate-400">Loading project…</p>}
+        <div className="flex-1 max-w-6xl w-full mx-auto px-4 md:px-6 py-6 md:py-10">
+          <Breadcrumbs />
+          <div className="text-center py-16">
+            {error ? (
+              <>
+                <p className="text-xl font-bold text-slate-800">This project isn't available.</p>
+                <Link to="/projects" className="text-emerald-600 font-semibold">See all projects</Link>
+              </>
+            ) : <p className="text-slate-400">Loading project…</p>}
+          </div>
         </div>
+        {error && <SiteFooter />}
       </div>
     );
   }
@@ -269,9 +292,7 @@ export function ProjectDetail() {
       )}
 
       <main className="max-w-6xl mx-auto px-4 md:px-6 py-6 md:py-10">
-        <Link to="/projects" className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 hover:text-emerald-600 no-underline mb-5">
-          <ArrowLeft size={15} /> All projects
-        </Link>
+        <Breadcrumbs title={project.title} />
 
         <div className="mb-6">
           <p className="text-xs font-extrabold tracking-widest uppercase text-emerald-600 m-0 mb-2">{project.service_type}</p>
@@ -467,7 +488,31 @@ export function ProjectDetail() {
             )}
           </aside>
         </div>
+
+        {others.length > 0 && (
+          <section className="mt-14 pt-10 border-t border-slate-200" aria-labelledby="more-projects">
+            <div className="flex flex-wrap items-end justify-between gap-3 mb-6">
+              <h2 id="more-projects" className="text-2xl font-black text-slate-900 m-0">More gardens we've built</h2>
+              <Link to="/projects" className="inline-flex items-center gap-1 text-sm font-bold text-emerald-700 no-underline hover:underline">
+                See all projects <ArrowRight size={15} />
+              </Link>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+              {[...others]
+                .sort((a, b) => Number(b.service_type === project.service_type) - Number(a.service_type === project.service_type))
+                .slice(0, 3)
+                .map(p => <ProjectCard key={p.slug} project={p} />)}
+            </div>
+          </section>
+        )}
       </main>
+
+      {isCustomer ? (
+        <PageEnd title="Want a garden like this?" text={`Design yours in 3D for free, or book a visit and we'll plan a ${project.service_type.toLowerCase()} project for your space.`}>
+          <Link to="/try-studio" className={endPrimary}>Design my garden free <ArrowRight size={16} /></Link>
+          <button type="button" onClick={bookSimilar} className={endSecondary}>Book a similar project</button>
+        </PageEnd>
+      ) : <SiteFooter />}
 
       {lightbox !== null && media[lightbox] && (
         <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4" onClick={() => setLightbox(null)}>

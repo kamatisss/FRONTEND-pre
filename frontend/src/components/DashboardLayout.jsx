@@ -44,6 +44,8 @@ const DashboardLayout = ({ children }) => {
         '/manage-users',
         '/manage-availability',
         '/admin-settings',
+        '/admin-activity',
+        '/admin-reports',
         '/view-bookings',
         '/staff-attendance',
         '/admin-attendance',

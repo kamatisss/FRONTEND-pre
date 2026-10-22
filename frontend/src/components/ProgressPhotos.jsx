@@ -13,7 +13,7 @@ const PHASES = [
  * These feed the Project Hub portfolio once the job is signed off.
  * Photos are re-encoded on the server, which strips the phone's GPS metadata.
  */
-export default function ProgressPhotos({ booking, user, toast, canUpload = true }) {
+export default function ProgressPhotos({ booking, user, toast, canUpload = true, onUploaded }) {
   const [open,     setOpen]     = useState(false);
   const [photos,   setPhotos]   = useState(null);
   const [phase,    setPhase]    = useState(booking.status === 'Installing' ? 'DURING' : 'BEFORE');
@@ -39,6 +39,7 @@ export default function ProgressPhotos({ booking, user, toast, canUpload = true 
       setNote('');
       setInputKey(k => k + 1);
       toast && toast(`${PHASES.find(p => p.key === phase).label} photo saved.`);
+      onUploaded && onUploaded();
     } catch (e) {
       setError(e.message);
     }
@@ -50,6 +51,7 @@ export default function ProgressPhotos({ booking, user, toast, canUpload = true 
     try {
       await deleteProgressPhoto(booking.id, photo.id);
       setPhotos(prev => prev.filter(p => p.id !== photo.id));
+      onUploaded && onUploaded();
     } catch (e) {
       toast ? toast(e.message, 'error') : setError(e.message);
     }
@@ -61,12 +63,12 @@ export default function ProgressPhotos({ booking, user, toast, canUpload = true 
     <div className="border border-slate-200 rounded-xl overflow-hidden">
       <button
         onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center justify-between px-3 py-2.5 bg-white hover:bg-slate-50 cursor-pointer border-none text-left"
+        className="w-full min-h-[48px] flex items-center justify-between px-3 py-2.5 bg-white hover:bg-slate-50 cursor-pointer border-none text-left"
       >
-        <span className="flex items-center gap-2 text-xs font-bold text-slate-700">
-          <Camera size={14} className="text-orange-500" /> Site Photos
+        <span className="flex items-center gap-2 text-sm font-bold text-slate-700">
+          <Camera size={15} className="text-emerald-600" /> Site photos
           {photos && photos.length > 0 && (
-            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-700">{photos.length}</span>
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800">{photos.length}</span>
           )}
         </span>
         {open ? <ChevronUp size={14} className="text-slate-400" /> : <ChevronDown size={14} className="text-slate-400" />}
@@ -82,8 +84,8 @@ export default function ProgressPhotos({ booking, user, toast, canUpload = true 
                     key={p.key}
                     onClick={() => setPhase(p.key)}
                     title={p.hint}
-                    className={`py-2 rounded-lg text-xs font-bold border cursor-pointer transition-colors
-                      ${phase === p.key ? 'bg-orange-500 text-white border-orange-500' : 'bg-white text-slate-600 border-slate-200 hover:border-orange-300'}`}
+                    className={`min-h-[44px] rounded-lg text-sm font-bold border cursor-pointer transition-colors
+                      ${phase === p.key ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-600 border-slate-200 hover:border-emerald-300'}`}
                   >
                     {p.label}{photos ? ` · ${counts[p.key]}` : ''}
                   </button>
@@ -96,7 +98,7 @@ export default function ProgressPhotos({ booking, user, toast, canUpload = true 
                 capture="environment"
                 disabled={busy}
                 onChange={e => setFile(e.target.files?.[0] || null)}
-                className="w-full text-xs text-slate-600 px-2 py-1.5 border border-slate-200 rounded-lg bg-white cursor-pointer"
+                className="w-full text-sm text-slate-600 px-2 py-2.5 border border-slate-200 rounded-lg bg-white cursor-pointer"
               />
               <input
                 type="text"
@@ -104,22 +106,22 @@ export default function ProgressPhotos({ booking, user, toast, canUpload = true 
                 maxLength={500}
                 onChange={e => setNote(e.target.value)}
                 placeholder="Short note (optional), e.g. 'Front lawn after sod laying'"
-                className="w-full text-xs px-2.5 py-2 border border-slate-200 rounded-lg bg-white"
+                className="w-full text-sm px-3 py-2.5 border border-slate-200 rounded-lg bg-white"
               />
               <button
                 onClick={handleUpload}
                 disabled={busy || !file}
-                className="flex items-center justify-center gap-2 w-full py-2.5 bg-slate-900 hover:bg-slate-700 text-white text-xs font-bold rounded-lg border-none cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                className="flex items-center justify-center gap-2 w-full min-h-[48px] bg-slate-900 hover:bg-slate-700 text-white text-sm font-bold rounded-lg border-none cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <Upload size={13} /> {busy ? 'Uploading…' : `Upload ${PHASES.find(p => p.key === phase).label} Photo`}
               </button>
-              <p className="text-[10px] text-slate-400 m-0 leading-relaxed">
+              <p className="text-xs text-slate-500 m-0 leading-relaxed">
                 Shoot the garden, not people or plate numbers. Location data is removed from the photo automatically.
               </p>
             </div>
           )}
 
-          {error && <p className="text-[11px] text-red-600 font-semibold m-0">{error}</p>}
+          {error && <p className="text-sm text-red-700 font-semibold m-0" role="alert">{error}</p>}
 
           {photos === null ? (
             <p className="text-xs text-slate-400 m-0">Loading photos…</p>

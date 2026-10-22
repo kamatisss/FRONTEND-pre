@@ -4,16 +4,21 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 // Catalog models are Meshopt-compressed (see scripts/optimize-models.md); drei's useGLTF enables this by default
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
+import { realScale } from '../data/modelSizing';
 import { getInventoryItems } from '../services/api';
 import { resolveModelUrl } from '../data/modelCatalog';
 
 // height: canvas height in px. enableZoom / enablePan / autoRotate tune the orbit controls
 // (the landing hero turns zoom off so the mouse wheel keeps scrolling the page).
 // active=false pauses rendering, e.g. while the canvas is scrolled out of view.
+// lite: lighter rendering for phones (lower pixel ratio, smaller shadow map).
+// timeOfDay: hour 5–21 drives the sun (position, colour, sky) and, after dusk, warm garden
+// lights along the lot edge. null (the default) keeps the fixed daylight every other screen uses.
 export default function ThreeGardenCanvas({
   plants, lotWidth, lotLength, backgroundImageUrl, arMode = false, arGrid = false, horizonY = 0.5,
   photoTone = null, readOnly = false, preserveDrawingBuffer = false,
   height = 450, enableZoom = true, enablePan = true, autoRotate = false, active = true,
+  lite = false, timeOfDay = null,
 }) {
   const canvasRef = useRef(null);
   const aiPlantsGroupRef = useRef(null);
@@ -22,6 +27,9 @@ export default function ThreeGardenCanvas({
   const controlsRef = useRef(null);
   const horizonYRef = useRef(horizonY);
   const viewRef = useRef({ enableZoom, enablePan, autoRotate, active });
+  const lightingRef = useRef(null);       // { scene, sun, ambient, lamps, ... } for time-of-day updates
+  const timeOfDayRef = useRef(timeOfDay);
+  const liteRef = useRef(lite);
 
   // Orbit options + pause state change without rebuilding the scene
   useEffect(() => {
@@ -90,6 +98,12 @@ export default function ThreeGardenCanvas({
     }
   }, [arMode, photoTone]);
 
+  // Effect 5: move the sun / switch the garden lights without rebuilding the scene
+  useEffect(() => {
+    timeOfDayRef.current = timeOfDay;
+    if (lightingRef.current && timeOfDay != null) applyTimeOfDay(lightingRef.current, timeOfDay);
+  }, [timeOfDay]);
+
   // Effect 1: Initialize vanilla Three.js scene environment
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -139,7 +153,7 @@ export default function ThreeGardenCanvas({
     // 3. Renderer
     // preserveDrawingBuffer lets callers snapshot the canvas (portfolio 3D renders)
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, liteRef.current ? 1.5 : 2));
     renderer.setSize(width, height, false);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -152,8 +166,9 @@ export default function ThreeGardenCanvas({
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
     dirLight.position.set(cx + gw, Math.max(gw, gl) * 1.5, cz - gl);
     dirLight.castShadow = true;
-    dirLight.shadow.mapSize.width = 2048;
-    dirLight.shadow.mapSize.height = 2048;
+    const shadowSize = liteRef.current ? 1024 : 2048;
+    dirLight.shadow.mapSize.width = shadowSize;
+    dirLight.shadow.mapSize.height = shadowSize;
     dirLight.shadow.camera.near = 0.5;
     dirLight.shadow.camera.far = Math.max(gw, gl) * 8;
     const shadowBound = Math.max(gw, gl) * 1.5;
@@ -164,6 +179,15 @@ export default function ThreeGardenCanvas({
     dirLight.target.position.set(cx, 0, cz);
     scene.add(dirLight.target);
     scene.add(dirLight);
+
+    // Time-of-day rig (landing hero): warm garden lights along the lot edge, off in daylight
+    let lamps = null;
+    if (timeOfDayRef.current != null && !arMode) {
+      lamps = buildGardenLights(currentWidth, currentLength);
+      scene.add(lamps.group);
+      lightingRef.current = { scene, sun: dirLight, ambient: ambientLight, lamps, cx, cz, reach: Math.max(gw, gl) * 1.5 };
+      applyTimeOfDay(lightingRef.current, timeOfDayRef.current);
+    }
 
     // 5. Ground plane
     const groundGeo = new THREE.PlaneGeometry(gw, gl);
@@ -276,6 +300,8 @@ export default function ThreeGardenCanvas({
       groundMat.dispose();
       if (gridHelper) gridHelper.dispose();
       if (arGridHelper) arGridHelper.dispose();
+      if (lamps) lamps.dispose();
+      lightingRef.current = null;
       // Null out refs so Effects 3 & 4 don't touch disposed objects
       cameraRef.current      = null;
       controlsRef.current    = null;
@@ -467,13 +493,14 @@ export default function ThreeGardenCanvas({
             const maxDim = Math.max(size.x, size.y, size.z);
 
             if (maxDim > 0) {
-              let targetHeight = match.real_world_size || 1.0;
-              if (!match.real_world_size) {
-                if (pId.includes('tree')) targetHeight = 3.5;
-                else if (pId.includes('shrub')) targetHeight = 1.5;
+              let scaleFactor;
+              if (match.real_world_size) {
+                // Same rule as the Studio (data/modelSizing.js): height, or longest side for hardscape
+                scaleFactor = realScale(size, Number(match.real_world_size), match.category || 'plant');
+              } else {
+                const guess = pId.includes('tree') ? 3.5 : pId.includes('shrub') ? 1.5 : 1.0;
+                scaleFactor = guess / maxDim;
               }
-
-              const scaleFactor = targetHeight / maxDim;
               model.scale.setScalar(scaleFactor);
               // Pin lowest point of the model to ground level
               model.position.y = -box.min.y * scaleFactor;
@@ -501,4 +528,69 @@ export default function ThreeGardenCanvas({
       style={{ width: '100%', height: `${height}px`, display: 'block' }}
     />
   );
+}
+
+
+/* ── Time of day (landing hero) ─────────────────────────────────────────────── */
+const SKY = { noon: new THREE.Color('#eaf4fb'), golden: new THREE.Color('#fbe3c4'), night: new THREE.Color('#0d1b33') };
+const SUN = { noon: new THREE.Color('#fff7ea'), golden: new THREE.Color('#ffa65c'), moon: new THREE.Color('#9db2ff') };
+const clamp01 = (v) => Math.min(1, Math.max(0, v));
+
+// Low path lights along the front and sides of the lot, like a real installed garden
+function buildGardenLights(w, l) {
+  const group = new THREE.Group();
+  const lights = [];
+  const posts = [];
+  const capGeo = new THREE.CylinderGeometry(0.07, 0.09, 0.32, 10);
+  const glowMat = new THREE.MeshStandardMaterial({ color: '#2b2b2b', emissive: new THREE.Color('#ffc477'), emissiveIntensity: 0 });
+  const spots = [[0.12, 0.92], [0.5, 0.97], [0.88, 0.92], [0.04, 0.45], [0.96, 0.45]];
+  spots.forEach(([fx, fz]) => {
+    const x = fx * w;  // the lot spans 0..w × 0..l
+    const z = fz * l;
+    const post = new THREE.Mesh(capGeo, glowMat);
+    post.position.set(x, 0.16, z);
+    group.add(post);
+    posts.push(post);
+    const light = new THREE.PointLight('#ffbf70', 0, Math.max(w, l) * 0.55, 2);
+    light.position.set(x, 0.45, z);
+    group.add(light);
+    lights.push(light);
+  });
+  return {
+    group, lights, posts, glowMat,
+    dispose: () => { capGeo.dispose(); glowMat.dispose(); lights.forEach(li => li.dispose()); },
+  };
+}
+
+function applyTimeOfDay(rig, hour) {
+  const { scene, sun, ambient, lamps, cx, cz, reach } = rig;
+  const h = Math.min(21, Math.max(5, Number(hour) || 12));
+  const arc = clamp01((h - 6) / 12);                                  // 0 sunrise (east) → 1 sunset (west)
+  const elevation = Math.sin(Math.PI * arc);                          // 0 at the horizon, 1 at noon
+  const day = clamp01((h - 5.5) / 1.5) * clamp01((19 - h) / 1.5);     // 0 at night, 1 in daylight
+  const golden = day * (1 - clamp01(elevation / 0.55));               // warm light when the sun is low
+
+  // Sun (or moon at night)
+  if (day > 0) {
+    sun.position.set(cx + Math.cos(Math.PI * arc) * reach, Math.max(0.25, elevation) * reach, cz - reach * 0.45);
+    sun.color.copy(SUN.noon).lerp(SUN.golden, golden);
+    sun.intensity = 0.25 + day * (0.45 + 0.6 * elevation);
+  } else {
+    sun.position.set(cx - reach * 0.4, reach, cz - reach * 0.6);
+    sun.color.copy(SUN.moon);
+    sun.intensity = 0.22;
+  }
+  ambient.intensity = 0.22 + 0.5 * day;
+  ambient.color.copy(SUN.moon).lerp(new THREE.Color('#ffffff'), day);
+
+  // Sky
+  const sky = SKY.night.clone().lerp(SKY.noon, day).lerp(SKY.golden, golden * 0.85);
+  scene.background = sky;
+
+  // Garden lights fade in from dusk
+  const dark = 1 - day;
+  lamps.lights.forEach(li => { li.intensity = 9 * dark; });
+  lamps.glowMat.emissiveIntensity = 2.2 * dark;
+  // Posts only appear from dusk: in full daylight they read as specks on the lawn
+  lamps.posts.forEach(post => { post.visible = dark > 0.02; });
 }

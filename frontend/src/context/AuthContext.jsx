@@ -1,5 +1,6 @@
 import { createContext, useState, useEffect, useContext } from 'react';
 import { jwtDecode } from 'jwt-decode';
+import { disablePush } from '../services/push';
 import { useNavigate } from 'react-router-dom';
 
 const AuthContext = createContext();
@@ -60,6 +61,7 @@ export const AuthProvider = ({ children }) => {
    * preventing the user from using the back button to return to it.
    */
   const logoutUser = () => {
+    disablePush().catch(() => {});   // still signed in for this request; then local tokens go
     setAuthTokens(null);
     setUser(null);
     localStorage.removeItem('authTokens');

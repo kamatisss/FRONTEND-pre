@@ -697,9 +697,11 @@ const MyBookings = () => {
                     headers: { 'Authorization': `Bearer ${authTokens.access}` }
                 });
                 if (res.ok) {
-                    setBookings(prevBookings => prevBookings.filter(b => b.id !== bookingId));
+                    // The booking is kept as Cancelled (our team is told); it no longer disappears
+                    setBookings(prevBookings => prevBookings.map(b => (b.id === bookingId ? { ...b, status: 'Cancelled' } : b)));
                 } else {
-                    alert("Failed to cancel booking.");
+                    const d = await res.json().catch(() => ({}));
+                    alert(d.error || "Failed to cancel booking.");
                 }
             } catch (err) {
                 console.error("Error cancelling booking:", err);

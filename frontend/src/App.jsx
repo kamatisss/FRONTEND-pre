@@ -9,6 +9,7 @@ import RoleProtectedRoute from "./components/RoleProtectedRoute";
 import DashboardLayout from "./components/DashboardLayout";
 import LandingPage from "./components/LandingPage";
 import ForgotPassword from "./components/ForgotPassword";
+import ScrollManager from "./components/ui/ScrollManager";
 import { CartProvider } from "./context/CartContext";
 import "./App.css";
 
@@ -20,7 +21,6 @@ const AdminDashboard = lazy(() => import("./components/AdminDashboard"));
 const ManageUsers = lazy(() => import("./components/ManageUsers"));
 const InventoryDashboard = lazy(() => import("./components/InventoryDashboard"));
 const StaffDashboard = lazy(() => import("./components/StaffDashboard"));
-const BookingManagement = lazy(() => import("./components/BookingManagement"));
 const ManageAvailability = lazy(() => import("./components/ManageAvailability"));
 const BookService = lazy(() => import("./components/BookService"));
 const MyBookings = lazy(() => import("./components/MyBookings"));
@@ -31,6 +31,8 @@ const StaffAttendance = lazy(() => import("./components/StaffAttendance"));
 const AdminAttendance = lazy(() => import("./components/AdminAttendance"));
 const UserDashboard = lazy(() => import("./components/UserDashboard"));
 const AdminSettings = lazy(() => import("./components/AdminSettings"));
+const ActivityLog = lazy(() => import("./components/ActivityLog"));
+const Reports = lazy(() => import("./components/Reports"));
 const Shop = lazy(() => import("./components/Shop"));
 const PortfolioManager = lazy(() => import("./components/PortfolioManager"));
 const ReviewModeration = lazy(() => import("./components/ReviewModeration"));
@@ -68,6 +70,7 @@ function AIDesignerRoute() {
 function App() {
   return (
     <Router>
+      <ScrollManager />
       <AuthProvider>
         <CartProvider>
           <DesignProvider>
@@ -80,6 +83,8 @@ function App() {
               <Route path="/order-success" element={<OrderSuccess />} />
               <Route path="/pay/:token" element={<ProjectPayment />} />
               <Route path="/forgot-password" element={<ForgotPassword />} />
+              {/* The emailed reset link: /reset-password?uid=…&token=… */}
+              <Route path="/reset-password" element={<ForgotPassword />} />
 
               {/* Project Hub — public portfolio of finished gardens */}
               <Route path="/projects" element={<ProjectGallery />} />
@@ -176,7 +181,8 @@ function App() {
               <Route
                 path="/staff-dashboard"
                 element={
-                  <RoleProtectedRoute allowedRoles={['staff']}>
+                  // The owner (admin) works the same Orders / Bookings / Designs queues as the office
+                  <RoleProtectedRoute allowedRoles={['staff', 'admin']}>
                     <DashboardLayout>
                       <StaffDashboard />
                     </DashboardLayout>
@@ -232,7 +238,31 @@ function App() {
                 }
               />
 
-              {/* Admin Settings */}
+              {/* Owner: money in, balances owed, crew output */}
+              <Route
+                path="/admin-reports"
+                element={
+                  <RoleProtectedRoute allowedRoles={['admin']}>
+                    <DashboardLayout>
+                      <Reports />
+                    </DashboardLayout>
+                  </RoleProtectedRoute>
+                }
+              />
+
+              {/* Owner: who changed prices, money, roles and settings */}
+              <Route
+                path="/admin-activity"
+                element={
+                  <RoleProtectedRoute allowedRoles={['admin']}>
+                    <DashboardLayout>
+                      <ActivityLog />
+                    </DashboardLayout>
+                  </RoleProtectedRoute>
+                }
+              />
+
+              {/* Owner: Business profile (name, contact details, socials) */}
               <Route
                 path="/admin-settings"
                 element={
@@ -256,17 +286,8 @@ function App() {
                 }
               />
 
-              {/* View Bookings (Admin/Staff) */}
-              <Route
-                path="/view-bookings"
-                element={
-                  <RoleProtectedRoute allowedRoles={['admin', 'staff']}>
-                    <DashboardLayout>
-                      <BookingManagement />
-                    </DashboardLayout>
-                  </RoleProtectedRoute>
-                }
-              />
+              {/* Old bookings table: merged into the staff Bookings tab (queues + week calendar) */}
+              <Route path="/view-bookings" element={<Navigate to="/staff-dashboard?tab=bookings" replace />} />
 
               {/* Project Portfolio curation (Office Admin / Admin) */}
               <Route

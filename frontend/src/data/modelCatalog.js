@@ -30,6 +30,13 @@ export const MODEL_CATALOG = {
   'strelitzia.glb':          '/models/plants/strelitzia.glb',
 };
 
+// The bundled models as picker options (Inventory page), grouped by their folder. To add a model:
+// put the .glb in public/models/<category>/ and add one line to MODEL_CATALOG above.
+const titleCase = (file) => file.replace(/\.glb$/, '').replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
+export const MODEL_OPTIONS = Object.entries(MODEL_CATALOG).map(([file, path]) => ({
+  file, path, label: titleCase(file), category: path.split('/')[2] === 'plants' ? 'plant' : path.split('/')[2],
+}));
+
 const MEDIA_BASE_URL = import.meta.env.VITE_MEDIA_BASE_URL || 'http://localhost:8000';
 
 /**

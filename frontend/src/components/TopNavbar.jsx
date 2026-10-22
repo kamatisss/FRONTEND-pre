@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { customerLinks, useStaffLinks } from './navLinks';
+import NotificationBell from './ui/NotificationBell';
 import { LogOut, Leaf, User, Settings, ChevronDown, Menu, X } from 'lucide-react';
 
 /* ─── Avatar: shows first letter of first name, with green gradient ─── */
@@ -364,8 +365,10 @@ const TopNavbar = () => {
           </div>
         )}
 
-        {/* Far Right Profile Dropdown */}
-        <div ref={dropRef} className={isAdminOrStaff ? 'ml-auto' : 'ml-auto lg:ml-0'} style={{ position: 'relative' }}>
+        {/* Far right: notifications + profile dropdown */}
+        <div className={isAdminOrStaff ? 'ml-auto' : 'ml-auto lg:ml-0'} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <NotificationBell />
+        <div ref={dropRef} style={{ position: 'relative' }}>
           <button
             onClick={() => setDropOpen(!dropOpen)}
             className="tn-profile-btn"
@@ -385,6 +388,7 @@ const TopNavbar = () => {
               onClose={() => setDropOpen(false)}
             />
           )}
+        </div>
         </div>
 
         {/* Menu button (phones / tablets) */}

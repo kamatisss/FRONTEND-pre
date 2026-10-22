@@ -6,6 +6,7 @@ import {
   getAttendanceLogs,
 } from "../services/api";
 import { useAuth } from "../context/AuthContext";
+import { useIsPhone } from "./ui/useMediaQuery";
 import {
   Clock,
   MapPin,
@@ -290,8 +291,9 @@ const SectionDivider = ({ children }) => (
 /* ─── Main component ──────────────────────────────────────────────────── */
 const StaffAttendance = () => {
   const { authTokens } = useAuth();
+  const isPhone = useIsPhone();
 
-  const [status, setStatus]                     = useState({ clocked_in: false, attendance: null });
+  const [status, setStatus]                   = useState({ clocked_in: false, attendance: null });
   const [bookings, setBookings]                 = useState([]);
   const [selectedBookingId, setSelectedBookingId] = useState("");
   const [logs, setLogs]                         = useState([]);
@@ -678,7 +680,7 @@ const StaffAttendance = () => {
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(3, 1fr)",
+                gridTemplateColumns: "repeat(auto-fit, minmax(min(180px, 100%), 1fr))",
                 gap: 16,
                 marginBottom: 24,
               }}
@@ -723,7 +725,7 @@ const StaffAttendance = () => {
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "1fr 300px",
+                gridTemplateColumns: isPhone ? "minmax(0, 1fr)" : "minmax(0, 1fr) 300px",
                 gap: 20,
                 alignItems: "start",
               }}

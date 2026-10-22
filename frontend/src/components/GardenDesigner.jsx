@@ -1,10 +1,11 @@
 import { useRef, useMemo, useEffect, Suspense, useCallback, useState } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
-import { OrbitControls, ContactShadows, Environment, Html, Preload, Sky } from '@react-three/drei';
-import { EffectComposer, SSAO, Bloom, Vignette } from '@react-three/postprocessing';
+import { OrbitControls, ContactShadows, Environment, Html, Preload } from '@react-three/drei';
+import { EffectComposer, N8AO, Bloom, Vignette, ToneMapping } from '@react-three/postprocessing';
+import { ToneMappingMode } from 'postprocessing';
 import * as THREE from 'three';
 import {
-  Upload, AlertTriangle, Mountain, Sun, X, Pencil, Lock, CloudOff, Save
+  Upload, AlertTriangle, Mountain, Sun, X, Pencil, Lock, CloudOff, Save, Sprout, BrickWall, Armchair
 } from 'lucide-react';
 
 import { useDesign } from '../context/DesignContext';
@@ -12,6 +13,7 @@ import { generateDepthMap, getInventoryItems, loadDesign } from '../services/api
 import GardenBackground from './GardenBackground';
 import PlacedObject from './PlacedObject';
 import AssetLibrarySidebar from './AssetLibrarySidebar';
+import StudioItemTray from './StudioItemTray';
 import ProjectSummaryPanel from './ProjectSummaryPanel';
 import SaveLoadPanel from './SaveLoadPanel';
 import PlacementPreview from './PlacementPreview';
@@ -21,25 +23,29 @@ import ErrorBoundary from './ErrorBoundary';
 import StudioAITeaser from './StudioAITeaser';
 import { useIsPhone } from './ui/useMediaQuery';
 import { saveStudioDraft, loadStudioDraft, clearStudioDraft, trackFunnel } from '../services/guestSession';
+import { DEFAULT_TIME_OF_DAY, TIME_PRESETS } from '../data/studioLight';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SKY COLOR LOOKUP TABLE
 // ─────────────────────────────────────────────────────────────────────────────
+// [hour, sky overhead, horizon, haze (fog), ambient, ground bounce, sun intensity]
+// Daytime haze is a soft blue-grey, never white: it is what the eye sees around the lot.
 const SKY_KEYFRAMES = [
-  [  0, '#020818', '#0a0f2e', '#05091a', '#1a2040', '#050810',  0.15 ],
-  [  5, '#0f172a', '#1e293b', '#101827', '#1e3050', '#0a1020',  0.3  ],
-  [  6, '#1e3a5f', '#c97b3b', '#c97b3b', '#3b6090', '#1a2030',  0.9  ],
-  [  7, '#4a7fb5', '#f4a460', '#f4c080', '#6090c0', '#2a3a20',  1.6  ],
-  [  8, '#5fa8d3', '#b0d4f0', '#c8e4f8', '#80b8e8', '#3a5a30',  2.2  ],
-  [ 10, '#87ceeb', '#c8e8ff', '#d8eeff', '#a0c8f0', '#4a6a40',  2.6  ],
-  [ 12, '#6ab4e8', '#b8dcf8', '#cce8ff', '#90c0ee', '#506840',  2.8  ],
-  [ 15, '#5ba0d8', '#a8d0f0', '#bce0ff', '#88b8ec', '#4a6038',  2.5  ],
-  [ 16, '#e8923a', '#f4c060', '#f4c870', '#d08840', '#503020',  2.0  ],
-  [ 17, '#d4601a', '#e88030', '#e89040', '#c07030', '#402010',  1.6  ],
-  [ 18, '#8b2252', '#c04828', '#a83830', '#702040', '#281008',  0.9  ],
-  [ 19, '#2d1b4e', '#5b2040', '#3d1828', '#2a1838', '#180810',  0.5  ],
-  [ 20, '#0d0b2a', '#1a1040', '#100820', '#14103a', '#080510',  0.2  ],
-  [ 24, '#020818', '#080e28', '#05091a', '#0f1830', '#040408',  0.15 ],
+  [  0,   '#050b1f', '#0c1430', '#0a1226', '#1a2040', '#050810', 0.12 ],
+  [  5,   '#101a33', '#1d2a45', '#1a2438', '#1e3050', '#0a1020', 0.25 ],
+  [  6,   '#3c5f8a', '#e0a878', '#8f8c8c', '#7088a8', '#2a2a24', 0.8  ],
+  [  7,   '#4f86bf', '#d9c7a8', '#9eacb4', '#94a8c0', '#3a4030', 1.3  ],
+  [  8,   '#4f93cf', '#a9cbe3', '#9cb4c4', '#a8bcd2', '#3f5534', 1.7  ],
+  [ 10,   '#4a90d0', '#a3c8e2', '#98b2c2', '#aec0d4', '#46603a', 1.95 ],
+  [ 12,   '#4689cc', '#9fc4e0', '#96b0c0', '#b0c2d6', '#4a643c', 2.05 ],
+  [ 15,   '#4d8dcc', '#a8c8de', '#9cb2c0', '#b4c2d2', '#48603a', 1.95 ],
+  [ 16,   '#5a8fc8', '#c6c6b6', '#a2aca8', '#c4bca8', '#4a5434', 1.8  ],
+  [ 16.5, '#6290c4', '#d0c6ae', '#a6aaa2', '#ccb898', '#4a5032', 1.7  ],
+  [ 17,   '#6a8cbc', '#dcbc98', '#aaa49a', '#d0ac88', '#46482e', 1.5  ],
+  [ 18,   '#4a5f8e', '#d9906a', '#7c7280', '#a08890', '#2e2a24', 0.85 ],
+  [ 19,   '#24284e', '#5a4060', '#2c2c46', '#4a4a6e', '#141220', 0.4  ],
+  [ 20,   '#0d1030', '#1a1a44', '#121430', '#2a2e52', '#080a14', 0.2  ],
+  [ 24,   '#050b1f', '#0c1430', '#0a1226', '#1a2040', '#050810', 0.12 ],
 ];
 
 function hexToColor(hex) {
@@ -95,9 +101,58 @@ function getSunPosition(timeOfDay) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SKY DOME — overhead → horizon gradient from SKY_KEYFRAMES, with a soft sun glow
+// ─────────────────────────────────────────────────────────────────────────────
+const SKY_VERTEX = `
+  varying vec3 vDir;
+  void main() {
+    vDir = normalize(position);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }`;
+const SKY_FRAGMENT = `
+  uniform vec3 top; uniform vec3 horizon; uniform vec3 sunColor; uniform vec3 sunDir; uniform float sunGlow;
+  varying vec3 vDir;
+  void main() {
+    vec3 d = normalize(vDir);
+    vec3 col = mix(horizon, top, pow(smoothstep(-0.02, 0.32, d.y), 0.7));
+    col = mix(horizon * 0.8, col, smoothstep(-0.25, 0.0, d.y));   // below the horizon: a little darker
+    float s = max(dot(d, normalize(sunDir)), 0.0);
+    col += sunColor * (pow(s, 400.0) * 0.9 + pow(s, 10.0) * 0.18) * sunGlow;
+    gl_FragColor = vec4(col, 1.0);
+    #include <colorspace_fragment>
+  }`;
+
+function SkyDome({ timeOfDay }) {
+  const materialRef = useRef();
+  const [uniforms] = useState(() => ({
+    top: { value: new THREE.Color() }, horizon: { value: new THREE.Color() },
+    sunColor: { value: new THREE.Color() }, sunDir: { value: new THREE.Vector3() }, sunGlow: { value: 0 },
+  }));
+  useEffect(() => {
+    const u = materialRef.current?.uniforms;
+    if (!u) return;
+    const { sky, horizon } = getSkyColors(timeOfDay);
+    const [x, y, z] = getSunPosition(timeOfDay);
+    u.top.value.copy(sky);
+    u.horizon.value.copy(horizon);
+    u.sunDir.value.set(x, y, z).normalize();
+    const elevation = y / 100;
+    u.sunGlow.value = THREE.MathUtils.clamp((elevation + 0.05) * 6, 0, 1);
+    u.sunColor.value.set(elevation > 0.35 ? '#fff4e0' : '#ffc890');
+  }, [timeOfDay]);
+  return (
+    <mesh renderOrder={-1} frustumCulled={false}>
+      <sphereGeometry args={[400, 32, 16]} />
+      <shaderMaterial ref={materialRef} vertexShader={SKY_VERTEX} fragmentShader={SKY_FRAGMENT} uniforms={uniforms}
+        side={THREE.BackSide} depthWrite={false} fog={false} />
+    </mesh>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SUN LIGHT
 // ─────────────────────────────────────────────────────────────────────────────
-function SunLight({ timeOfDay = 14 }) {
+function SunLight({ timeOfDay = DEFAULT_TIME_OF_DAY }) {
   const lightRef = useRef();
   useFrame(() => {
     if (!lightRef.current) return;
@@ -260,12 +315,18 @@ const S = {
   /* ── Phones: tools in a bottom tab bar, libraries in a bottom sheet ── */
   phoneRoot: { flexDirection: 'column' },
   phoneSidebar: {
-    order: 2, width: '100%', height: 60, flexDirection: 'row', justifyContent: 'space-around',
+    order: 2, width: '100%', height: 64, flexDirection: 'row', justifyContent: 'space-around',
     padding: '0 8px', borderRight: 'none', borderTop: '1px solid #E5E7EB', boxShadow: '0 -1px 4px rgba(0,0,0,0.04)',
   },
   phoneSidebarTop: { flexDirection: 'row', flex: 'none', gap: 0, justifyContent: 'space-around', width: '75%' },
-  phoneDrawer: (open) => ({
-    top: 'auto', left: 0, right: 0, bottom: 60, width: '100%', height: '62%',
+  tabBtn: (active) => ({
+    minWidth: 64, height: 54, borderRadius: 12, border: 'none', cursor: 'pointer', padding: '4px 6px',
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3,
+    background: active ? '#ECFDF5' : 'transparent', color: active ? '#047857' : '#6B7280',
+  }),
+  tabLabel: { fontSize: 11, fontWeight: 700, lineHeight: 1 },
+  phoneDrawer: (open, fit) => ({
+    top: 'auto', left: 0, right: 0, bottom: 64, width: '100%', height: fit ? 'auto' : '62%', maxHeight: '62%',
     borderRight: 'none', borderTop: '1px solid #E5E7EB', borderRadius: '20px 20px 0 0',
     boxShadow: open ? '0 -8px 32px rgba(0,0,0,0.12)' : 'none',
     transform: open ? 'translateY(0)' : 'translateY(110%)',
@@ -277,31 +338,12 @@ const S = {
   },
 };
 
-// Hardscape icon SVG path
-const HardscapeIcon = () => (
-  <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
-      d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-  </svg>
-);
-
-// Furniture icon SVG path
-const FurnitureIcon = () => (
-  <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
-      d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" />
-  </svg>
-);
-
-// Plant/leaf icon
-const PlantIcon = () => (
-  <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
-      d="M12 19V6M5 12c0-4 3-7 7-7s7 3 7 7" />
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
-      d="M7.5 7.5C9 4 12 2 12 2s3 2 4.5 5.5" />
-  </svg>
-);
+// Catalog tools in the sidebar (bottom bar on phones, with labels there)
+const LIBRARY_TOOLS = [
+  { key: 'plant',     label: 'Plants',    Icon: Sprout },
+  { key: 'hardscape', label: 'Hardscape', Icon: BrickWall },
+  { key: 'furniture', label: 'Furniture', Icon: Armchair },
+];
 
 // ── Main Component ────────────────────────────────────────────
 // guest: the free Studio on /try-studio. Everything that needs an account
@@ -310,6 +352,8 @@ const PlantIcon = () => (
 export default function GardenDesigner({ guest = false, onGate = () => {} }) {
   const { state, dispatch } = useDesign();
   const [openDrawer, setOpenDrawer] = useState(null);
+  // Phones: catalogs open as a one-row tray over the garden; "See all" opens the full library sheet
+  const [fullLibrary, setFullLibrary] = useState(false);
   const phone = useIsPhone();
 
   // A guest draft is restored on /try-studio, or moved into the account on /studio.
@@ -317,11 +361,12 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
   const [guestDraft] = useState(() => {
     if (new URLSearchParams(window.location.search).get('design_id')) return null;
     const draft = loadStudioDraft();
-    return draft?.placedItems.length ? draft : null;
+    // sizeOnly: the landing estimate passed just the visitor's yard size, no items yet
+    return draft?.placedItems.length || draft?.sizeOnly ? draft : null;
   });
   // Guests always get their own draft; a signed-in user's in-memory work wins over it
   const [draftToRestore] = useState(() => (guestDraft && (guest || !state.placedItems.length) ? guestDraft : null));
-  const [showImportBanner, setShowImportBanner] = useState(!guest && !!guestDraft);
+  const [showImportBanner, setShowImportBanner] = useState(!guest && !!guestDraft?.placedItems.length);
 
   useEffect(() => {
     if (!guest && guestDraft) clearStudioDraft();
@@ -340,7 +385,7 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
         placedItems: draftToRestore.placedItems,
         dimensions: draftToRestore.dimensions || { width: 10, length: 15, terrainType: 'flat' },
         terrainHeight: draftToRestore.terrainHeight ?? 1.5,
-        timeOfDay: draftToRestore.timeOfDay ?? 14,
+        timeOfDay: draftToRestore.timeOfDay ?? DEFAULT_TIME_OF_DAY,
         depthData: null,
         originalImageUrl: null,
       },
@@ -422,7 +467,7 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
                 })),
                 dimensions: design.dimensions || { width: 10, length: 15, terrainType: 'flat' },
                 terrainHeight: design.terrain_height || 1.5,
-                timeOfDay: design.time_of_day || 14
+                timeOfDay: design.time_of_day ?? DEFAULT_TIME_OF_DAY
               }
             });
           } catch (err) {
@@ -560,7 +605,10 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
 
   const toggleDrawer = (category) => {
     setOpenDrawer(openDrawer === category ? null : category);
+    setFullLibrary(false);
   };
+  const trayOpen = phone && !!openDrawer && openDrawer !== 'environment' && !fullLibrary;
+  const sheetOpen = !!openDrawer && !trayOpen;
 
   const drawerTitle = openDrawer === 'environment'
     ? 'Environment Settings'
@@ -572,27 +620,25 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
       {/* ── SLIM LEFT SIDEBAR (bottom tab bar on phones) ── */}
       <div style={phone ? { ...S.sidebar, ...S.phoneSidebar } : S.sidebar}>
         <div style={phone ? { ...S.sidebarTop, ...S.phoneSidebarTop } : S.sidebarTop}>
-          <button onClick={() => toggleDrawer('plant')} style={S.sidebarBtn(openDrawer === 'plant')} title="Plants">
-            <PlantIcon />
-          </button>
-          <button onClick={() => toggleDrawer('hardscape')} style={S.sidebarBtn(openDrawer === 'hardscape')} title="Hardscape">
-            <HardscapeIcon />
-          </button>
-          <button onClick={() => toggleDrawer('furniture')} style={S.sidebarBtn(openDrawer === 'furniture')} title="Furniture">
-            <FurnitureIcon />
-          </button>
+          {LIBRARY_TOOLS.map(({ key, label, Icon }) => (
+            <button key={key} onClick={() => toggleDrawer(key)} style={phone ? S.tabBtn(openDrawer === key) : S.sidebarBtn(openDrawer === key)}
+              title={label} aria-label={label} aria-pressed={openDrawer === key}>
+              <Icon size={phone ? 21 : 24} />{phone && <span style={S.tabLabel}>{label}</span>}
+            </button>
+          ))}
         </div>
-        <button onClick={() => toggleDrawer('environment')} style={S.sidebarBtn(openDrawer === 'environment')} title="Environment Settings">
-          <Sun size={24} />
+        <button onClick={() => toggleDrawer('environment')} style={phone ? S.tabBtn(openDrawer === 'environment') : S.sidebarBtn(openDrawer === 'environment')}
+          title="Light and terrain" aria-label="Light and terrain" aria-pressed={openDrawer === 'environment'}>
+          <Sun size={phone ? 21 : 24} />{phone && <span style={S.tabLabel}>Light</span>}
         </button>
       </div>
 
       {/* ── SLIDE-OUT DRAWER ── */}
-      <div style={phone ? { ...S.drawer(!!openDrawer), ...S.phoneDrawer(!!openDrawer) } : S.drawer(!!openDrawer)}>
+      <div style={phone ? { ...S.drawer(sheetOpen), ...S.phoneDrawer(sheetOpen, openDrawer === 'environment') } : S.drawer(!!openDrawer)}>
         <div style={phone ? { ...S.drawerInner, padding: '16px 16px 8px' } : S.drawerInner}>
           <div style={S.drawerHeader}>
             <h3 style={S.drawerTitle}>{drawerTitle}</h3>
-            <button onClick={() => setOpenDrawer(null)} style={S.drawerCloseBtn}>
+            <button onClick={() => { setOpenDrawer(null); setFullLibrary(false); }} style={S.drawerCloseBtn} aria-label="Close">
               <X size={18} />
             </button>
           </div>
@@ -651,11 +697,25 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
                   </div>
                   <input type="range" min="6" max="20" step="0.1" value={state.timeOfDay}
                     onChange={e => dispatch({ type: 'SET_TIME_OF_DAY', payload: +e.target.value })}
-                    style={S.sliderInput} />
+                    style={S.sliderInput} aria-label="Time of day" />
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 6, marginTop: 10 }}>
+                    {TIME_PRESETS.map(p => {
+                      const on = Math.abs(state.timeOfDay - p.hour) < 0.2;
+                      return (
+                        <button key={p.label} type="button" aria-pressed={on}
+                          onClick={() => dispatch({ type: 'SET_TIME_OF_DAY', payload: p.hour })}
+                          style={{ minHeight: 36, borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: 'pointer',
+                            border: on ? '1.5px solid #6ee7b7' : '1px solid #E5E7EB', background: on ? '#ECFDF5' : '#fff',
+                            color: on ? '#065F46' : '#4B5563' }}>
+                          {p.label}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
             ) : openDrawer ? (
-              <AssetLibrarySidebar category={openDrawer} />
+              <AssetLibrarySidebar category={openDrawer} onPick={phone ? () => setFullLibrary(false) : undefined} />
             ) : null}
           </div>
         </div>
@@ -736,15 +796,16 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
                 if (!isPlacing) dispatch({ type: 'DESELECT_ALL' });
               }}
             >
-              {/* Dynamic Sky */}
-              <Sky sunPosition={getSunPosition(state.timeOfDay)} turbidity={2.5} rayleigh={1.5} mieCoefficient={0.005} mieDirectionalG={0.8} />
+              <SkyDome timeOfDay={state.timeOfDay} />
 
               <fog attach="fog" args={[getSkyColors(state.timeOfDay).fog, 18, 55]} />
 
               <DynamicAmbience timeOfDay={state.timeOfDay} />
               <SunLight timeOfDay={state.timeOfDay} />
               {/* Removed the secondary static directionalLight to let SunLight and Environment control lighting */}
-              <Environment preset="park" background={false} />
+              {/* Reflections only: at full strength the "park" map washed the whole garden out */}
+              <Environment preset="park" background={false}
+                environmentIntensity={0.12 + 0.33 * Math.min(1, getSkyColors(state.timeOfDay).sunIntensity / 2)} />
 
               <Suspense fallback={null}>
                 <GardenBackground
@@ -765,10 +826,13 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
                 {isPlacing && <PlacementPreview terrainRef={terrainRef} />}
               </Suspense>
 
-              <EffectComposer disableNormalPass multisampling={4}>
-                <SSAO radius={12} intensity={1.8} luminanceInfluence={0.7} samples={12} />
-                <Bloom luminanceThreshold={0.75} intensity={0.3} mipmapBlur levels={6} />
-                <Vignette eskil={false} offset={0.12} darkness={0.5} />
+              {/* The composer turns the renderer's own tone mapping off, so it is applied here (last).
+                  NEUTRAL keeps plant and stone colours true; ACES/none blew daylight out to white. */}
+              <EffectComposer multisampling={phone ? 0 : 4}>
+                {!phone ? <N8AO aoRadius={1.2} intensity={2.2} distanceFalloff={0.8} halfRes /> : <></>}
+                <Bloom luminanceThreshold={0.9} intensity={0.25} mipmapBlur levels={6} />
+                <Vignette eskil={false} offset={0.12} darkness={0.45} />
+                <ToneMapping mode={ToneMappingMode.NEUTRAL} />
               </EffectComposer>
 
               <OrbitControls ref={orbitRef} makeDefault enablePan={!isPlacing} enableZoom enableRotate
@@ -782,7 +846,12 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
           </ErrorBoundary>
 
           {/* Placement controls overlay */}
-          {isPlacing && <PlacementControls />}
+          {isPlacing && !(trayOpen && state.placementMode === 'placing') && <PlacementControls />}
+
+          {trayOpen && (
+            <StudioItemTray category={openDrawer} onCategory={setOpenDrawer}
+              onClose={() => setOpenDrawer(null)} onSeeAll={() => setFullLibrary(true)} />
+          )}
 
           {/* Loading overlay */}
           {state.loading && (
@@ -793,7 +862,7 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
           )}
 
           {/* FAB for Project Summary */}
-          <div style={phone ? { ...S.fabWrap, bottom: 12, right: 12 } : S.fabWrap}>
+          <div style={phone ? { ...S.fabWrap, bottom: trayOpen ? (isPlacing ? 74 : 204) : 12, right: 12 } : S.fabWrap}>
             <ProjectSummaryPanel onCheckout={guest ? () => onGate('checkout') : undefined} compact={phone} />
           </div>
 

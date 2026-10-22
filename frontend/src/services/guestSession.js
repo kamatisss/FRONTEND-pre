@@ -28,6 +28,7 @@ export const saveStudioDraft = (state) => {
       dimensions: state.dimensions,
       terrainHeight: state.terrainHeight,
       timeOfDay: state.timeOfDay,
+      sizeOnly: !!state.sizeOnly && !state.placedItems?.length,
       savedAt: new Date().toISOString(),
     }));
   } catch { /* storage blocked or full */ }
@@ -45,12 +46,13 @@ export const clearStudioDraft = () => {
 };
 
 // ─── Studio → AI Designer hand-off ────────────────────────────────
-// Lot size and chosen plants carry over so the customer doesn't retype them.
+// Lot size and chosen plants carry over so the customer doesn't retype them. The landing
+// estimate also passes its budget range and install mode (source: 'estimate').
 const AI_PREFILL_KEY = 'gs_ai_prefill';
 
-export const saveAiPrefill = ({ lotWidth, lotLength, plantIds }) => {
+export const saveAiPrefill = ({ lotWidth, lotLength, plantIds = [], budgetRange = null, install = null, source = 'studio' }) => {
   try {
-    localStorage.setItem(AI_PREFILL_KEY, JSON.stringify({ lotWidth, lotLength, plantIds, savedAt: Date.now() }));
+    localStorage.setItem(AI_PREFILL_KEY, JSON.stringify({ lotWidth, lotLength, plantIds, budgetRange, install, source, savedAt: Date.now() }));
   } catch { /* storage blocked or full */ }
 };
 

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Sparkles, Wallet, Sprout, Camera, ArrowRight, Box } from 'lucide-react';
 import { PublicHeader } from './ProjectHub';
+import { SiteFooter } from './SiteChrome';
 import GuestAuthModal from './GuestAuthModal';
 import aiPreview from '../assets/images/feature-steps/step-3.png';
 
@@ -67,6 +68,8 @@ export default function AIDesignerGate() {
           </span>
         </div>
       </main>
+
+      <SiteFooter />
 
       {showAuth && (
         <GuestAuthModal

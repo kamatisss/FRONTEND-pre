@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { CheckCircle, Clock, XCircle, Leaf, ShoppingBag, ClipboardList, CreditCard, Loader2 } from 'lucide-react';
 import { getOrderReceipt, createCheckoutSession } from '../services/api';
+import { usePageScroll } from './ui/usePageScroll';
 
 const POLL_MS = 3000;
 const MAX_POLLS = 10; // ~30s for the GCash/Maya confirmation to reach us
@@ -27,6 +28,7 @@ export default function OrderSuccess() {
   const [polls, setPolls]     = useState(0);
   const [paying, setPaying]   = useState(false);
   const [payError, setPayError] = useState('');
+  usePageScroll();
 
   useEffect(() => {
     window.scrollTo(0, 0);

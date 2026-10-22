@@ -21,6 +21,7 @@ import {
     Package,
     Compass
 } from 'lucide-react';
+import { DEFAULT_TIME_OF_DAY } from '../data/studioLight';
 
 // Booking Step helper for milestone stepper
 const getActiveStep = (status, hasDesign) => {
@@ -302,7 +303,7 @@ const UserDashboard = () => {
                     })),
                     dimensions: design.dimensions || { width: 10, length: 15, terrainType: 'flat' },
                     terrainHeight: design.terrain_height || 1.5,
-                    timeOfDay: design.time_of_day || 14,
+                    timeOfDay: design.time_of_day ?? DEFAULT_TIME_OF_DAY,
                 },
             });
             navigate('/studio');

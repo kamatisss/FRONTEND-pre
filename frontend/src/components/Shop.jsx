@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { productImage } from '../data/productImage';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
@@ -136,17 +137,8 @@ const PRODUCT_METADATA = {
 
 const DEFAULT_LIFESTYLE_IMAGE = "https://images.unsplash.com/photo-1466692476868-aef1dfb1e735?q=80&w=800&auto=format&fit=crop";
 
-const getProductImage = (product) => {
-    // 1. Pull the image uploaded by staff from database
-    const rawUrl = product.thumbnail || product.image_url;
-    if (!rawUrl) return null;
-    if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
-        return rawUrl;
-    }
-    const mediaBase = import.meta.env.VITE_MEDIA_BASE_URL || 'http://localhost:8000';
-    const path = rawUrl.startsWith('/') ? rawUrl : '/' + rawUrl;
-    return `${mediaBase}${path}`;
-};
+// Uploaded photo (or one rendered from the 3D model in Inventory), else the image link
+const getProductImage = productImage;
 
 export default function Shop() {
     const { authTokens, user } = useAuth();

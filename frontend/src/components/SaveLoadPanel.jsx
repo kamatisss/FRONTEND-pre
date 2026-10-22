@@ -5,6 +5,7 @@ import { saveDesign, listDesigns, loadDesign, deleteDesign, submitDesign } from 
 import {
   Save, FolderOpen, Sparkles, X, Loader, HardDrive, Send, Trash2
 } from 'lucide-react';
+import { DEFAULT_TIME_OF_DAY } from '../data/studioLight';
 
 /* ═══════════════════════════════════════════════════════════════
    INLINE STYLES
@@ -239,7 +240,7 @@ export default function SaveLoadPanel({ toolbarVariant }) {
           })),
           dimensions: design.dimensions || { width: 10, length: 15, terrainType: 'flat' },
           terrainHeight: design.terrain_height || 1.5,
-          timeOfDay: design.time_of_day || 14,
+          timeOfDay: design.time_of_day ?? DEFAULT_TIME_OF_DAY,
         },
       });
       setShowModal(false);

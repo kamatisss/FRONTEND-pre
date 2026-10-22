@@ -4,23 +4,23 @@ import { Link } from 'react-router-dom';
 import FeatureCarousel from './FeatureCarousel';
 import ReviewCarousel from './ReviewCarousel';
 import LandingStudioTeaser from './LandingStudioTeaser';
+import ScrollStory from './ScrollStory';
+import { SiteHeader, SiteFooter } from './SiteChrome';
+import EstimateTeaser from './EstimateTeaser';
+import ProofShowcase from './ProofShowcase';
 import HeroGarden from './HeroGarden';
 import { prefetchStudio } from '../services/prefetch';
 import { ProjectCard } from './ProjectHub';
-import { getPublicProjects, getTrackRecord } from '../services/api';
+import { getPublicProjects, getTrackRecord, getInventoryItems } from '../services/api';
+import { productImage } from '../data/productImage';
 import {
   Leaf,
-  MapPin,
-  Phone,
-  Mail,
   ArrowRight,
   ShieldCheck,
   Image as ImageIcon,
   Trees,
   Sun,
   Wrench,
-  Menu,
-  X,
   Sparkles,
 } from 'lucide-react';
 
@@ -53,28 +53,28 @@ const SERVICES = [
   { title: 'Lawn Maintenance',       icon: <Wrench size={24} />,      desc: 'Comprehensive care plans to keep your outdoor sanctuary in pristine condition.' },
 ];
 
-const STEPS = [
-  { step: '01', title: 'Upload Photo',  desc: 'Take a photo of your current outdoor space and upload it to our platform.' },
-  { step: '02', title: 'Generate 3D',  desc: 'Our AI engine maps the depth and terrain of your space automatically.' },
-  { step: '03', title: 'Design',       desc: 'Drag & drop premium plants, furniture, and materials into the scene.' },
-  { step: '04', title: 'Build',        desc: 'Save your design or book our pros to bring it to life.' },
-];
+const catalogImage = productImage;
+const CATEGORY_LABEL = { plant: 'Plant', hardscape: 'Hardscape', furniture: 'Furniture' };
 
-const GALLERY = [
-  { src: 'https://images.unsplash.com/photo-1598902108854-10e335adac99?q=80&w=800&auto=format&fit=crop', label: 'Monstera Deliciosa',      category: 'Tropical Plant' },
-  { src: 'https://images.unsplash.com/photo-1584622781564-1d987f7333c1?q=80&w=800&auto=format&fit=crop', label: 'Natural Stone Pavers',    category: 'Hardscape' },
-  { src: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?q=80&w=800&auto=format&fit=crop', label: 'Outdoor Lounge Timber',   category: 'Lifestyle' },
-  { src: 'https://images.unsplash.com/photo-1416879595882-3373a0480b5b?q=80&w=800&auto=format&fit=crop', label: 'Tropical Palm Grove',     category: 'Botanical' },
-];
+// A mix across categories, preferring items that can be placed in 3D
+function pickPalette(items, n = 8) {
+  const withImage = items.filter(i => catalogImage(i)).sort((a, b) => Number(!!b.model_file) - Number(!!a.model_file));
+  const byCat = {};
+  withImage.forEach(i => { (byCat[i.category] = byCat[i.category] || []).push(i); });
+  const picked = [];
+  for (let round = 0; picked.length < n && round < n; round++) {
+    Object.values(byCat).forEach(list => { if (list[round] && picked.length < n) picked.push(list[round]); });
+  }
+  return picked;
+}
 
 /* ══════════════════════════════════════════════════════════════
    MAIN COMPONENT
 ══════════════════════════════════════════════════════════════ */
 export default function LandingPage() {
-  const [scrolled,     setScrolled]     = useState(false);
-  const [mobileOpen,   setMobileOpen]   = useState(false);
   const [projects,     setProjects]     = useState([]);
   const [record,       setRecord]       = useState(null);
+  const [palette,      setPalette]      = useState([]);
 
   useEffect(() => {
     // Featured portfolio projects, falling back to the most recent published ones
@@ -83,6 +83,7 @@ export default function LandingPage() {
       .then(setProjects)
       .catch(() => {});
     getTrackRecord().then(d => setRecord(d.stats)).catch(() => {});
+    getInventoryItems().then(items => setPalette(pickPalette(items))).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -99,7 +100,7 @@ export default function LandingPage() {
 
     html.style.overflow = 'auto';
     html.style.height = 'auto';
-    body.style.overflow = 'auto';
+    body.style.overflow = 'visible';
     body.style.height = 'auto';
 
     return () => {
@@ -110,18 +111,6 @@ export default function LandingPage() {
     };
   }, []);
 
-  useEffect(() => {
-    const onScroll = () => setScrolled(window.scrollY > 60);
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
-  }, []);
-
-  const navLinks = [
-    { label: 'Services',     id: 'services' },
-    { label: 'How it Works', id: 'how-it-works' },
-    { label: 'Reviews',      id: 'reviews' },
-  ];
-
   return (
     <div style={{ fontFamily: "'Inter', system-ui, sans-serif", color: '#0f172a', background: '#f8fafc', minHeight: '100vh' }}>
 
@@ -131,11 +120,13 @@ export default function LandingPage() {
         * { box-sizing: border-box; }
 
         html, body {
-          overflow-x: hidden;
-          overflow-y: auto !important;
           height: auto !important;
           min-height: 100%;
         }
+        /* The page scrolls on html (the viewport). Body must not become a scroll box itself,
+           or position: sticky (the scroll story's pinned picture) stops working: clip, not hidden. */
+        html { overflow-x: hidden; overflow-y: auto !important; }
+        body { overflow-x: hidden; overflow-x: clip !important; overflow-y: visible !important; }
 
         /* Remove any overflow:hidden that wrapper layouts might inject */
         #root, #app, [data-reactroot] {
@@ -152,61 +143,6 @@ export default function LandingPage() {
           padding-left: 24px;
           padding-right: 24px;
         }
-
-        /* ── Navbar ── */
-        .gs-nav {
-          position: fixed;
-          top: 0; left: 0; right: 0;
-          z-index: 50;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          padding: 18px 32px;
-          background: rgba(255,255,255,0.85);
-          backdrop-filter: blur(12px);
-          -webkit-backdrop-filter: blur(12px);
-          border-bottom: 1px solid rgba(226,232,240,0.8);
-          transition: background 0.3s, box-shadow 0.3s, padding 0.3s;
-        }
-        .gs-nav.scrolled {
-          background: rgba(255,255,255,0.97);
-          box-shadow: 0 1px 0 rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.04);
-          padding: 14px 32px;
-        }
-        .gs-nav-logo {
-          display: flex; align-items: center; gap: 8px;
-          font-weight: 900; font-size: 20px; letter-spacing: -0.5px;
-          text-decoration: none; color: inherit;
-        }
-        .gs-nav-links {
-          display: flex; gap: 32px;
-          list-style: none; margin: 0; padding: 0;
-        }
-        .gs-nav-links button {
-          background: none; border: none; cursor: pointer;
-          font-size: 15px; font-weight: 600; letter-spacing: -0.1px;
-          padding: 0; transition: color 0.2s;
-        }
-        .gs-nav-cta {
-          display: flex; align-items: center; gap: 12px;
-        }
-        .gs-btn-ghost {
-          font-size: 15px; font-weight: 700; padding: 8px 16px;
-          background: none; border: none; cursor: pointer;
-          text-decoration: none; transition: color 0.2s;
-          border-radius: 8px;
-        }
-        .gs-btn-primary {
-          display: inline-flex; align-items: center; gap: 6px;
-          padding: 10px 22px; border-radius: 100px;
-          font-size: 14px; font-weight: 700; text-decoration: none;
-          transition: transform 0.2s, box-shadow 0.2s, background 0.2s;
-          border: none; cursor: pointer;
-          background: #10b981; color: white;
-          box-shadow: 0 4px 14px rgba(16,185,129,0.35);
-        }
-        .gs-btn-primary:hover { background: #059669; transform: translateY(-1px); box-shadow: 0 6px 20px rgba(16,185,129,0.4); }
-        .gs-btn-primary:active { transform: scale(0.97); }
 
         /* ── Hero ── */
         .gs-hero {
@@ -377,42 +313,6 @@ export default function LandingPage() {
           margin: 0; position: relative; z-index: 1;
         }
 
-        /* ── How It Works ── */
-        .gs-hiw {
-          padding: 100px 0;
-          background: white;
-        }
-        .gs-steps-grid {
-          display: grid;
-          grid-template-columns: repeat(4, 1fr);
-          gap: 32px;
-          position: relative;
-        }
-        .gs-steps-line {
-          position: absolute;
-          top: 40px; left: 12%; right: 12%; height: 2px;
-          background: linear-gradient(90deg, #e2e8f0 0%, #a7f3d0 50%, #e2e8f0 100%);
-          z-index: 0;
-        }
-        .gs-step-item {
-          display: flex; flex-direction: column; align-items: center;
-          text-align: center; position: relative; z-index: 1;
-        }
-        .gs-step-num {
-          width: 80px; height: 80px; border-radius: 50%;
-          background: white; border: 3px solid #e2e8f0;
-          box-shadow: 0 4px 20px rgba(0,0,0,0.06);
-          display: flex; align-items: center; justify-content: center;
-          font-size: 22px; font-weight: 900; color: #10b981;
-          margin-bottom: 24px; transition: border-color 0.2s, box-shadow 0.2s;
-        }
-        .gs-step-item:hover .gs-step-num {
-          border-color: #10b981;
-          box-shadow: 0 0 0 6px rgba(16,185,129,0.12);
-        }
-        .gs-step-title { font-size: 17px; font-weight: 800; color: #0f172a; margin: 0 0 10px; }
-        .gs-step-desc  { font-size: 14px; color: #64748b; line-height: 1.65; margin: 0; padding: 0 8px; }
-
         /* ── Gallery / Material Palette ── */
         .gs-gallery {
           padding: 80px 0;
@@ -515,175 +415,25 @@ export default function LandingPage() {
         }
         .gs-btn-cta-outline:hover { background: white; border-color: #94a3b8; }
 
-        /* ── Footer ── */
-        .gs-footer {
-          background: #ffffff;
-          color: #64748b;
-          padding-top: 72px;
-          border-top: 1px solid #e2e8f0;
-        }
-        .gs-footer-grid {
-          display: grid;
-          grid-template-columns: 1.5fr 1fr 1.2fr 1.3fr;
-          gap: 48px;
-          padding-bottom: 60px;
-          border-bottom: 1px solid #e2e8f0;
-        }
-        .gs-footer-brand { display: flex; align-items: center; gap: 8px; color: #0f172a; margin-bottom: 16px; text-decoration: none; }
-        .gs-footer-brand-name { font-size: 18px; font-weight: 900; letter-spacing: -0.5px; }
-        .gs-footer-about { font-size: 14px; line-height: 1.75; margin: 0 0 24px; }
-        .gs-footer-socials { display: flex; gap: 10px; }
-        .gs-social-btn {
-          width: 36px; height: 36px; border-radius: 50%;
-          border: 1px solid #e2e8f0; background: transparent;
-          display: flex; align-items: center; justify-content: center;
-          font-size: 11px; font-weight: 800; color: #475569; cursor: pointer;
-          transition: border-color 0.2s, color 0.2s, background 0.2s;
-        }
-        .gs-social-btn:hover { border-color: #10b981; color: #10b981; background: rgba(16,185,129,0.06); }
-        .gs-footer-heading { font-size: 14px; font-weight: 800; color: #0f172a; margin: 0 0 20px; letter-spacing: 0.3px; }
-        .gs-footer-links { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
-        .gs-footer-links a,
-        .gs-footer-links button {
-          font-size: 14px; color: #64748b; text-decoration: none;
-          background: none; border: none; cursor: pointer; padding: 0;
-          transition: color 0.2s; text-align: left;
-        }
-        .gs-footer-links a:hover,
-        .gs-footer-links button:hover { color: #059669; }
-        .gs-contact-item {
-          display: flex; align-items: flex-start; gap: 10px;
-          font-size: 14px; line-height: 1.6; margin-bottom: 14px;
-        }
-        .gs-contact-item svg { color: #10b981; flex-shrink: 0; margin-top: 2px; }
-        .gs-newsletter-text { font-size: 14px; line-height: 1.7; margin: 0 0 16px; }
-        .gs-newsletter-form { display: flex; }
-        .gs-newsletter-input {
-          flex: 1; padding: 11px 16px;
-          background: #f8fafc; border: 1px solid #e2e8f0; border-right: none;
-          border-radius: 10px 0 0 10px; font-size: 14px; color: #0f172a;
-          outline: none; transition: border-color 0.2s;
-        }
-        .gs-newsletter-input::placeholder { color: #94a3b8; }
-        .gs-newsletter-input:focus { border-color: #10b981; }
-        .gs-newsletter-btn {
-          padding: 11px 16px; background: #10b981; border: none; cursor: pointer;
-          border-radius: 0 10px 10px 0; color: white;
-          transition: background 0.2s;
-        }
-        .gs-newsletter-btn:hover { background: #059669; }
-        .gs-footer-bottom {
-          padding: 24px 0;
-          display: flex; justify-content: space-between; align-items: center;
-          font-size: 13px; flex-wrap: wrap; gap: 12px;
-        }
-        .gs-footer-legal { display: flex; gap: 24px; }
-        .gs-footer-legal a { color: #64748b; text-decoration: none; transition: color 0.2s; }
-        .gs-footer-legal a:hover { color: #059669; }
-
-        /* ── Mobile Menu ── */
-        .gs-mobile-menu {
-          position: fixed; top: 64px; left: 0; right: 0; z-index: 40;
-          background: white; border-bottom: 1px solid #e2e8f0;
-          box-shadow: 0 8px 32px rgba(0,0,0,0.08);
-          padding: 24px; display: flex; flex-direction: column; gap: 4px;
-        }
-        .gs-mobile-link {
-          font-size: 17px; font-weight: 700; padding: 12px 0;
-          color: #0f172a; background: none; border: none; cursor: pointer;
-          text-align: left; border-bottom: 1px solid #f1f5f9; text-decoration: none;
-          transition: color 0.2s;
-        }
-        .gs-mobile-link:hover { color: #10b981; }
-        .gs-mobile-cta {
-          margin-top: 12px; padding: 14px;
-          background: #10b981; color: white; border-radius: 100px;
-          font-size: 16px; font-weight: 800; text-align: center; text-decoration: none;
-        }
-
         /* ── Responsive ── */
         @media (max-width: 1024px) {
           .gs-services-grid { grid-template-columns: repeat(2, 1fr); }
-          .gs-steps-grid { grid-template-columns: repeat(2, 1fr); }
-          .gs-steps-line { display: none; }
-          .gs-footer-grid { grid-template-columns: 1fr 1fr; gap: 36px; }
           .gs-gallery-grid { grid-template-columns: repeat(2, 1fr); }
         }
         @media (max-width: 768px) {
-          .gs-nav { padding: 16px 20px; }
-          .gs-nav.scrolled { padding: 12px 20px; }
-          .gs-nav-links, .gs-nav-cta { display: none; }
           .gs-services-grid { grid-template-columns: 1fr; }
-          .gs-steps-grid { grid-template-columns: 1fr; }
-          .gs-footer-grid { grid-template-columns: 1fr; gap: 32px; }
           .gs-gallery-grid { grid-template-columns: repeat(2, 1fr); }
           .gs-gallery-header { flex-direction: column; align-items: flex-start; gap: 12px; }
-          .gs-footer-bottom { flex-direction: column; text-align: center; }
           .gs-hero-split { grid-template-columns: 1fr; gap: 40px; }
           .gs-hero-copy .gs-hero-h1   { text-align: center; }
           .gs-hero-copy .gs-hero-sub  { text-align: center; }
           .gs-hero-copy .gs-hero-actions { justify-content: center; }
           .gs-hero-proofrow { justify-content: center; }
-          .gs-hero-visual { display: none; }
+          .gs-scroll-indicator { display: none; }
         }
-        .gs-mobile-ham { display: none; }
-        @media (max-width: 768px) { .gs-mobile-ham { display: block; } }
       `}</style>
 
-      {/* ══ NAVBAR ══ */}
-      <nav className={`gs-nav ${scrolled ? 'scrolled' : ''}`}>
-        <a href="#" className="gs-nav-logo" style={{ color: '#0f172a' }}>
-          <Leaf size={22} color="#10b981" />
-          <span>Garden Studio</span>
-        </a>
-        <ul className="gs-nav-links">
-          {navLinks.map(({ label, id }) => (
-            <li key={id}>
-              <button
-                onClick={() => scrollTo(id)}
-                style={{ color: '#475569' }}
-                onMouseEnter={e => e.target.style.color = '#10b981'}
-                onMouseLeave={e => e.target.style.color = '#475569'}
-              >{label}</button>
-            </li>
-          ))}
-          <li>
-            <Link to="/projects" style={{ color: '#475569', fontSize: 'inherit', fontWeight: 'inherit', textDecoration: 'none' }}
-              onMouseEnter={e => e.target.style.color = '#10b981'}
-              onMouseLeave={e => e.target.style.color = '#475569'}
-            >Projects</Link>
-          </li>
-        </ul>
-        <div className="gs-nav-cta">
-          <Link to="/login" className="gs-btn-ghost" style={{ color: '#475569' }}>
-            Log In
-          </Link>
-          <Link to="/register" className="gs-btn-primary">
-            Sign Up Free
-          </Link>
-        </div>
-        <button className="gs-mobile-ham"
-          onClick={() => setMobileOpen(o => !o)}
-          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#0f172a', padding: 4 }}
-        >
-          {mobileOpen ? <X size={24} /> : <Menu size={24} />}
-        </button>
-      </nav>
-
-      {/* Mobile Menu */}
-      {mobileOpen && (
-        <motion.div className="gs-mobile-menu"
-          initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}>
-          {navLinks.map(({ label, id }) => (
-            <button key={id} className="gs-mobile-link" onClick={() => { scrollTo(id); setMobileOpen(false); }}>
-              {label}
-            </button>
-          ))}
-          <Link to="/projects" className="gs-mobile-link">Projects</Link>
-          <Link to="/login" className="gs-mobile-link" style={{ color: '#475569' }}>Log In</Link>
-          <Link to="/register" className="gs-mobile-cta">Sign Up Free</Link>
-        </motion.div>
-      )}
+      <SiteHeader overlay />
 
       {/* ══ HERO ══ */}
       <section className="gs-hero">
@@ -740,14 +490,14 @@ export default function LandingPage() {
               transition={{ duration: 0.75, delay: 0.2, ease: [0.22, 1, 0.36, 1] }}
               className="gs-hero-visual"
             >
-              {/* Live 3D garden on capable desktops; the image carousel everywhere else */}
+              {/* Live 3D garden on any device with a real GPU; the image carousel everywhere else */}
               <HeroGarden fallback={<FeatureCarousel />} />
             </motion.div>
 
           </div>
         </div>
 
-        <div className="gs-scroll-indicator" onClick={() => scrollTo('showcase')}>
+        <div className="gs-scroll-indicator" onClick={() => scrollTo('services')} role="button" aria-label="Scroll to services">
           <div className="gs-scroll-track">
             <div className="gs-scroll-dot" />
           </div>
@@ -779,35 +529,17 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ══ HOW IT WORKS ══ */}
-      <section id="how-it-works" className="gs-hiw">
-        <div className="gs-container">
-          <div className="gs-section-header">
-            <motion.div initial="hidden" whileInView="visible" viewport={{ once: true }} variants={FADE_UP}>
-              <div className="gs-section-eyebrow" style={{ marginBottom: 16 }}>Process</div>
-              <h2 className="gs-section-title">4 Steps to Your Paradise</h2>
-              <p style={{ fontSize: 17, color: '#64748b', maxWidth: 440, margin: '12px auto 0', lineHeight: 1.65 }}>
-                From photo to finished garden — our streamlined process makes it effortless.
-              </p>
-            </motion.div>
-          </div>
-          <div className="gs-steps-grid">
-            <div className="gs-steps-line" />
-            {STEPS.map((item, i) => (
-              <motion.div key={i} className="gs-step-item"
-                initial="hidden" whileInView="visible" viewport={{ once: true }} variants={FADE_UP}
-                transition={{ delay: i * 0.08 }}>
-                <div className="gs-step-num">{item.step}</div>
-                <h3 className="gs-step-title">{item.title}</h3>
-                <p className="gs-step-desc">{item.desc}</p>
-              </motion.div>
-            ))}
-          </div>
-        </div>
-      </section>
+      {/* ══ HOW IT WORKS — scroll story: photo → terrain → plants → light → estimate → crew ══ */}
+      <ScrollStory />
+
+      {/* ══ INSTANT ESTIMATE — yard size → price range, hands off to the AI Designer or Studio ══ */}
+      <EstimateTeaser />
 
       {/* ══ TRY THE STUDIO — free 3D design, AI with an account ══ */}
       <LandingStudioTeaser />
+
+      {/* ══ REAL RESULTS — before/after and 3D design vs built, from published projects ══ */}
+      <ProofShowcase />
 
       {/* ══ FEATURED PROJECTS (Project Hub) — only once real projects are published ══ */}
       {projects.length > 0 && (
@@ -832,33 +564,40 @@ export default function LandingPage() {
         </section>
       )}
 
-      {/* ══ MATERIAL PALETTE ══ */}
-      <section className="gs-gallery">
-        <div className="gs-container">
-          <div className="gs-gallery-header">
-            <div>
-              <div className="gs-section-eyebrow" style={{ marginBottom: 14 }}>Material Palette</div>
-              <h2 className="gs-section-title" style={{ margin: 0 }}>Premium Materials</h2>
+      {/* ══ MATERIAL PALETTE — real catalog items, placeable in the 3D Studio ══ */}
+      {/* Only once there are enough product photos to fill a row (most items have no photo yet) */}
+      {palette.length >= 4 && (
+        <section className="gs-gallery">
+          <div className="gs-container">
+            <div className="gs-gallery-header">
+              <div>
+                <div className="gs-section-eyebrow" style={{ marginBottom: 14 }}>From our catalog</div>
+                <h2 className="gs-section-title" style={{ margin: 0 }}>Plants &amp; materials you can place in 3D</h2>
+              </div>
+              <Link to="/try-studio" className="gs-gallery-link" onPointerEnter={prefetchStudio}>
+                Try them in 3D <ArrowRight size={16} />
+              </Link>
             </div>
-            <Link to="/try-studio" className="gs-gallery-link">
-              Try them in 3D <ArrowRight size={16} />
-            </Link>
+            <motion.div className="gs-gallery-grid"
+              initial="hidden" whileInView="visible" viewport={{ once: true }} variants={STAGGER}>
+              {palette.map(item => (
+                <motion.div key={item.id} variants={FADE_UP}>
+                  <Link to="/try-studio" className="gs-gallery-item" style={{ display: 'block', textDecoration: 'none' }}
+                    onPointerEnter={prefetchStudio} aria-label={`Try ${item.name} in the 3D Studio`}>
+                    <img src={catalogImage(item)} alt={item.name} loading="lazy"
+                      onError={e => { e.currentTarget.closest('.gs-gallery-item').style.display = 'none'; }} />
+                    <div className="gs-gallery-overlay" />
+                    <div className="gs-gallery-caption">
+                      <p className="gs-gallery-category">{CATEGORY_LABEL[item.category] || item.category}{item.model_file ? ' · 3D' : ''}</p>
+                      <p className="gs-gallery-label">{item.name.replace(/_/g, ' ')}</p>
+                    </div>
+                  </Link>
+                </motion.div>
+              ))}
+            </motion.div>
           </div>
-          <motion.div className="gs-gallery-grid"
-            initial="hidden" whileInView="visible" viewport={{ once: true }} variants={STAGGER}>
-            {GALLERY.map((item, i) => (
-              <motion.div key={i} className="gs-gallery-item" variants={FADE_UP}>
-                <img src={item.src} alt={item.label} />
-                <div className="gs-gallery-overlay" />
-                <div className="gs-gallery-caption">
-                  <p className="gs-gallery-category">{item.category}</p>
-                  <p className="gs-gallery-label">{item.label}</p>
-                </div>
-              </motion.div>
-            ))}
-          </motion.div>
-        </div>
-      </section>
+        </section>
+      )}
 
       {/* ══ TESTIMONIALS — real reviews from projects and orders ══ */}
       <ReviewCarousel />
@@ -887,80 +626,7 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ══ FOOTER ══ */}
-      <footer className="gs-footer">
-        <div className="gs-container">
-          <div className="gs-footer-grid">
-            {/* Brand */}
-            <div>
-              <a href="#" className="gs-footer-brand">
-                <Leaf size={20} color="#10b981" />
-                <span className="gs-footer-brand-name">Garden Studio</span>
-              </a>
-              <p className="gs-footer-about">
-                Elevating outdoor living spaces with AI technology and premium landscaping craftsmanship since 2009.
-              </p>
-              <div className="gs-footer-socials">
-                {['FB', 'IG', 'TW'].map(s => (
-                  <button key={s} className="gs-social-btn">{s}</button>
-                ))}
-              </div>
-            </div>
-
-            {/* Quick Links */}
-            <div>
-              <h4 className="gs-footer-heading">Quick Links</h4>
-              <ul className="gs-footer-links">
-                <li><Link to="/try-studio">Free 3D Studio</Link></li>
-                <li><Link to="/ai-designer">AI Designer</Link></li>
-                <li><Link to="/projects">Our Projects</Link></li>
-                <li><button onClick={() => scrollTo('services')}>Services</button></li>
-                <li><button onClick={() => scrollTo('how-it-works')}>How it Works</button></li>
-                <li><Link to="/login">Login</Link></li>
-                <li><Link to="/register">Sign Up</Link></li>
-              </ul>
-            </div>
-
-            {/* Contact */}
-            <div>
-              <h4 className="gs-footer-heading">Contact Us</h4>
-              <div className="gs-contact-item">
-                <MapPin size={16} />
-                <span>123 Botanical Way, Green District<br />Pagbilao, Philippines 1000</span>
-              </div>
-              <div className="gs-contact-item">
-                <Phone size={16} />
-                <span>+63 912 345 6789</span>
-              </div>
-              <div className="gs-contact-item">
-                <Mail size={16} />
-                <span>hello@gardenstudio.com</span>
-              </div>
-            </div>
-
-            {/* Newsletter */}
-            <div>
-              <h4 className="gs-footer-heading">Newsletter</h4>
-              <p className="gs-newsletter-text">Get seasonal gardening tips and design inspiration straight to your inbox.</p>
-              <div className="gs-newsletter-form">
-                <input type="email" placeholder="Your email address" className="gs-newsletter-input" />
-                <button className="gs-newsletter-btn">
-                  <ArrowRight size={16} />
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Bottom bar */}
-          <div className="gs-footer-bottom">
-            <p style={{ margin: 0 }}>© {new Date().getFullYear()} Garden Studio. All rights reserved.</p>
-            <div className="gs-footer-legal">
-              <a href="#">Privacy Policy</a>
-              <a href="#">Terms of Service</a>
-            </div>
-          </div>
-        </div>
-      </footer>
+      <SiteFooter />
 
     </div>
   );

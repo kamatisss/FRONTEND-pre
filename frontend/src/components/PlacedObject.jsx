@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect, useCallback, Suspense } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { TransformControls, Html, ContactShadows } from '@react-three/drei';
+import { placedScale } from '../data/modelSizing';
 import { ErrorBoundary } from 'react-error-boundary';
 import { useDesign } from '../context/DesignContext';
 import * as THREE from 'three';
@@ -48,8 +49,8 @@ export default function PlacedObject({ item, orbitControlsRef }) {
   const isPlacing = state.placementMode !== 'idle';
 
   // --- Scale Logic ---
-  const rawScale = item.scale?.x ?? item.scale ?? 1;
-  const objScale = Number.isFinite(rawScale) ? rawScale : 1;
+  // Old saves carry the former 80% default; placedScale shows them at real size
+  const objScale = placedScale(item.scale?.x ?? item.scale ?? 1);
 
   // --- Position & Rotation Logic ---
   const pos = [

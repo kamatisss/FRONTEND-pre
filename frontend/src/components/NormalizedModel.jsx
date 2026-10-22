@@ -1,6 +1,7 @@
 import { useMemo, useEffect } from 'react';
 import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
+import { realScale } from '../data/modelSizing';
 
 // ─── Category scale multipliers ────────────────────────────────────────────────
 // After normalizing every model to 1 unit, these multipliers make each category
@@ -21,8 +22,8 @@ const DEFAULT_CATEGORY_SCALE = 1.5; // fallback for unknown categories
  *   2. Computes the bounding box with THREE.Box3
  *   3. Centers the model on the X and Z axes
  *   4. Pins the model's lowest Y point exactly to Y = 0 (ground-flush)
- *   5. Normalizes the model so its largest dimension = 1 unit
- *   6. Applies a category multiplier for realistic relative sizing
+ *   5. Scales it to its real size (data/modelSizing.js: height, or longest side for hardscape)
+ *   6. No size on record: largest dimension = 1 unit × a category multiplier
  *   7. Applies the user's `scale` slider on top of everything
  *
  * Props:
@@ -79,10 +80,10 @@ export default function NormalizedModel({ url, scale = 1, category = 'plant', re
     // Guard: if the model has no geometry (empty GLTF) skip transforms
     if (size.x === 0 && size.y === 0 && size.z === 0) return clone;
 
-    // ── 4. Base normalization scale: largest axis → target scale unit ──────────
+    // ── 4. Base scale: the item's real size (height, or longest side for hardscape:
+    //       data/modelSizing.js); models with no size fall back to 1 unit × category below
     const maxDim   = Math.max(size.x, size.y, size.z);
-    const targetScale = realWorldSize || 1.0;
-    const normScale = targetScale / maxDim;
+    const normScale = realWorldSize ? realScale(size, Number(realWorldSize), category) : 1.0 / maxDim;
 
     // ── 5. Category multiplier ────────────────────────────────────────────────
     const catMult = realWorldSize ? 1.0 : (CATEGORY_SCALE[category] ?? DEFAULT_CATEGORY_SCALE);

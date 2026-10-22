@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { getTrackRecord, getPublicProjects } from '../services/api';
 import { PublicHeader, ProjectCard } from './ProjectHub';
+import { SiteFooter } from './SiteChrome';
 import { fmtDate } from '../data/projectHub';
 
 /* /track-record — live numbers from signed-off jobs + admin-entered credentials. */
@@ -122,6 +123,7 @@ export default function TrackRecord() {
           </section>
         )}
       </main>
+      <SiteFooter />
     </div>
   );
 }

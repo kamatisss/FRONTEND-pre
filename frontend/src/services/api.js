@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { compressImage } from './imageCompress';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
 
@@ -52,8 +53,9 @@ export const generateDepthMap = async (imageFile) => {
 };
 
 // ─── Inventory ────────────────────────────────────────────────────
-export const getInventoryItems = async (category = null) => {
-  const params = category ? { category } : {};
+// archived: true lists archived items too (office only; the Inventory page)
+export const getInventoryItems = async (category = null, { archived = false } = {}) => {
+  const params = { ...(category ? { category } : {}), ...(archived ? { archived: 1 } : {}) };
   const res = await api.get('/inventory/', { params });
   return res.data;
 };
@@ -75,9 +77,36 @@ export const updateInventoryItem = async (id, data) => {
   return res.data;
 };
 
+export const patchInventoryItem = async (id, data) => {
+  const headers = data instanceof FormData ? { 'Content-Type': 'multipart/form-data' } : {};
+  const res = await api.patch(`/inventory/${id}/`, data, { headers });
+  return res.data;
+};
+
+// "Delete" archives: the item leaves the shop and Studio but order history and designs keep it
 export const deleteInventoryItem = async (id) => {
   const res = await api.delete(`/inventory/${id}/`);
   return res.data;
+};
+
+export const restoreInventoryItem = async (id) => {
+  const res = await api.post(`/inventory/${id}/restore/`);
+  return res.data;
+};
+
+// reason: 'restock' (+quantity) | 'damaged' (−quantity) | 'count' (quantity is what's on hand)
+export const adjustStock = async (id, { reason, quantity, note }) => {
+  try {
+    const res = await api.post(`/inventory/${id}/adjust_stock/`, { reason, quantity, note });
+    return res.data;   // { movement, item }
+  } catch (err) { throw errorOf(err, 'Could not update stock'); }
+};
+
+export const getStockHistory = async (id) => {
+  try {
+    const res = await api.get(`/inventory/${id}/stock_history/`);
+    return res.data;
+  } catch (err) { throw errorOf(err, 'Could not load the stock history'); }
 };
 
 // ─── Designs CRUD ────────────────────────────────────────────────
@@ -199,17 +228,27 @@ export const getOrderReceipt = async (orderId, token) => {
 // ─── Forgot / Reset Password ──────────────────────────────────────
 
 /**
- * resetPassword — Verifies username+email then sets a new password.
- * POST /api/reset-password/  { username, email, new_password }
+ * Password reset by emailed link (components/ForgotPassword.jsx).
+ * POST /api/password-reset/          { email }                    → { message } (same answer for every email)
+ * POST /api/password-reset/confirm/  { uid, token, new_password } → { message, username }
  */
-export const resetPassword = async ({ username, email, new_password }) => {
+const resetError = (err, fallback) => new Error(
+  err.response?.status === 429 ? 'Too many tries. Please wait a while and try again.'
+    : err.response?.data?.error || (err.response ? fallback : 'No connection. Check your internet and try again.'));
+
+export const requestPasswordReset = async (email) => {
   try {
-    const res = await api.post('/reset-password/', { username, email, new_password });
-    return res.data; // { message: '...' }
+    return (await api.post('/password-reset/', { email })).data;
   } catch (err) {
-    throw new Error(
-      err.response?.data?.error || err.message || 'Password reset failed.'
-    );
+    throw resetError(err, 'Could not send the reset link.');
+  }
+};
+
+export const confirmPasswordReset = async ({ uid, token, new_password }) => {
+  try {
+    return (await api.post('/password-reset/confirm/', { uid, token, new_password })).data;
+  } catch (err) {
+    throw resetError(err, 'Could not change the password.');
   }
 };
 
@@ -309,7 +348,7 @@ export const listProgressPhotos = async (bookingId) => {
 
 export const uploadProgressPhoto = async (bookingId, { file, phase, description }) => {
   const form = new FormData();
-  form.append('file', file);
+  form.append('file', await compressImage(file));   // phone photos shrink to ~300 KB before upload
   form.append('construction_phase', phase);
   form.append('description', description || '');
   try {
@@ -348,6 +387,14 @@ export const getPublicProject = async (slug) => {
     const res = await publicGet(`/portfolio/public/${slug}/`);
     return res.data;
   } catch (err) { throw errorOf(err, 'Project not found'); }
+};
+
+// Landing page proof: projects with a Before/After and/or 3D design/Built photo pair
+export const getProjectShowcase = async (limit = 3) => {
+  try {
+    const res = await publicGet('/portfolio/showcase/', { params: { limit } });
+    return res.data.results;
+  } catch (err) { throw errorOf(err, 'Failed to load projects'); }
 };
 
 export const getTrackRecord = async () => {
@@ -393,6 +440,15 @@ export const updatePricing = async (data) => {
 export const getEstimate = async (items, areaSqm) => {
   try {
     const res = await axios.post(`${API_BASE_URL}/pricing/estimate/`, { items, area_sqm: areaSqm });
+    return res.data;
+  } catch (err) { throw errorOf(err, 'Failed to estimate'); }
+};
+
+// Landing calculator: a typical planting of this yard, priced → same shape as getEstimate + { plant_count }
+// fullness: 'light' | 'balanced' | 'full'; mode: 'install' | 'plants'
+export const getQuickEstimate = async (areaSqm, fullness = 'balanced', mode = 'install') => {
+  try {
+    const res = await publicGet('/pricing/quick/', { params: { area_sqm: areaSqm, fullness, mode } });
     return res.data;
   } catch (err) { throw errorOf(err, 'Failed to estimate'); }
 };
