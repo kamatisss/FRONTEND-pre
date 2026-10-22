@@ -10,6 +10,8 @@ import DashboardLayout from "./components/DashboardLayout";
 import LandingPage from "./components/LandingPage";
 import ForgotPassword from "./components/ForgotPassword";
 import ScrollManager from "./components/ui/ScrollManager";
+import PwaStatus from "./components/ui/PwaStatus";
+import AppHome from "./components/AppHome";
 import { CartProvider } from "./context/CartContext";
 import "./App.css";
 
@@ -76,6 +78,7 @@ function App() {
         <CartProvider>
           <DesignProvider>
             <div className="app-root">
+            <PwaStatus />
             <Suspense fallback={<PageLoading />}>
             <Routes>
               {/* Public routes */}
@@ -340,6 +343,9 @@ function App() {
 
               {/* Landing Page */}
               <Route path="/" element={<LandingPage />} />
+
+              {/* Where the installed app opens (manifest start_url): each person's own home */}
+              <Route path="/app" element={<AppHome />} />
 
               {/* Anything else: a friendly "page not found" instead of a blank screen */}
               <Route path="*" element={<NotFound />} />

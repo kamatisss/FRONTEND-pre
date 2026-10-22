@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { Clock, LogOut, ChevronRight, CalendarClock } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import PushAlertsCard from './PushAlertsCard';
+import InstallAppCard from './InstallAppCard';
 import { clockTime } from '../data/crewJobs';
 
 /*
@@ -126,6 +127,8 @@ export default function CrewMe({ user, activeAttendance, api, headers, toast, re
           </ul>
         )}
       </section>
+
+      <InstallAppCard reason="Opens full-screen, loads faster on weak signal, and on iPhone it's needed for job alerts." />
 
       <PushAlertsCard />
 

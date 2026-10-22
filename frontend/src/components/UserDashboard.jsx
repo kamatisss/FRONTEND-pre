@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import InstallAppCard from './InstallAppCard';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useDesign } from '../context/DesignContext';
@@ -477,6 +478,8 @@ const UserDashboard = () => {
                         </div>
                     </div>
                 </div>
+
+                <InstallAppCard reason="Follow your project and bookings from your home screen, like an app." />
 
                 {/* Priority Status Tracker Section */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>

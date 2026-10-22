@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Leaf, Menu, X, MapPin, Phone, Mail, ArrowRight } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useBusiness } from '../services/business';
+import { dashboardPath } from '../data/roleHome';
 import { prefetchStudio } from '../services/prefetch';
 
 /*
@@ -12,8 +13,6 @@ import { prefetchStudio } from '../services/prefetch';
  * go to "/#id" and ui/ScrollManager scrolls there once the section has rendered.
  */
 
-const dashboardPath = (user) =>
-  user?.is_superuser ? '/admin-dashboard' : user?.is_staff ? '/staff-dashboard' : '/user-dashboard';
 
 const SECTIONS = [
   { id: 'services',     label: 'Services' },

@@ -1,15 +1,69 @@
 {
+  "id": "/app",
   "name": "Garden Studio",
   "short_name": "Garden Studio",
-  "description": "Design your garden in 3D, track your project, and (for our crew) get job alerts.",
-  "start_url": "/staff-dashboard",
+  "description": "Design your garden in 3D, follow your project, and (for our crew) see today's jobs and get job alerts.",
+  "lang": "en",
+  "start_url": "/app",
   "scope": "/",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#10b981",
+  "categories": [
+    "lifestyle",
+    "productivity"
+  ],
   "icons": [
-    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
-    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Design a garden",
+      "short_name": "Design",
+      "url": "/try-studio",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "My projects & bookings",
+      "short_name": "My projects",
+      "url": "/my-bookings",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Crew: today's jobs",
+      "short_name": "Today",
+      "url": "/staff-dashboard",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    }
   ]
 }
