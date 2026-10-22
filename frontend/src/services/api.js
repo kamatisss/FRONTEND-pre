@@ -1,7 +1,8 @@
 import axios from 'axios';
 import { compressImage } from './imageCompress';
+import { API_BASE_URL as API_ROOT } from '../config';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
+const API_BASE_URL = API_ROOT;
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -12,7 +13,7 @@ const api = axios.create({
 // ─── Interceptors ────────────────────────────────────────────────
 api.interceptors.request.use(
   (config) => { 
-    console.log(`📤 ${config.method?.toUpperCase()} ${config.url}`); 
+    if (import.meta.env.DEV) console.log(`📤 ${config.method?.toUpperCase()} ${config.url}`);
     const authTokens = localStorage.getItem('authTokens') ? JSON.parse(localStorage.getItem('authTokens')) : null;
     if (authTokens && authTokens.access) {
       config.headers.Authorization = `Bearer ${authTokens.access}`;
@@ -23,9 +24,10 @@ api.interceptors.request.use(
 );
 
 api.interceptors.response.use(
-  (response) => { console.log(`✅ ${response.status} ${response.config.url}`); return response; },
+  (response) => { if (import.meta.env.DEV) console.log(`✅ ${response.status} ${response.config.url}`); return response; },
   (error) => {
-    if (error.response) console.error(`❌ ${error.response.status}:`, error.response.data);
+    if (!import.meta.env.DEV) { /* production: screens show the error; no API details in the console */ }
+    else if (error.response) console.error(`❌ ${error.response.status}:`, error.response.data);
     else if (error.request) console.error('❌ No response — is Django running?');
     else console.error('❌', error.message);
     return Promise.reject(error);

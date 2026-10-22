@@ -24,6 +24,7 @@ import StudioAITeaser from './StudioAITeaser';
 import { useIsPhone } from './ui/useMediaQuery';
 import { saveStudioDraft, loadStudioDraft, clearStudioDraft, trackFunnel } from '../services/guestSession';
 import { DEFAULT_TIME_OF_DAY, TIME_PRESETS } from '../data/studioLight';
+import { MEDIA_BASE_URL as MEDIA_ROOT } from '../config';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SKY COLOR LOOKUP TABLE
@@ -497,7 +498,7 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
 
   const isPlacing = state.placementMode !== 'idle';
 
-  const getMediaUrl = (path) => path ? `${import.meta.env.VITE_MEDIA_BASE_URL || 'http://localhost:8000'}${path}` : null;
+  const getMediaUrl = (path) => path ? `${MEDIA_ROOT}${path}` : null;
 
   // ── Image Upload ──────────────────────────────────────────
   const handleImageUpload = async (e) => {

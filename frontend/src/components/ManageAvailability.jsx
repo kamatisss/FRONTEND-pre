@@ -3,6 +3,7 @@ import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
 import { useAuth } from '../context/AuthContext';
 import { Calendar as CalendarIcon } from 'lucide-react';
+import { API_BASE_URL as API_ROOT } from '../config';
 
 const ManageAvailability = () => {
     const { authTokens } = useAuth();
@@ -12,7 +13,7 @@ const ManageAvailability = () => {
 
     const fetchBlackoutDates = async () => {
         try {
-            const res = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/blackout-dates/`);
+            const res = await fetch(`${API_ROOT}/blackout-dates/`);
             const data = await res.json();
             data.sort((a, b) => new Date(a.date) - new Date(b.date));
             setBlackoutDates(data);
@@ -39,13 +40,13 @@ const ManageAvailability = () => {
         try {
             if (existingBlackout) {
                 // Delete
-                await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/blackout-dates/${existingBlackout.id}/`, {
+                await fetch(`${API_ROOT}/blackout-dates/${existingBlackout.id}/`, {
                     method: 'DELETE',
                     headers: { 'Authorization': `Bearer ${authTokens.access}` }
                 });
             } else {
                 // Add
-                await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/blackout-dates/`, {
+                await fetch(`${API_ROOT}/blackout-dates/`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',

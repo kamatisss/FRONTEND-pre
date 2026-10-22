@@ -2,6 +2,7 @@ import { createContext, useState, useEffect, useContext } from 'react';
 import { jwtDecode } from 'jwt-decode';
 import { disablePush } from '../services/push';
 import { useNavigate } from 'react-router-dom';
+import { API_BASE_URL as API_ROOT } from '../config';
 
 const AuthContext = createContext();
 
@@ -26,7 +27,7 @@ export const AuthProvider = ({ children }) => {
    *                                      If null, falls back to the role-based dashboard.
    */
   const loginUser = async (username, password, redirectPath = null) => {
-    const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/token/`, {
+    const response = await fetch(`${API_ROOT}/token/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
@@ -79,7 +80,7 @@ export const AuthProvider = ({ children }) => {
     }
 
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/token/refresh/`, {
+      const response = await fetch(`${API_ROOT}/token/refresh/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refresh: authTokens.refresh })
@@ -120,7 +121,7 @@ export const AuthProvider = ({ children }) => {
   }, [authTokens, loading]);
 
   const loginUserSilent = async (username, password) => {
-    const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/token/`, {
+    const response = await fetch(`${API_ROOT}/token/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),

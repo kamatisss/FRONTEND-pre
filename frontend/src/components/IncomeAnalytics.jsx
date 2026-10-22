@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowDownRight, ArrowUpRight, AlertTriangle, Star, Table2, BarChart3, Download } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { API_BASE_URL as API_ROOT } from '../config';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
+const API_BASE_URL = API_ROOT;
 
 /* ═══════════════════════════════════════════════════════════════════════
    INCOME ANALYTICS — Landscape services vs E-commerce

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Star, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { API_BASE_URL as API_ROOT } from '../config';
 
 // Defaults review a service booking; pass `endpoint` + `payload` (and copy props)
 // to reuse the same modal for other reviews, e.g. delivered shop products.
@@ -23,7 +24,7 @@ export default function ServiceRatingModal({
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
 
-  const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
+  const apiBase = API_ROOT;
 
   const handleSubmit = async (e) => {
     e.preventDefault();

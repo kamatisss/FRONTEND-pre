@@ -42,6 +42,7 @@ const TryStudio = lazy(() => import("./components/TryStudio"));
 const AIDesignerGate = lazy(() => import("./components/AIDesignerGate"));
 const ProjectGallery = lazy(() => import("./components/ProjectHub").then(m => ({ default: m.ProjectGallery })));
 const ProjectDetail = lazy(() => import("./components/ProjectHub").then(m => ({ default: m.ProjectDetail })));
+const NotFound = lazy(() => import("./components/NotFound"));
 
 function PageLoading() {
   return (
@@ -339,6 +340,9 @@ function App() {
 
               {/* Landing Page */}
               <Route path="/" element={<LandingPage />} />
+
+              {/* Anything else: a friendly "page not found" instead of a blank screen */}
+              <Route path="*" element={<NotFound />} />
             </Routes>
             </Suspense>
             </div>

@@ -10,6 +10,7 @@ import {
     Search, Filter, ShoppingBag, ShoppingCart, Plus, Minus, X, Check, ArrowRight, Leaf, 
     Trash2, CreditCard, DollarSign, Sparkles, Star, Shield, HelpCircle, MapPin, Info, ChevronDown
 } from 'lucide-react';
+import { API_BASE_URL as API_ROOT } from '../config';
 
 /* ─── Static Metadata Mappings for Inventory Items ─── */
 const PRODUCT_METADATA = {
@@ -171,7 +172,7 @@ export default function Shop() {
         if (!selectedProduct) return;
         let cancelled = false;
         setProductReviews(null);
-        fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/product-reviews/public/?product=${selectedProduct.id}`)
+        fetch(`${API_ROOT}/product-reviews/public/?product=${selectedProduct.id}`)
             .then(res => res.ok ? res.json() : [])
             .then(data => { if (!cancelled) setProductReviews(Array.isArray(data) ? data : []); })
             .catch(() => { if (!cancelled) setProductReviews([]); });
@@ -216,7 +217,7 @@ export default function Shop() {
         const fetchProducts = async () => {
             try {
                 setLoading(true);
-                const res = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/inventory/`);
+                const res = await fetch(`${API_ROOT}/inventory/`);
                 if (res.ok) {
                     const data = await res.json();
                     setProducts(data);
@@ -307,7 +308,7 @@ export default function Shop() {
 
         try {
             // 1. Post order checkout
-            const res = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/checkout/`, {
+            const res = await fetch(`${API_ROOT}/checkout/`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -334,7 +335,7 @@ export default function Shop() {
 
                 if (paymentMethod === 'online') {
                     // Redirect to PayMongo's hosted checkout (QR Ph / GCash / Maya / Card)
-                    const payRes = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/create-checkout-session/`, {
+                    const payRes = await fetch(`${API_ROOT}/create-checkout-session/`, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',

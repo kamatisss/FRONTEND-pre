@@ -13,6 +13,7 @@ import {
   UserCheck,
   ExternalLink,
 } from "lucide-react";
+import { MEDIA_BASE_URL as MEDIA_ROOT } from '../config';
 
 /* ─── Design tokens ───────────────────────────────────────────────────── */
 const GREEN      = "#10b981";
@@ -149,7 +150,7 @@ const AdminAttendance = () => {
   const getPhotoUrl = (url) => {
     if (!url) return null;
     if (url.startsWith("http://") || url.startsWith("https://")) return url;
-    return `${import.meta.env.VITE_MEDIA_BASE_URL || 'http://localhost:8000'}${url}`;
+    return `${MEDIA_ROOT}${url}`;
   };
 
   const filteredLogs = logs.filter((log) => {

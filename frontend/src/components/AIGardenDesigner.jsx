@@ -439,7 +439,7 @@ export default function AIGardenDesigner() {
         lotWidth: lotWidth,
         lotLength: lotLength,
         budget: activeLayout?.target_budget || budgetRange.max,
-        imagePreview: imagePreview || '/login-hero-bg.png',
+        imagePreview: imagePreview || '/login-hero-bg.webp',
       };
       localStorage.setItem('pending_booking_context', JSON.stringify(context));
       setShowAuthModal(true);

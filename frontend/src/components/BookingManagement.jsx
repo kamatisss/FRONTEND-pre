@@ -16,9 +16,10 @@ import {
     X,
     Eye
 } from 'lucide-react';
+import { API_BASE_URL as API_ROOT, MEDIA_BASE_URL as MEDIA_ROOT } from '../config';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
-const MEDIA_BASE_URL = import.meta.env.VITE_MEDIA_BASE_URL || 'http://localhost:8000';
+const API_BASE_URL = API_ROOT;
+const MEDIA_BASE_URL = MEDIA_ROOT;
 
 const BookingManagement = () => {
     const { authTokens } = useAuth();

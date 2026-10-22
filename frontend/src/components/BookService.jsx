@@ -4,6 +4,7 @@ import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
 import { useAuth } from '../context/AuthContext';
 import { CalendarPlus, CheckCircle2, Clock, CalendarCheck, AlertCircle, MapPin, Sparkles } from 'lucide-react';
+import { API_BASE_URL as API_ROOT } from '../config';
 
 const BookService = () => {
     const { authTokens } = useAuth();
@@ -64,7 +65,7 @@ const BookService = () => {
     useEffect(() => {
         const fetchBlackoutDates = async () => {
             try {
-                const res = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/blackout-dates/`);
+                const res = await fetch(`${API_ROOT}/blackout-dates/`);
                 const data = await res.json();
                 setBlackoutDates(data.map(b => new Date(b.date + 'T00:00:00')));
             } catch (error) {
@@ -78,7 +79,7 @@ const BookService = () => {
         const fetchDesigns = async () => {
             if (!authTokens) return;
             try {
-                const res = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/designs/`, {
+                const res = await fetch(`${API_ROOT}/designs/`, {
                     headers: {
                         'Authorization': `Bearer ${authTokens.access}`
                     }
@@ -191,7 +192,7 @@ const BookService = () => {
         }
 
         try {
-            const res = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/bookings/`, {
+            const res = await fetch(`${API_ROOT}/bookings/`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

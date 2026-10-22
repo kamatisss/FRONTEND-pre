@@ -1,3 +1,4 @@
+import { API_BASE_URL as API_ROOT } from '../config';
 const KEY = 'gs_guest_design';
 
 export const saveGuestDesign = (data) => {
@@ -89,7 +90,7 @@ export const trackFunnel = (name) => {
     if (sent.includes(name)) return;
     sessionStorage.setItem(SENT_KEY, JSON.stringify([...sent, name]));
     // No auth header on purpose: events stay anonymous, and a stale token can't 401 them
-    fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/funnel-events/`, {
+    fetch(`${API_ROOT}/funnel-events/`, {
       method: 'POST',
       keepalive: true, // survives the navigation that often follows (e.g. to the AI Designer)
       headers: { 'Content-Type': 'application/json' },

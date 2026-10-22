@@ -3,8 +3,9 @@ import { X, Leaf, Sparkles } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { clearGuestDesign } from '../services/guestSession';
+import { API_BASE_URL as API_ROOT } from '../config';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
+const API_BASE = API_ROOT;
 
 // title / subtitle / cta let other entry points (the free 3D Studio, the AI Designer) reuse
 // this modal; onAuthSuccess receives 'signin' or 'register'.

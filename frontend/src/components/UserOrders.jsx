@@ -6,6 +6,7 @@ import ServiceRatingModal from './ServiceRatingModal';
 import { createCheckoutSession } from '../services/api';
 import SwipeCarousel from './ui/SwipeCarousel';
 import { useIsPhone } from './ui/useMediaQuery';
+import { API_BASE_URL as API_ROOT } from '../config';
 
 // Each tab covers every status in that stage ("Out for Delivery" used to show only under All)
 const TAB_STATUSES = {
@@ -70,7 +71,7 @@ const UserOrders = () => {
     const handleCancelOrder = async (orderId) => {
         if (window.confirm("Are you sure you want to cancel this order?")) {
             try {
-                const res = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/orders/${orderId}/`, {
+                const res = await fetch(`${API_ROOT}/orders/${orderId}/`, {
                     method: 'DELETE',
                     headers: { 'Authorization': `Bearer ${authTokens.access}` }
                 });
@@ -90,7 +91,7 @@ const UserOrders = () => {
     useEffect(() => {
         const fetchOrders = async () => {
             try {
-                const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/orders/`, {
+                const response = await fetch(`${API_ROOT}/orders/`, {
                     headers: {
                         'Authorization': `Bearer ${authTokens.access}`,
                         'Content-Type': 'application/json'

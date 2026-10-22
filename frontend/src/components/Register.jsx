@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { User, Lock, Mail, AlertCircle, CheckCircle2, UserCircle } from 'lucide-react';
+import { API_BASE_URL as API_ROOT } from '../config';
 
 export default function Register() {
   const navigate = useNavigate();
@@ -34,7 +35,7 @@ export default function Register() {
     }
 
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/register/`, {
+      const response = await fetch(`${API_ROOT}/register/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -207,7 +208,7 @@ export default function Register() {
       </div>
 
       {/* Right Side: Hero Image */}
-      <div style={{ flex: 1, backgroundImage: 'url(/hero-bg.png)', backgroundSize: 'cover', backgroundPosition: 'center', backgroundColor: '#f1f5f9', display: window.innerWidth > 768 ? 'block' : 'none' }}>
+      <div style={{ flex: 1, backgroundImage: 'url(/hero-bg.webp)', backgroundSize: 'cover', backgroundPosition: 'center', backgroundColor: '#f1f5f9', display: window.innerWidth > 768 ? 'block' : 'none' }}>
       </div>
 
     </div>

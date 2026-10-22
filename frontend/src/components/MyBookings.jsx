@@ -9,6 +9,7 @@ import PortfolioConsentCard from './PortfolioConsentCard';
 import { getMyPortfolio } from '../services/api';
 import SwipeCarousel from './ui/SwipeCarousel';
 import { useIsPhone } from './ui/useMediaQuery';
+import { API_BASE_URL as API_ROOT, MEDIA_BASE_URL as MEDIA_ROOT } from '../config';
 
 const getActiveStep = (status, hasDesign) => {
     switch (status) {
@@ -229,7 +230,7 @@ function NewBookingModal({ isOpen, onClose, onSuccess }) {
         if (!isOpen) return;
         const fetchBlackoutDates = async () => {
             try {
-                const res = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/blackout-dates/`);
+                const res = await fetch(`${API_ROOT}/blackout-dates/`);
                 const data = await res.json();
                 setBlackoutDates(data.map(b => new Date(b.date + 'T00:00:00')));
             } catch (error) {
@@ -243,7 +244,7 @@ function NewBookingModal({ isOpen, onClose, onSuccess }) {
         if (!isOpen || !authTokens) return;
         const fetchDesigns = async () => {
             try {
-                const res = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/designs/`, {
+                const res = await fetch(`${API_ROOT}/designs/`, {
                     headers: {
                         'Authorization': `Bearer ${authTokens.access}`
                     }
@@ -334,7 +335,7 @@ function NewBookingModal({ isOpen, onClose, onSuccess }) {
         const formattedDate = localDate.toISOString().split('T')[0];
 
         try {
-            const res = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/bookings/`, {
+            const res = await fetch(`${API_ROOT}/bookings/`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -648,7 +649,7 @@ const MyBookings = () => {
         setShowNewBookingModal(false);
     };
 
-    const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
+    const apiBase = API_ROOT;
 
     const fetchMyBookings = async () => {
         try {
@@ -692,7 +693,7 @@ const MyBookings = () => {
     const handleCancelBooking = async (bookingId) => {
         if (window.confirm("Are you sure you want to cancel this booking?")) {
             try {
-                const res = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/bookings/${bookingId}/`, {
+                const res = await fetch(`${API_ROOT}/bookings/${bookingId}/`, {
                     method: 'DELETE',
                     headers: { 'Authorization': `Bearer ${authTokens.access}` }
                 });
@@ -906,7 +907,7 @@ const MyBookings = () => {
                             Service Completed Proof Photo
                         </h4>
                         <img 
-                            src={b.clock_out_photo_url.startsWith('http') ? b.clock_out_photo_url : `${import.meta.env.VITE_MEDIA_BASE_URL || 'http://localhost:8000'}${b.clock_out_photo_url}`} 
+                            src={b.clock_out_photo_url.startsWith('http') ? b.clock_out_photo_url : `${MEDIA_ROOT}${b.clock_out_photo_url}`} 
                             alt="Finished work proof" 
                             style={{
                                 maxWidth: '400px',

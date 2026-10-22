@@ -154,7 +154,7 @@ export default function Login() {
       </div>
 
       {/* Right Side: Hero Image */}
-      <div style={{ flex: 1, backgroundImage: 'url(/login-hero-bg.png)', backgroundSize: 'cover', backgroundPosition: 'center', backgroundColor: '#f1f5f9', display: window.innerWidth > 768 ? 'block' : 'none' }}>
+      <div style={{ flex: 1, backgroundImage: 'url(/login-hero-bg.webp)', backgroundSize: 'cover', backgroundPosition: 'center', backgroundColor: '#f1f5f9', display: window.innerWidth > 768 ? 'block' : 'none' }}>
       </div>
 
     </div>

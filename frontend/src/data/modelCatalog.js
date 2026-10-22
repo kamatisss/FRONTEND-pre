@@ -1,3 +1,4 @@
+import { MEDIA_BASE_URL as MEDIA_ROOT } from '../config';
 // ─── Static 3D model catalog ──────────────────────────────────────────────────
 // Core catalog .glb files ship with the frontend in `public/models/<category>/`
 // and are served from the same origin as the app (no CORS, no backend round-trip).
@@ -37,7 +38,7 @@ export const MODEL_OPTIONS = Object.entries(MODEL_CATALOG).map(([file, path]) =>
   file, path, label: titleCase(file), category: path.split('/')[2] === 'plants' ? 'plant' : path.split('/')[2],
 }));
 
-const MEDIA_BASE_URL = import.meta.env.VITE_MEDIA_BASE_URL || 'http://localhost:8000';
+const MEDIA_BASE_URL = MEDIA_ROOT;
 
 /**
  * Resolve a model reference to a loadable URL.

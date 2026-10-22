@@ -4,6 +4,7 @@ import { BarChart3, Download, Wallet, Receipt, HardHat, Table2, ChevronRight } f
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { downloadWithAuth } from './ui/download';
+import { API_BASE_URL as API_ROOT } from '../config';
 
 /*
  * Owner: Reports — the numbers the business is run (and taxed) on. Three reports, each also a CSV:
@@ -14,7 +15,7 @@ import { downloadWithAuth } from './ui/download';
  * Data: /api/reports/{money,balances,crew}/ (BACKEND apps/library/reports.py). Report and period live in the URL.
  */
 
-const API = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
+const API = API_ROOT;
 const REPORTS = [
   { key: 'money', label: 'Money in', Icon: Wallet },
   { key: 'balances', label: 'Balances', Icon: Receipt },

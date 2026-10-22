@@ -10,6 +10,7 @@ import CrewDeliveries from './CrewDeliveries';
 import CrewMe from './CrewMe';
 import PushAlertsCard from './PushAlertsCard';
 import { SERVICE, TIME, TIME_SHORT, statusOf, dayLabel, clockTime, groupJobs, navUrl, telOf, todayIso } from '../data/crewJobs';
+import { API_BASE_URL as API_ROOT } from '../config';
 
 /*
  * Field crew app (phone first). Four tabs, all in the URL so links from notifications and the
@@ -83,7 +84,7 @@ export default function CrewDashboardView({
 }) {
   const navigate = useNavigate();
   const location = useLocation();
-  const API = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
+  const API = API_ROOT;
   const token = authTokens?.access;
   const headers = { Authorization: `Bearer ${token}` };
   const today = todayIso();

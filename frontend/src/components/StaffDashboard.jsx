@@ -16,6 +16,7 @@ import OrderQueue from './OrderQueue';
 import BookingQueue from './BookingQueue';
 import CashDesk from './CashDesk';
 import { DEFAULT_TIME_OF_DAY } from '../data/studioLight';
+import { API_BASE_URL as API_ROOT } from '../config';
 
 /* ─── Toast notification system ─────────────────────────────────────────── */
 function useToast() {
@@ -149,7 +150,7 @@ const StaffDashboard = () => {
   const [crewViewMode,       setCrewViewMode]       = useState('today'); // 'today' | 'all'
   const [billingBooking,     setBillingBooking]     = useState(null);    // booking open in Project & Billing
 
-  const API = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
+  const API = API_ROOT;
 
   /* Sync tab with ?tab= URL param */
   useEffect(() => {
