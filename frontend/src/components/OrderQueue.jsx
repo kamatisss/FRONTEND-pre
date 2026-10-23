@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom';
 import {
   Search, Printer, X, Package, Truck, Banknote, RotateCcw, Clock, Archive, Inbox,
-  Phone, Mail, MapPin, RefreshCw, CheckCircle2, AlertTriangle, ShoppingBag, Download,
+  Phone, Mail, MapPin, RefreshCw, CheckCircle2, AlertTriangle, ShoppingBag, Download, SlidersHorizontal,
 } from 'lucide-react';
 import Pager from './ui/Pager';
 import LiveBanner from './ui/LiveBanner';
@@ -140,6 +140,8 @@ export default function OrderQueue({ api, headers, toast, onCounts }) {
   const [crew, setCrew]         = useState([]);     // field crew who can deliver
   const [bulkCrew, setBulkCrew] = useState('');     // "ship these with …"
   const [search, setSearch]     = useState(q);
+  // Phones: the search box shows; payment and dates fold behind "Filters" (open when one is in use)
+  const [showFilters, setShowFilters] = useState(() => !!(params.get('payment') || params.get('from') || params.get('to')));
   const [stamp, setStamp]       = useState(0);      // bump to reload
   // The parent rebuilds `headers` every render; key on the token so fetches don't re-run for nothing
   const token = headers?.Authorization;
@@ -353,6 +355,12 @@ export default function OrderQueue({ api, headers, toast, onCounts }) {
                 placeholder="Order #, customer, email, phone, address"
                 className="w-full h-10 pl-9 pr-3 rounded-xl border border-slate-200 bg-slate-50 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500" />
             </label>
+            <button onClick={() => setShowFilters(o => !o)} aria-expanded={showFilters}
+              className={`sm:hidden h-10 px-3 inline-flex items-center gap-1.5 rounded-xl border text-sm font-semibold cursor-pointer
+                ${showFilters || payment || from || to ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-slate-200 bg-white text-slate-700'}`}>
+              <SlidersHorizontal size={15} /> Filters{[payment, from || to].filter(Boolean).length ? ` · ${[payment, from || to].filter(Boolean).length}` : ''}
+            </button>
+            <div className={`${showFilters ? 'flex' : 'hidden'} sm:contents w-full flex-wrap items-center gap-2`}>
             {!['cod_to_collect', 'needs_refund', 'awaiting_payment'].includes(queue) && (
               <div className="inline-flex h-10 p-1 bg-slate-100 rounded-xl" role="group" aria-label="Payment method">
                 {[['', 'All'], ['online', 'Online'], ['cod', 'COD']].map(([v, l]) => (
@@ -372,6 +380,12 @@ export default function OrderQueue({ api, headers, toast, onCounts }) {
               <button onClick={() => { setSearch(''); update({ q: '', payment: '', from: '', to: '' }); }}
                 className="h-10 px-3 rounded-xl text-xs font-bold text-slate-500 hover:text-slate-800 bg-transparent border-none cursor-pointer">Clear filters</button>
             )}
+            {/* Phones: Export folds away with the filters; wider screens keep it beside Pick list */}
+            <button onClick={exportCsv} disabled={busy || !data?.count} title="Download these orders as a spreadsheet (CSV)"
+              className="sm:hidden h-10 px-3 inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer disabled:opacity-50">
+              <Download size={15} /> Export
+            </button>
+            </div>
             <div className="flex items-center gap-2 ml-auto">
               {queue === 'to_pack' && data?.count > 0 && !selected.size && (
                 <button onClick={openPickList} disabled={busy}
@@ -380,8 +394,8 @@ export default function OrderQueue({ api, headers, toast, onCounts }) {
                 </button>
               )}
               <button onClick={exportCsv} disabled={busy || !data?.count} title="Download these orders as a spreadsheet (CSV)"
-                className="h-10 px-3 inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer disabled:opacity-50">
-                <Download size={15} /> <span className="hidden sm:inline">Export</span>
+                className="hidden sm:inline-flex h-10 px-3 items-center gap-2 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer disabled:opacity-50">
+                <Download size={15} /> Export
               </button>
               <button onClick={reload} title="Refresh" aria-label="Refresh orders"
                 className="h-10 w-10 inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 cursor-pointer">
@@ -513,14 +527,16 @@ export default function OrderQueue({ api, headers, toast, onCounts }) {
                   const next = primaryAction(o);
                   return (
                     <li key={o.id} className={`p-3 ${selected.has(o.id) ? 'bg-emerald-50/50' : ''}`}>
-                      <div className="flex items-start gap-3">
+                      <div className="flex items-start gap-2">
                         {canSelect && (
-                          <input type="checkbox" checked={selected.has(o.id)} onChange={() => toggle(o.id)} aria-label={`Select order ${o.id}`}
-                            className="mt-1 w-5 h-5 accent-emerald-600 shrink-0" />
+                          <label className="-ml-2 -mt-2 p-2.5 shrink-0 cursor-pointer">
+                            <input type="checkbox" checked={selected.has(o.id)} onChange={() => toggle(o.id)} aria-label={`Select order ${o.id}`}
+                              className="block w-5 h-5 accent-emerald-600 cursor-pointer" />
+                          </label>
                         )}
                         <button onClick={() => setOpenId(o.id)} className="flex-1 min-w-0 text-left bg-transparent border-none p-0 cursor-pointer">
                           <div className="flex items-center justify-between gap-2">
-                            <span className="font-bold text-slate-900">#{o.id} <span className="font-semibold text-slate-700">· {o.customer_name}</span></span>
+                            <span className="font-bold text-slate-900 truncate min-w-0">#{o.id} <span className="font-semibold text-slate-700">· {o.customer_name}</span></span>
                             <AgeTag order={o} queue={queue} />
                           </div>
                           <div className="text-xs text-slate-500 truncate mt-0.5">{itemSummary(o)}</div>
@@ -531,13 +547,13 @@ export default function OrderQueue({ api, headers, toast, onCounts }) {
                             <span className="ml-auto font-bold text-slate-800 text-sm">{peso(o.total_price)}</span>
                           </div>
                         </button>
+                        {(o.needs_refund || next) && (
+                          <button onClick={() => (o.needs_refund ? setStatus(o, { payment_status: 'Refunded' }) : setStatus(o, { status: next }))} disabled={busy}
+                            className={`shrink-0 max-w-[7.5rem] min-h-[44px] px-3 py-1.5 rounded-xl text-sm font-bold leading-tight border cursor-pointer disabled:opacity-50 ${o.needs_refund ? 'border-red-200 bg-white text-red-600' : ACTIONS[next]?.cls}`}>
+                            {o.needs_refund ? 'Mark refunded' : actionLabel(o, next)}
+                          </button>
+                        )}
                       </div>
-                      {(o.needs_refund || next) && (
-                        <button onClick={() => (o.needs_refund ? setStatus(o, { payment_status: 'Refunded' }) : setStatus(o, { status: next }))} disabled={busy}
-                          className={`mt-3 w-full h-10 rounded-xl text-sm font-bold border cursor-pointer disabled:opacity-50 ${o.needs_refund ? 'border-red-200 bg-white text-red-600' : ACTIONS[next]?.cls}`}>
-                          {o.needs_refund ? 'Mark refunded' : actionLabel(o, next)}
-                        </button>
-                      )}
                     </li>
                   );
                 })}

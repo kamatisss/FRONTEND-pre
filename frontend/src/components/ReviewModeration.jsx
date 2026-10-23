@@ -74,24 +74,28 @@ export default function ReviewModeration() {
 
         {/* Filters */}
         <div className="bg-white border border-slate-200 rounded-2xl p-3 mb-5 flex flex-col gap-3">
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2">
+            <div className="flex items-center gap-2 overflow-x-auto sm:contents" role="group" aria-label="Review type">
             {SOURCES.map(([k, l]) => (
               <button key={k} onClick={() => setFilter('source', k)}
-                className={`px-3 py-1.5 rounded-full text-xs font-bold border cursor-pointer ${filters.source === k ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200'}`}>
+                className={`shrink-0 min-h-[44px] sm:min-h-0 px-3.5 sm:px-3 py-1.5 rounded-full text-sm sm:text-xs font-bold border cursor-pointer ${filters.source === k ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200'}`}>
                 {l}
               </button>
             ))}
-            <span className="w-px h-5 bg-slate-200 mx-1" />
+            </div>
+            <span className="hidden sm:block w-px h-5 bg-slate-200 mx-1" />
+            <div className="flex items-center gap-2 overflow-x-auto sm:contents" role="group" aria-label="Review status">
             {STATUSES.map(([k, l]) => (
               <button key={k || 'all'} onClick={() => setFilter('status', k)}
-                className={`px-3 py-1.5 rounded-full text-xs font-bold border cursor-pointer ${filters.status === k ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-600 border-slate-200'}`}>
+                className={`shrink-0 min-h-[44px] sm:min-h-0 px-3.5 sm:px-3 py-1.5 rounded-full text-sm sm:text-xs font-bold border cursor-pointer ${filters.status === k ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-600 border-slate-200'}`}>
                 {l}
               </button>
             ))}
+            </div>
           </div>
           <div className="flex flex-wrap gap-2">
             <select value={filters.rating} onChange={e => setFilter('rating', e.target.value)}
-                    className="px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white">
+                    className="h-11 sm:h-10 px-3 text-sm border border-slate-200 rounded-lg bg-white">
               <option value="">Any rating</option>
               {[5, 4, 3, 2, 1].map(n => <option key={n} value={n}>{n}★</option>)}
             </select>
@@ -99,9 +103,9 @@ export default function ReviewModeration() {
               <div className="relative flex-1">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search comment, customer, product, booking #"
-                       className="w-full pl-8 pr-3 py-2 text-sm border border-slate-200 rounded-lg" />
+                       className="w-full h-11 sm:h-10 pl-8 pr-3 text-sm border border-slate-200 rounded-lg" />
               </div>
-              <button className="px-3 py-2 text-sm font-bold text-white bg-slate-900 rounded-lg border-none cursor-pointer">Search</button>
+              <button className="h-11 sm:h-10 px-4 text-sm font-bold text-white bg-slate-900 rounded-lg border-none cursor-pointer">Search</button>
             </form>
           </div>
         </div>
@@ -119,10 +123,10 @@ export default function ReviewModeration() {
             {data.pages > 1 && (
               <div className="flex items-center justify-center gap-3 mt-6">
                 <button disabled={data.page <= 1} onClick={() => setFilters(f => ({ ...f, page: f.page - 1 }))}
-                        className="p-2 rounded-lg bg-white border border-slate-200 cursor-pointer disabled:opacity-40"><ChevronLeft size={16} /></button>
+                        aria-label="Previous page" className="w-11 h-11 inline-flex items-center justify-center rounded-lg bg-white border border-slate-200 cursor-pointer disabled:opacity-40"><ChevronLeft size={18} /></button>
                 <span className="text-sm text-slate-600 font-semibold">Page {data.page} of {data.pages}</span>
                 <button disabled={data.page >= data.pages} onClick={() => setFilters(f => ({ ...f, page: f.page + 1 }))}
-                        className="p-2 rounded-lg bg-white border border-slate-200 cursor-pointer disabled:opacity-40"><ChevronRight size={16} /></button>
+                        aria-label="Next page" className="w-11 h-11 inline-flex items-center justify-center rounded-lg bg-white border border-slate-200 cursor-pointer disabled:opacity-40"><ChevronRight size={18} /></button>
               </div>
             )}
           </>
@@ -200,10 +204,10 @@ function ReviewRow({ review: r, onChange, flash }) {
             {r.is_public ? 'Shown publicly under the review.' : 'The review is private, so only the customer will see this.'} The customer gets a notification.
           </p>
           <div className="flex gap-2">
-            <button disabled={busy} onClick={saveReply} className="px-3 py-1.5 text-xs font-bold text-white bg-emerald-600 rounded-lg border-none cursor-pointer disabled:opacity-50">
+            <button disabled={busy} onClick={saveReply} className="min-h-[44px] sm:min-h-0 px-4 sm:px-3 py-1.5 text-sm sm:text-xs font-bold text-white bg-emerald-600 rounded-lg border-none cursor-pointer disabled:opacity-50">
               {busy ? 'Saving…' : 'Post reply'}
             </button>
-            <button onClick={() => { setReplying(false); setDraft(r.reply); }} className="px-3 py-1.5 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg cursor-pointer">
+            <button onClick={() => { setReplying(false); setDraft(r.reply); }} className="min-h-[44px] sm:min-h-0 px-4 sm:px-3 py-1.5 text-sm sm:text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg cursor-pointer">
               Cancel
             </button>
           </div>
@@ -212,13 +216,13 @@ function ReviewRow({ review: r, onChange, flash }) {
 
       <div className="flex flex-wrap gap-2">
         {!replying && (
-          <button onClick={() => setReplying(true)} className="flex items-center gap-1 px-3 py-1.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg border-none cursor-pointer">
+          <button onClick={() => setReplying(true)} className="flex items-center gap-1.5 min-h-[44px] sm:min-h-0 px-3.5 sm:px-3 py-1.5 text-sm sm:text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg border-none cursor-pointer">
             <Reply size={12} /> {r.reply ? 'Edit reply' : 'Reply'}
           </button>
         )}
         <button disabled={busy || !live} onClick={() => update({ is_featured: !r.is_featured }, r.is_featured ? 'Removed from the homepage.' : 'Featured on the homepage carousel.')}
                 title={!r.is_public ? 'The customer kept this review private' : r.is_hidden ? 'Unhide it first' : ''}
-                className={`flex items-center gap-1 px-3 py-1.5 text-xs font-bold rounded-lg border cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed
+                className={`flex items-center gap-1.5 min-h-[44px] sm:min-h-0 px-3.5 sm:px-3 py-1.5 text-sm sm:text-xs font-bold rounded-lg border cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed
                   ${r.is_featured ? 'bg-amber-400 text-white border-amber-400' : 'bg-white text-amber-700 border-amber-300 hover:bg-amber-50'}`}>
           <Pin size={12} /> {r.is_featured ? 'Unfeature' : 'Feature'}
         </button>
@@ -227,7 +231,7 @@ function ReviewRow({ review: r, onChange, flash }) {
                     if (!r.is_hidden && !window.confirm('Hide this review from the website? Use this for spam, abuse or personal details — not to remove honest criticism. It still counts in the average rating.')) return;
                     update({ is_hidden: !r.is_hidden }, r.is_hidden ? 'Review is visible again.' : 'Review hidden from the website.');
                   }}
-                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-bold text-slate-600 bg-white border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 disabled:opacity-50">
+                  className="flex items-center gap-1.5 min-h-[44px] sm:min-h-0 px-3.5 sm:px-3 py-1.5 text-sm sm:text-xs font-bold text-slate-600 bg-white border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 disabled:opacity-50">
             {r.is_hidden ? <><Eye size={12} /> Unhide</> : <><EyeOff size={12} /> Hide</>}
           </button>
         )}

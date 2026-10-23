@@ -36,17 +36,17 @@ export function useStaffLinks(user) {
   }
 
   return [
-    { label: isAdmin ? 'Business overview' : 'Overview / Dashboard', icon: LayoutDashboard, to: isAdmin ? '/admin-dashboard' : '/staff-dashboard?tab=overview',
+    { label: isAdmin ? 'Business overview' : 'Overview', icon: LayoutDashboard, to: isAdmin ? '/admin-dashboard' : '/staff-dashboard?tab=overview',
       active: on('/admin-dashboard') || staffTab('overview') },
-    { label: 'Design Queue', icon: Paintbrush, to: '/staff-dashboard?tab=designs', active: staffTab('designs') },
-    { label: 'Appointments', icon: Calendar, to: '/staff-dashboard?tab=bookings', active: staffTab('bookings') },
-    { label: 'Order Fulfillment', icon: Package, to: '/staff-dashboard?tab=orders', active: staffTab('orders') },
+    { label: 'Designs', icon: Paintbrush, to: '/staff-dashboard?tab=designs', active: staffTab('designs') },
+    { label: 'Bookings', icon: Calendar, to: '/staff-dashboard?tab=bookings', active: staffTab('bookings') },
+    { label: 'Orders', icon: Package, to: '/staff-dashboard?tab=orders', active: staffTab('orders') },
     ...(user?.staff_role !== 'FIELD_CREW' ? [
       { label: 'Cash from Crew', icon: Banknote, to: '/staff-dashboard?tab=cash', active: staffTab('cash') },
     ] : []),
-    { label: 'Attendance Tracking', icon: Clock, to: isAdmin ? '/admin-attendance' : '/staff-attendance',
+    { label: 'Attendance', icon: Clock, to: isAdmin ? '/admin-attendance' : '/staff-attendance',
       active: on('/admin-attendance') || on('/staff-attendance') },
-    { label: 'Inventory Management', icon: Layers, to: '/inventory', active: on('/inventory') },
+    { label: 'Inventory', icon: Layers, to: '/inventory', active: on('/inventory') },
     // Office admins & admins curate the public Project Hub
     ...(user?.staff_role !== 'FIELD_CREW' ? [
       { label: 'Project Portfolio', icon: ImageIcon, to: '/portfolio-manager', active: on('/portfolio-manager') },

@@ -466,7 +466,7 @@ export default function CrewDashboardView({
                 lotLength={designModal.dimensions?.length || 15}
                 backgroundImageUrl={designModal.reference_image_url || designModal.image_url || null}
                 arMode={modalArMode} arGrid={modalArMode}
-                horizonY={designModal.dimensions?.horizonY ?? 0.5}
+                photoCorners={designModal.dimensions?.photoCorners}
                 readOnly
               />
             </div>

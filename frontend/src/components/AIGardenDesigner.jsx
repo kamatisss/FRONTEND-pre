@@ -18,6 +18,7 @@ import { saveGuestDesign, loadGuestDesign, loadAiPrefill, clearAiPrefill } from 
 import GuestAuthModal from './GuestAuthModal';
 import { useIsPhone, useMediaQuery } from './ui/useMediaQuery';
 import { DEFAULT_TIME_OF_DAY } from '../data/studioLight';
+import { defaultCorners } from '../data/photoPose';
 
 const LOADING_PHASES = [
   'Analyzing your garden space…',
@@ -141,8 +142,10 @@ export default function AIGardenDesigner() {
   const previewRef = useRef(null);
   const [slide, setSlide] = useState(0);
   const [bookingLoading, setBookingLoading] = useState(false);
-  const [horizonY, setHorizonY] = useState(0.5);
-  const [calibrationMode, setCalibrationMode] = useState(false);
+  // Photo overlay: four pins on the yard's corners in the photo (null = not placed yet, a guess is used)
+  const [photoCorners, setPhotoCorners] = useState(null);
+  const [editingCorners, setEditingCorners] = useState(false);
+  const [poseStatus, setPoseStatus] = useState(null);
   const [photoTone, setPhotoTone] = useState(null);
   const [toastMessage, setToastMessage] = useState('');
   const [expandedBreakdowns, setExpandedBreakdowns] = useState({});
@@ -278,6 +281,7 @@ export default function AIGardenDesigner() {
     if (file) {
       setSelectedImage(file);
       setImagePreview(URL.createObjectURL(file));
+      setPhotoCorners(null);   // a new photo needs its own pins
       scanZones(file);
     }
   };
@@ -287,6 +291,7 @@ export default function AIGardenDesigner() {
     scanFileRef.current = null;
     setSelectedImage(null);
     setImagePreview(null);
+    setPhotoCorners(null);
     setZoneScan({ status: 'idle', zones: [] });
     setKeepClear([]);
   };
@@ -412,15 +417,10 @@ export default function AIGardenDesigner() {
     img.src = imagePreview;
   }, [imagePreview]);
 
-  // Exit calibration mode when switching away from AR view
-  useEffect(() => {
-    if (activeView !== 'ar') setCalibrationMode(false);
-  }, [activeView]);
-
-  // Move the horizon line to wherever the user clicked inside the canvas wrapper
-  const handleHorizonClick = (e) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    setHorizonY(Math.max(0.08, Math.min(0.92, (e.clientY - rect.top) / rect.height)));
+  // Opening the photo overlay before the pins are placed: start by placing them; leaving it ends editing
+  const openView = (key) => {
+    setActiveView(key);
+    setEditingCorners(key === 'ar' && !!imagePreview && !photoCorners);
   };
 
   const handleBookDesign = async () => {
@@ -464,7 +464,8 @@ export default function AIGardenDesigner() {
         name: activeLayout.design_name,
         placed_items: activeLayout.plants,
         plant_breakdown: activeLayout.plant_breakdown || [],
-        dimensions: { width: Number(lotWidth), length: Number(lotLength), horizonY },
+        // The pins travel with the design so the office and crew see the same overlay
+        dimensions: { width: Number(lotWidth), length: Number(lotLength), ...(photoCorners && { photoCorners }) },
         total_cost: activeLayout.total_cost,
         cost_estimate: activeLayout.cost_estimate || {},
         reference_image_url: referenceImageUrl,
@@ -1341,7 +1342,7 @@ export default function AIGardenDesigner() {
                                 type="button"
                                 role="tab"
                                 aria-selected={activeView === tab.key}
-                                onClick={() => setActiveView(tab.key)}
+                                onClick={() => openView(tab.key)}
                                 style={{
                                   flex: phone ? 1 : 'none',
                                   padding: phone ? '9px 10px' : '6px 13px',
@@ -1364,10 +1365,10 @@ export default function AIGardenDesigner() {
                           </div>
                         </div>
                         <p style={styles.previewSub}>
-                          {calibrationMode
-                            ? `${touch ? 'Tap' : 'Click'} anywhere on the canvas to set the horizon line`
+                          {activeView === 'ar' && editingCorners
+                            ? 'Drag the 4 yellow pins onto the corners of your yard. The design moves with them.'
                             : activeView === 'ar'
-                              ? `Camera locked to photo perspective · ${touch ? 'Pinch' : 'Scroll'} to zoom`
+                              ? 'Seen from where you took the photo'
                               : touch
                                 ? 'Drag to rotate · Pinch to zoom · Two-finger drag to pan'
                                 : 'Left click + drag to rotate · Scroll to zoom · Right drag to pan'}
@@ -1377,12 +1378,16 @@ export default function AIGardenDesigner() {
                         {activeView === 'ar' && imagePreview && (
                           <button
                             type="button"
-                            onClick={() => setCalibrationMode(v => !v)}
+                            onClick={() => {
+                              if (!editingCorners && !photoCorners) setPhotoCorners(defaultCorners());
+                              setEditingCorners(v => !v);
+                            }}
                             style={{
+                              minHeight: touch ? 44 : 34,
                               padding: '7px 14px',
-                              background: calibrationMode ? 'rgba(251,191,36,0.15)' : 'transparent',
-                              border: `1.5px solid ${calibrationMode ? '#d97706' : '#CBD5E1'}`,
-                              color: calibrationMode ? '#b45309' : '#64748B',
+                              background: editingCorners ? 'rgba(251,191,36,0.15)' : 'transparent',
+                              border: `1.5px solid ${editingCorners ? '#d97706' : '#CBD5E1'}`,
+                              color: editingCorners ? '#b45309' : '#64748B',
                               fontWeight: 700,
                               fontSize: '0.72rem',
                               borderRadius: '8px',
@@ -1391,7 +1396,7 @@ export default function AIGardenDesigner() {
                               whiteSpace: 'nowrap',
                             }}
                           >
-                            {calibrationMode ? '✓ Done' : '⊕ Calibrate Horizon'}
+                            {editingCorners ? '✓ Done' : '⊕ Line up with my yard'}
                           </button>
                         )}
                         <div style={styles.previewCostBadge}>₱{activeLayout.total_cost.toLocaleString()}</div>
@@ -1406,46 +1411,13 @@ export default function AIGardenDesigner() {
                         lotLength={Number(lotLength)}
                         backgroundImageUrl={imagePreview}
                         arMode={activeView === 'ar'}
-                        arGrid={activeView === 'ar'}
-                        horizonY={horizonY}
+                        arGrid={activeView === 'ar' && editingCorners}
+                        photoCorners={photoCorners}
+                        editCorners={activeView === 'ar' && editingCorners}
+                        onCornersChange={setPhotoCorners}
+                        onPoseStatus={setPoseStatus}
                         photoTone={activeView === 'ar' ? photoTone : null}
                       />
-
-                      {/* Horizon calibration overlay */}
-                      {activeView === 'ar' && calibrationMode && (
-                        <div
-                          style={{ position: 'absolute', inset: 0, zIndex: 20, cursor: 'crosshair' }}
-                          onClick={handleHorizonClick}
-                        >
-                          {/* Instruction badge */}
-                          <div style={{
-                            position: 'absolute', top: '12px', left: '50%', transform: 'translateX(-50%)',
-                            background: 'rgba(0,0,0,0.72)', color: '#fff', padding: '6px 16px',
-                            borderRadius: '100px', fontSize: '0.71rem', fontWeight: 600,
-                            pointerEvents: 'none', width: 'max-content', maxWidth: 'calc(100% - 24px)', textAlign: 'center',
-                          }}>
-                            {touch ? 'Tap' : 'Click'} to align the horizon line with your photo
-                          </div>
-                          {/* Draggable horizon line */}
-                          <div style={{
-                            position: 'absolute', left: 0, right: 0,
-                            top: `${horizonY * 100}%`, transform: 'translateY(-50%)',
-                            pointerEvents: 'none',
-                          }}>
-                            <div style={{ height: '2px', background: 'rgba(251,191,36,0.85)', position: 'relative' }}>
-                              <div style={{
-                                position: 'absolute', left: '50%', top: '-9px',
-                                transform: 'translateX(-50%)',
-                                background: 'rgba(251,191,36,0.95)', color: '#0F172A',
-                                fontSize: '0.58rem', fontWeight: 800, letterSpacing: '0.1em',
-                                padding: '2px 8px', borderRadius: '4px', whiteSpace: 'nowrap',
-                              }}>
-                                HORIZON
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      )}
 
                       {activeView === 'ar' && !imagePreview && (
                         <div style={{
@@ -1469,6 +1441,24 @@ export default function AIGardenDesigner() {
                         </div>
                       )}
                     </div>
+
+                    {activeView === 'ar' && imagePreview && poseStatus && (() => {
+                      const note = !poseStatus.ok
+                        ? (poseStatus.reason === 'upside_down'
+                          ? 'The "Back" pins go on the far side of the yard (higher in the photo), the "Front" pins on the near side.'
+                          : 'Those pins don\'t outline the yard: check that no two sides cross.')
+                        : poseStatus.fitWarn
+                          ? (poseStatus.suggestedLength
+                            ? `These pins fit a yard about ${lotWidth} × ${poseStatus.suggestedLength} m, but the size above is ${lotWidth} × ${lotLength} m. Fix the size (then generate again), or move a pin.`
+                            : `The pins don't match a ${lotWidth} × ${lotLength} m yard. Check the yard size above, or move a pin.`)
+                          : poseStatus.guessed && !editingCorners
+                            ? 'This is a rough placement. Tap "Line up with my yard" and drag the pins onto its corners for an exact match.'
+                            : null;
+                      return note && (
+                        <p role="status" style={{ margin: '10px 0 0', fontSize: '0.8rem', fontWeight: 600, lineHeight: 1.5,
+                          color: poseStatus.ok && poseStatus.guessed ? color.muted : '#b45309' }}>{note}</p>
+                      );
+                    })()}
 
                     {/* Book This Design CTA */}
                     <div style={{ marginTop: '1.25rem', display: 'flex', justifyContent: phone ? 'stretch' : 'flex-end' }}>

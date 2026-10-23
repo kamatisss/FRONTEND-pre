@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import {
   Search, X, Inbox, RefreshCw, AlertTriangle, Phone, Mail, MapPin, Layers, FileDown, UserCheck,
   CalendarCheck, Truck, HardHat, ClipboardCheck, Archive, List, CalendarDays, ChevronLeft, ChevronRight,
-  CheckCircle2, Calendar, Download, Printer,
+  CheckCircle2, Calendar, Download, Printer, SlidersHorizontal,
 } from 'lucide-react';
 import Pager from './ui/Pager';
 import LiveBanner from './ui/LiveBanner';
@@ -148,6 +148,8 @@ export default function BookingQueue({ api, headers, toast, onCounts, onOpenDesi
   const [error, setError]   = useState('');
   const [busy, setBusy]     = useState(false);
   const [search, setSearch] = useState(q);
+  // Phones: the search box shows; service and dates fold behind "Filters" (open when one is in use)
+  const [showFilters, setShowFilters] = useState(() => !!(params.get('service') || params.get('from') || params.get('to')));
   const [stamp, setStamp]   = useState(0);
   const [open, setOpen]     = useState(null);   // { id, focus } — booking shown in the side panel
   // ?open=<id> (a notification link) opens that booking once
@@ -315,13 +317,19 @@ export default function BookingQueue({ api, headers, toast, onCounts, onOpenDesi
           <div className="p-3 md:p-4 border-b border-slate-100 space-y-3">
             <p className="text-xs text-slate-500 flex items-start gap-1.5"><meta.Icon size={14} className="shrink-0 mt-px text-slate-400" />{meta.hint}</p>
             <div className="flex flex-wrap items-center gap-2">
-              <label className="relative flex-1 min-w-[200px]">
+              <label className="relative flex-1 min-w-0 sm:min-w-[200px]">
                 <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                 <span className="sr-only">Search bookings</span>
                 <input type="search" value={search} onChange={e => setSearch(e.target.value)}
                   placeholder="Booking #, customer, phone, address"
                   className="w-full h-10 pl-9 pr-3 rounded-xl border border-slate-200 bg-slate-50 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500" />
               </label>
+              <button onClick={() => setShowFilters(o => !o)} aria-expanded={showFilters}
+                className={`sm:hidden h-10 px-3 inline-flex items-center gap-1.5 rounded-xl border text-sm font-semibold cursor-pointer
+                  ${showFilters || service || from || to ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-slate-200 bg-white text-slate-700'}`}>
+                <SlidersHorizontal size={15} /> Filters{[service, from || to].filter(Boolean).length ? ` · ${[service, from || to].filter(Boolean).length}` : ''}
+              </button>
+              <div className={`${showFilters ? 'flex' : 'hidden'} sm:contents w-full flex-wrap items-center gap-2`}>
               <select value={service} onChange={e => update({ service: e.target.value })} aria-label="Service"
                 className="h-10 px-3 rounded-xl border border-slate-200 bg-white text-sm text-slate-600 cursor-pointer">
                 <option value="">All services</option>
@@ -340,8 +348,9 @@ export default function BookingQueue({ api, headers, toast, onCounts, onOpenDesi
               )}
               <button onClick={exportCsv} disabled={busy || !data?.count} title="Download these bookings as a spreadsheet (CSV)"
                 className="ml-auto h-10 px-3 inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer disabled:opacity-50">
-                <Download size={15} /> <span className="hidden sm:inline">Export</span>
+                <Download size={15} /> Export
               </button>
+              </div>
               <button onClick={reload} title="Refresh" aria-label="Refresh bookings"
                 className="h-10 w-10 inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 cursor-pointer">
                 <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
@@ -434,27 +443,24 @@ export default function BookingQueue({ api, headers, toast, onCounts, onOpenDesi
                   {rows.map(b => {
                     const step = nextStep(b);
                     return (
-                      <li key={b.id} className="p-3">
-                        <button onClick={() => setOpen({ id: b.id, initial: b })} className="w-full text-left bg-transparent border-none p-0 cursor-pointer">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="font-bold text-slate-900 truncate">#{b.id} <span className="font-semibold text-slate-700">· {b.customer_name}</span></span>
-                            <StatusPill status={b.status} />
-                          </div>
-                          <div className="flex items-center gap-2 mt-1 text-xs text-slate-500">
-                            <span className="font-semibold text-slate-700">{fmtDay(b.scheduled_date)}</span>
-                            <span>{TIMES_SHORT[b.preferred_time] || ''}</span>
+                      <li key={b.id} className="p-3 flex items-start gap-3">
+                        <button onClick={() => setOpen({ id: b.id, initial: b })} className="flex-1 min-w-0 text-left bg-transparent border-none p-0 cursor-pointer">
+                          <p className="m-0 font-bold text-slate-900 truncate">#{b.id} <span className="font-semibold text-slate-700">· {b.customer_name}</span></p>
+                          <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-500 min-w-0">
+                            <span className="font-semibold text-slate-700 shrink-0">{fmtDay(b.scheduled_date)}</span>
+                            <span className="shrink-0">{TIMES_SHORT[b.preferred_time] || ''}</span>
                             <WhenTag booking={b} />
-                            <span className="ml-auto truncate">{SERVICES[b.service_type] || b.service_type}</span>
                           </div>
-                          {b.service_address && <p className="text-xs text-slate-400 truncate mt-1">{b.service_address}</p>}
-                          <div className="flex items-center justify-between gap-2 mt-2">
+                          <p className="m-0 text-xs text-slate-400 truncate mt-0.5">{SERVICES[b.service_type] || b.service_type}{b.service_address ? ` · ${b.service_address}` : ''}</p>
+                          <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                            <StatusPill status={b.status} />
                             <CrewChips booking={b} />
                             <BillingChip tracker={b.tracker} />
                           </div>
                         </button>
                         {step.key !== 'view' && (
                           <button onClick={() => onRowStep(b)} disabled={busy}
-                            className={`mt-3 w-full h-10 rounded-xl text-sm font-bold border cursor-pointer disabled:opacity-50 ${step.cls}`}>{step.label}</button>
+                            className={`shrink-0 h-11 px-3.5 rounded-xl text-sm font-bold border cursor-pointer disabled:opacity-50 ${step.cls}`}>{step.label}</button>
                         )}
                       </li>
                     );

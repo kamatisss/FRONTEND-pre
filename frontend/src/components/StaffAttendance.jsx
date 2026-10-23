@@ -329,14 +329,11 @@ const StaffAttendance = () => {
       const statusData = await getCurrentAttendance();
       setStatus(statusData);
 
-      const bookingsRes = await fetch(`${API_ROOT}/bookings/`, {
+      // Only the jobs that can be clocked in to today (the server's rule), not every booking ever made
+      const bookingsRes = await fetch(`${API_ROOT}/bookings/?startable=1`, {
         headers: { Authorization: `Bearer ${authTokens.access}` },
       });
-      if (bookingsRes.ok) {
-        const bookingsData = await bookingsRes.json();
-        // Only jobs still open for work can be clocked in to (matches the backend rule)
-        setBookings(bookingsData.filter((b) => !["For Review", "Finished", "Cancelled"].includes(b.status)));
-      }
+      if (bookingsRes.ok) setBookings(await bookingsRes.json());
 
       const logsData = await getAttendanceLogs();
       setLogs(logsData.slice(0, 10));
@@ -505,6 +502,54 @@ const StaffAttendance = () => {
     .toFixed(1);
 
   /* ── Render ── */
+  // Phones: the clock-in card comes first and "Shift Status" (which repeats its banner) is left out
+  const statRow = (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: isPhone ? "1fr 1fr" : "repeat(auto-fit, minmax(min(180px, 100%), 1fr))",
+        gap: isPhone ? 12 : 16,
+        marginBottom: isPhone ? 0 : 24,
+        marginTop: isPhone ? 20 : 0,
+      }}
+    >
+      {!isPhone && <StatCard
+        icon={Activity}
+        label="Shift Status"
+        value={status.clocked_in ? "Clocked In" : "Clocked Out"}
+        valueColor={status.clocked_in ? GREEN : TEXT_SECOND}
+        sub={
+          status.clocked_in && status.attendance
+            ? `Since ${fmtTime(status.attendance.clock_in_time)} today`
+            : "No active shift"
+        }
+        accent={status.clocked_in ? GREEN : "#9ca3af"}
+      />}
+      <StatCard
+        icon={Calendar}
+        label="Hours This Week"
+        value={totalHours}
+        sub={`${logs.filter((l) => l.clock_out_time).length} completed shifts`}
+      />
+      <StatCard
+        icon={Briefcase}
+        label="Current Project"
+        value={
+          status.clocked_in && status.attendance?.booking_label
+            ? status.attendance.booking_label.length > 18
+              ? status.attendance.booking_label.slice(0, 18) + "…"
+              : status.attendance.booking_label
+            : "—"
+        }
+        sub={
+          status.clocked_in && status.attendance
+            ? "Active project assignment"
+            : "No project assigned"
+        }
+      />
+    </div>
+  );
+
   return (
     <div
       style={{
@@ -677,50 +722,8 @@ const StaffAttendance = () => {
           </div>
         ) : (
           <>
-            {/* ── Stat row ── */}
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(min(180px, 100%), 1fr))",
-                gap: 16,
-                marginBottom: 24,
-              }}
-            >
-              <StatCard
-                icon={Activity}
-                label="Shift Status"
-                value={status.clocked_in ? "Clocked In" : "Clocked Out"}
-                valueColor={status.clocked_in ? GREEN : TEXT_SECOND}
-                sub={
-                  status.clocked_in && status.attendance
-                    ? `Since ${fmtTime(status.attendance.clock_in_time)} today`
-                    : "No active shift"
-                }
-                accent={status.clocked_in ? GREEN : "#9ca3af"}
-              />
-              <StatCard
-                icon={Calendar}
-                label="Hours This Week"
-                value={totalHours}
-                sub={`${logs.filter((l) => l.clock_out_time).length} completed shifts`}
-              />
-              <StatCard
-                icon={Briefcase}
-                label="Current Project"
-                value={
-                  status.clocked_in && status.attendance?.booking_label
-                    ? status.attendance.booking_label.length > 18
-                      ? status.attendance.booking_label.slice(0, 18) + "…"
-                      : status.attendance.booking_label
-                    : "—"
-                }
-                sub={
-                  status.clocked_in && status.attendance
-                    ? "Active project assignment"
-                    : "No project assigned"
-                }
-              />
-            </div>
+            {/* ── Stat row (on phones: below the clock-in card) ── */}
+            {!isPhone && statRow}
 
             {/* ── Main content grid ── */}
             <div
@@ -1081,6 +1084,7 @@ const StaffAttendance = () => {
                 </Card>
               </div>
             </div>
+            {isPhone && statRow}
           </>
         )}
       </div>

@@ -302,9 +302,10 @@ export const getUserActivityLogs = async (id) => {
 
 
 // ─── Attendance Management (Staff & Admin) ──────────────────────
-export const getAttendanceLogs = async () => {
+// params: optional { from, to } (YYYY-MM-DD) — one period instead of every shift ever recorded
+export const getAttendanceLogs = async (params) => {
   try {
-    const res = await api.get('/attendance/');
+    const res = await api.get('/attendance/', { params });
     return res.data;
   } catch (err) {
     throw new Error(err.response?.data?.error || err.message || 'Failed to fetch attendance logs');

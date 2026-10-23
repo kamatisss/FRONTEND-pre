@@ -1,14 +1,50 @@
 import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { listUsers, createUser, updateUser, getUserActivityLogs } from '../services/api';
-import { Users, Plus, Shield, CheckCircle, XCircle, Search, Loader2, Clock, Calendar, ShoppingBag, X, Info } from 'lucide-react';
+import { Users, Plus, Shield, CheckCircle, XCircle, Search, Loader2, Clock, Calendar, ShoppingBag, X, Info, ChevronRight } from 'lucide-react';
+import { useIsPhone } from './ui/useMediaQuery';
+
+// The account's role, whichever way the server spells it
+const roleOf = (u) => {
+    const raw = u.role || (u.is_superuser ? 'SUPER_ADMIN' : u.is_staff ? 'OFFICE_ADMIN' : 'CUSTOMER');
+    return { Admin: 'SUPER_ADMIN', Staff: 'OFFICE_ADMIN', Customer: 'CUSTOMER' }[raw] || raw;
+};
+const ROLE_STYLE = {
+    SUPER_ADMIN:  { bg: '#F3E8FF', color: '#6B21A8' },
+    OFFICE_ADMIN: { bg: '#DBEAFE', color: '#1E40AF' },
+    FIELD_CREW:   { bg: '#FFEDD5', color: '#9A3412' },
+    CUSTOMER:     { bg: '#FEF3C7', color: '#92400E' },
+};
+const nameOf = (u) => (u.first_name || u.last_name ? `${u.first_name || ''} ${u.last_name || ''}`.trim() : u.username);
+
+// Staff first: they are the accounts the owner actually manages; customers are many
+const GROUPS = [
+    ['staff', 'Staff', (u) => roleOf(u) !== 'CUSTOMER'],
+    ['customers', 'Customers', (u) => roleOf(u) === 'CUSTOMER'],
+    ['all', 'All', () => true],
+];
+const PAGE = 30;
+
+function RoleBadge({ role }) {
+    const st = ROLE_STYLE[role] || { bg: '#F3F4F6', color: '#374151' };
+    return (
+        <span style={{ display: 'inline-block', padding: '4px 12px', borderRadius: 999, background: st.bg, color: st.color,
+            fontSize: '12px', fontWeight: 700, letterSpacing: '0.02em', whiteSpace: 'nowrap' }}>{role.replace('_', ' ')}</span>
+    );
+}
 
 const ManageUsers = () => {
     const { user: currentUser } = useAuth();
+    const isMe = (u) => !!currentUser && String(u?.id) === String(currentUser.user_id);
     const [users, setUsers] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [searchTerm, setSearchTerm] = useState('');
+    const [params, setParams] = useSearchParams();
+    const group = GROUPS.some(([k]) => k === params.get('group')) ? params.get('group') : 'staff';
+    const [limit, setLimit] = useState(PAGE);
+    const isPhone = useIsPhone();
     
     // Modal states
     const [modalOpen, setModalOpen] = useState(false);
@@ -58,7 +94,7 @@ const ManageUsers = () => {
     }, []);
 
     const handleToggleStatus = async (userId, currentActive) => {
-        if (userId === currentUser.id) {
+        if (String(userId) === String(currentUser?.user_id)) {
             alert("You cannot deactivate your own account.");
             return;
         }
@@ -189,13 +225,24 @@ const ManageUsers = () => {
         }
     };
 
-    const filteredUsers = users.filter(u => {
+    const matchesSearch = users.filter(u => {
         const fullName = `${u.first_name || ''} ${u.last_name || ''}`.toLowerCase();
         const email = (u.email || '').toLowerCase();
         const username = (u.username || '').toLowerCase();
         const query = searchTerm.toLowerCase();
         return fullName.includes(query) || email.includes(query) || username.includes(query);
     });
+    const counts = Object.fromEntries(GROUPS.map(([k, , test]) => [k, matchesSearch.filter(test).length]));
+    const filteredUsers = matchesSearch.filter(GROUPS.find(([k]) => k === group)[2]);
+    const shownUsers = filteredUsers.slice(0, limit);
+    const setGroup = (k) => {
+        setLimit(PAGE);
+        setParams(prev => {
+            const next = new URLSearchParams(prev);
+            if (k === 'staff') next.delete('group'); else next.set('group', k);
+            return next;
+        }, { replace: true });
+    };
 
     return (
         <div style={{ backgroundColor: '#f1f5f9', minHeight: '100%', padding: 'clamp(0px, 3vw - 8px, 40px)', fontFamily: "'Inter', sans-serif" }}>
@@ -383,7 +430,7 @@ const ManageUsers = () => {
                         type="text"
                         placeholder="Search users by name, email, or username..."
                         value={searchTerm}
-                        onChange={e => setSearchTerm(e.target.value)}
+                        onChange={e => { setSearchTerm(e.target.value); setLimit(PAGE); }}
                         style={{
                             width: '100%',
                             padding: '12px 16px 12px 42px',
@@ -398,6 +445,22 @@ const ManageUsers = () => {
                         onFocus={e => e.currentTarget.style.borderColor = '#10b981'}
                         onBlur={e => e.currentTarget.style.borderColor = '#cbd5e1'}
                     />
+                </div>
+
+                <div role="tablist" aria-label="Accounts" style={{ display: 'flex', gap: 8, marginBottom: 16, overflowX: 'auto' }}>
+                    {GROUPS.map(([k, label]) => {
+                        const on = group === k;
+                        return (
+                            <button key={k} role="tab" aria-selected={on} onClick={() => setGroup(k)}
+                                style={{ flexShrink: 0, minHeight: 44, padding: '0 16px', borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit',
+                                    fontSize: 14, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 8,
+                                    border: `1px solid ${on ? '#0f172a' : '#e2e8f0'}`, background: on ? '#0f172a' : '#ffffff', color: on ? '#ffffff' : '#475569' }}>
+                                {label}
+                                <span style={{ fontSize: 12, fontWeight: 700, padding: '1px 8px', borderRadius: 999,
+                                    background: on ? 'rgba(255,255,255,0.2)' : '#f1f5f9', color: on ? '#ffffff' : '#475569' }}>{counts[k]}</span>
+                            </button>
+                        );
+                    })}
                 </div>
 
                 {loading ? (
@@ -416,6 +479,32 @@ const ManageUsers = () => {
                         <p style={{ margin: '0 0 12px 0', fontWeight: '700' }}>Failed to load users</p>
                         <p style={{ margin: 0, fontSize: '14px' }}>{error}</p>
                     </div>
+                ) : isPhone ? (
+                    filteredUsers.length === 0 ? (
+                        <p style={{ padding: 24, color: '#64748b', textAlign: 'center', margin: 0, border: '1px solid #e2e8f0', borderRadius: 12 }}>No matching accounts found.</p>
+                    ) : (
+                        <ul style={{ listStyle: 'none', margin: 0, padding: 0, border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden', background: '#ffffff' }}>
+                            {shownUsers.map((item, i) => (
+                                <li key={item.id} style={{ borderTop: i ? '1px solid #f1f5f9' : 'none' }}>
+                                    <button onClick={() => handleOpenEditModal(item)}
+                                        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'transparent',
+                                            border: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit', minHeight: 64 }}>
+                                        <span style={{ flex: 1, minWidth: 0 }}>
+                                            <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                                <b style={{ color: '#1e293b', fontSize: 15 }}>{nameOf(item)}</b>
+                                                <RoleBadge role={roleOf(item)} />
+                                                {!item.is_active && <span style={{ fontSize: 12, fontWeight: 700, color: '#b91c1c' }}>Deactivated</span>}
+                                            </span>
+                                            <span style={{ display: 'block', marginTop: 2, fontSize: 13, color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                {item.email || `@${item.username}`}
+                                            </span>
+                                        </span>
+                                        <ChevronRight size={18} color="#94a3b8" style={{ flexShrink: 0 }} />
+                                    </button>
+                                </li>
+                            ))}
+                        </ul>
+                    )
                 ) : (
                     <div className="rs-scroll-x" style={{ borderRadius: '12px', border: '1px solid #e2e8f0' }}>
                         {filteredUsers.length === 0 ? (
@@ -434,30 +523,7 @@ const ManageUsers = () => {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {filteredUsers.map((item) => {
-                                        const rawRole = item.role || (item.is_superuser ? 'SUPER_ADMIN' : item.is_staff ? 'OFFICE_ADMIN' : 'CUSTOMER');
-                                        let role = rawRole;
-                                        if (role === 'Admin') role = 'SUPER_ADMIN';
-                                        if (role === 'Staff') role = 'OFFICE_ADMIN';
-                                        if (role === 'Customer') role = 'CUSTOMER';
-                                        
-                                        // Role badge styling
-                                        let roleBg = '#F3F4F6';
-                                        let roleColor = '#374151';
-                                        if (role === 'SUPER_ADMIN') {
-                                            roleBg = '#F3E8FF';
-                                            roleColor = '#6B21A8';
-                                        } else if (role === 'OFFICE_ADMIN') {
-                                            roleBg = '#DBEAFE';
-                                            roleColor = '#1E40AF';
-                                        } else if (role === 'FIELD_CREW') {
-                                            roleBg = '#FFEDD5';
-                                            roleColor = '#9A3412';
-                                        } else if (role === 'CUSTOMER') {
-                                            roleBg = '#FEF3C7';
-                                            roleColor = '#92400E';
-                                        }
-
+                                    {shownUsers.map((item) => {
                                         return (
                                             <tr 
                                                 key={item.id} 
@@ -468,15 +534,11 @@ const ManageUsers = () => {
                                             >
                                                 <td style={{ padding: '16px 24px', color: '#475569', borderBottom: '1px solid #f1f5f9', fontWeight: '600' }}>{item.id}</td>
                                                 <td style={{ padding: '16px 24px', color: '#1e293b', borderBottom: '1px solid #f1f5f9', fontWeight: '700' }}>
-                                                    {item.first_name || item.last_name ? `${item.first_name || ''} ${item.last_name || ''}`.trim() : item.username}
+                                                    {nameOf(item)}
                                                 </td>
                                                 <td style={{ padding: '16px 24px', color: '#334155', borderBottom: '1px solid #f1f5f9', fontWeight: '500' }}>{item.email || '-'}</td>
                                                 <td style={{ padding: '16px 24px', borderBottom: '1px solid #f1f5f9' }}>
-                                                    <span style={{
-                                                        display: 'inline-block', padding: '4px 12px', borderRadius: 999,
-                                                        background: roleBg, color: roleColor,
-                                                        fontSize: '12px', fontWeight: 700, letterSpacing: '0.02em',
-                                                    }}>{role.replace('_', ' ')}</span>
+                                                    <RoleBadge role={roleOf(item)} />
                                                 </td>
                                                 <td style={{ padding: '16px 24px', borderBottom: '1px solid #f1f5f9' }}>
                                                     {item.is_active ? (
@@ -495,30 +557,30 @@ const ManageUsers = () => {
                                                 <td style={{ padding: '16px 24px', borderBottom: '1px solid #f1f5f9' }}>
                                                     <button 
                                                         onClick={(e) => { e.stopPropagation(); handleToggleStatus(item.id, item.is_active); }}
-                                                        disabled={item.id === currentUser?.id}
+                                                        disabled={isMe(item)}
                                                         style={{ 
                                                             padding: '8px 16px', 
                                                             display: 'flex', 
                                                             alignItems: 'center', 
                                                             gap: '8px', 
-                                                            cursor: (currentUser && item.id === currentUser.id) ? 'not-allowed' : 'pointer', 
+                                                            cursor: isMe(item) ? 'not-allowed' : 'pointer', 
                                                             background: '#ffffff', 
-                                                            color: (currentUser && item.id === currentUser.id) ? '#94a3b8' : (item.is_active ? '#ef4444' : '#10b981'), 
-                                                            border: `1px solid ${(currentUser && item.id === currentUser.id) ? '#e2e8f0' : (item.is_active ? '#fca5a5' : '#86efac')}`, 
+                                                            color: isMe(item) ? '#94a3b8' : (item.is_active ? '#ef4444' : '#10b981'), 
+                                                            border: `1px solid ${isMe(item) ? '#e2e8f0' : (item.is_active ? '#fca5a5' : '#86efac')}`, 
                                                             borderRadius: '8px', 
                                                             fontWeight: '700', 
                                                             fontSize: '13px',
                                                             transition: 'all 0.2s',
-                                                            opacity: (currentUser && item.id === currentUser.id) ? 0.6 : 1
+                                                            opacity: isMe(item) ? 0.6 : 1
                                                         }}
                                                         onMouseEnter={(e) => { 
-                                                            if (!currentUser || item.id !== currentUser.id) {
+                                                            if (!isMe(item)) {
                                                                 e.currentTarget.style.background = item.is_active ? '#fef2f2' : '#f0fdf4'; 
                                                                 e.currentTarget.style.borderColor = item.is_active ? '#ef4444' : '#10b981';
                                                             }
                                                         }}
                                                         onMouseLeave={(e) => { 
-                                                            if (!currentUser || item.id !== currentUser.id) {
+                                                            if (!isMe(item)) {
                                                                 e.currentTarget.style.background = '#ffffff'; 
                                                                 e.currentTarget.style.borderColor = item.is_active ? '#fca5a5' : '#86efac';
                                                             }
@@ -534,6 +596,13 @@ const ManageUsers = () => {
                             </table>
                         )}
                     </div>
+                )}
+                {!loading && !error && filteredUsers.length > limit && (
+                    <button onClick={() => setLimit(l => l + PAGE)}
+                        style={{ display: 'block', width: '100%', minHeight: 48, marginTop: 12, borderRadius: 12, border: '1px solid #e2e8f0',
+                            background: '#ffffff', color: '#334155', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+                        Show more ({filteredUsers.length - limit} left)
+                    </button>
                 )}
             </div>
 
@@ -638,7 +707,7 @@ const ManageUsers = () => {
                                     <label style={{ display: 'block', fontSize: '13px', fontWeight: '700', color: '#475569', marginBottom: '8px' }}>Status Operations</label>
                                     <button 
                                         onClick={(e) => { e.stopPropagation(); handleToggleStatus(selectedUser.id, selectedUser.is_active); }}
-                                        disabled={selectedUser.id === currentUser?.id}
+                                        disabled={isMe(selectedUser)}
                                         style={{ 
                                             width: '100%',
                                             padding: '10px 16px', 
@@ -646,24 +715,24 @@ const ManageUsers = () => {
                                             alignItems: 'center', 
                                             justifyContent: 'center',
                                             gap: '8px', 
-                                            cursor: (currentUser && selectedUser.id === currentUser.id) ? 'not-allowed' : 'pointer', 
+                                            cursor: isMe(selectedUser) ? 'not-allowed' : 'pointer', 
                                             background: '#ffffff', 
-                                            color: (currentUser && selectedUser.id === currentUser.id) ? '#94a3b8' : (selectedUser.is_active ? '#ef4444' : '#10b981'), 
-                                            border: `1px solid ${(currentUser && selectedUser.id === currentUser.id) ? '#e2e8f0' : (selectedUser.is_active ? '#fca5a5' : '#86efac')}`, 
+                                            color: isMe(selectedUser) ? '#94a3b8' : (selectedUser.is_active ? '#ef4444' : '#10b981'), 
+                                            border: `1px solid ${isMe(selectedUser) ? '#e2e8f0' : (selectedUser.is_active ? '#fca5a5' : '#86efac')}`, 
                                             borderRadius: '8px', 
                                             fontWeight: '700', 
                                             fontSize: '13px',
                                             transition: 'all 0.2s',
-                                            opacity: (currentUser && selectedUser.id === currentUser.id) ? 0.6 : 1
+                                            opacity: isMe(selectedUser) ? 0.6 : 1
                                         }}
                                         onMouseEnter={(e) => { 
-                                            if (!currentUser || selectedUser.id !== currentUser.id) {
+                                            if (!isMe(selectedUser)) {
                                                 e.currentTarget.style.background = selectedUser.is_active ? '#fef2f2' : '#f0fdf4'; 
                                                 e.currentTarget.style.borderColor = selectedUser.is_active ? '#ef4444' : '#10b981';
                                             }
                                         }}
                                         onMouseLeave={(e) => { 
-                                            if (!currentUser || selectedUser.id !== currentUser.id) {
+                                            if (!isMe(selectedUser)) {
                                                 e.currentTarget.style.background = '#ffffff'; 
                                                 e.currentTarget.style.borderColor = selectedUser.is_active ? '#fca5a5' : '#86efac';
                                             }

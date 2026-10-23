@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { getAttendanceLogs } from "../services/api";
 import { useAuth } from "../context/AuthContext";
+import { useIsPhone } from "./ui/useMediaQuery";
 import {
   Clock,
   MapPin,
@@ -119,6 +121,26 @@ const Badge = ({ children, color = "gray" }) => {
   );
 };
 
+/* ─── Periods: one at a time, so the screen never downloads every shift ever recorded ─── */
+const PERIODS = [["week", "This week"], ["last_week", "Last week"], ["month", "This month"], ["last_month", "Last month"]];
+
+const isoDay = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+function periodRange(key, now = new Date()) {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const monday = new Date(today);
+  monday.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+  if (key === "last_week") {
+    const start = new Date(monday); start.setDate(monday.getDate() - 7);
+    const end = new Date(monday); end.setDate(monday.getDate() - 1);
+    return [start, end];
+  }
+  if (key === "month") return [new Date(today.getFullYear(), today.getMonth(), 1), today];
+  if (key === "last_month") return [new Date(today.getFullYear(), today.getMonth() - 1, 1), new Date(today.getFullYear(), today.getMonth(), 0)];
+  return [monday, today];
+}
+
 /* ─── Main component ──────────────────────────────────────────────────── */
 const AdminAttendance = () => {
   const { authTokens } = useAuth();
@@ -128,12 +150,21 @@ const AdminAttendance = () => {
   const [selectedAttendance, setSelectedAttendance] = useState(null);
   const [searchTerm, setSearchTerm]             = useState("");
   const [filterProject, setFilterProject]       = useState("all");
+  const [params, setParams] = useSearchParams();
+  const period = PERIODS.some(([k]) => k === params.get("period")) ? params.get("period") : "week";
+  const [from, to] = periodRange(period);
+  const isPhone = useIsPhone();
+  const setPeriod = (k) => setParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (k === "week") next.delete("period"); else next.set("period", k);
+    return next;
+  }, { replace: true });
 
   const loadLogs = async () => {
     setLoading(true);
     setErrorMsg("");
     try {
-      const data = await getAttendanceLogs();
+      const data = await getAttendanceLogs({ from: isoDay(from), to: isoDay(to) });
       setLogs(data);
     } catch (err) {
       console.error(err);
@@ -145,7 +176,7 @@ const AdminAttendance = () => {
 
   useEffect(() => {
     if (authTokens) loadLogs();
-  }, [authTokens]);
+  }, [authTokens, period]); // eslint-disable-line react-hooks/exhaustive-deps -- reload when the period changes
 
   const getPhotoUrl = (url) => {
     if (!url) return null;
@@ -169,6 +200,16 @@ const AdminAttendance = () => {
   const totalHours       = logs
     .reduce((s, l) => s + (parseFloat(l.total_hours) || 0), 0)
     .toFixed(1);
+
+  // Hours per person for the period (what payroll needs), most hours first
+  const perPerson = Object.values(logs.reduce((acc, l) => {
+    const p = acc[l.staff] || (acc[l.staff] = { id: l.staff, name: l.staff_name, shifts: 0, hours: 0, onShift: false });
+    p.shifts += 1;
+    p.hours += parseFloat(l.total_hours) || 0;
+    if (!l.clock_out_time) p.onShift = true;
+    return acc;
+  }, {})).sort((a, b) => b.hours - a.hours);
+  const periodLabel = `${from.toLocaleDateString([], { month: "short", day: "numeric" })} – ${to.toLocaleDateString([], { month: "short", day: "numeric" })}`;
 
   const fmtTime = (iso) =>
     iso
@@ -251,6 +292,22 @@ const AdminAttendance = () => {
           </button>
         </div>
 
+        {/* ── Period ── */}
+        <div role="tablist" aria-label="Period" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, overflowX: "auto" }}>
+          {PERIODS.map(([k, label]) => {
+            const on = period === k;
+            return (
+              <button key={k} role="tab" aria-selected={on} onClick={() => setPeriod(k)}
+                style={{ flexShrink: 0, minHeight: isPhone ? 44 : 36, padding: "0 14px", borderRadius: 999, cursor: "pointer", fontFamily: "inherit",
+                  fontSize: 13, fontWeight: 600, border: `1px solid ${on ? "#111827" : "#e5e7eb"}`,
+                  background: on ? "#111827" : "#ffffff", color: on ? "#ffffff" : "#4b5563" }}>
+                {label}
+              </button>
+            );
+          })}
+          <span style={{ flexShrink: 0, fontSize: 12, color: "#6b7280", marginLeft: 4 }}>{periodLabel}</span>
+        </div>
+
         {/* ── Stat row ── */}
         <div
           style={{
@@ -260,10 +317,10 @@ const AdminAttendance = () => {
             marginBottom: 20,
           }}
         >
-          <StatCard label="Total shift logs"    value={totalShifts}           accent={GREEN}     valueColor="#111827" />
-          <StatCard label="Active shifts"       value={activeShifts}          accent="#f59e0b"   valueColor="#d97706" />
+          <StatCard label="Shifts"              value={totalShifts}           accent={GREEN}     valueColor="#111827" />
+          <StatCard label="On shift now"        value={activeShifts}          accent="#f59e0b"   valueColor="#d97706" />
           <StatCard label="Completed shifts"    value={completedShifts}       accent="#14b8a6"   valueColor="#0f766e" />
-          <StatCard label="Total hours logged"  value={`${totalHours} hrs`}   accent="#6366f1"   valueColor="#4338ca" />
+          <StatCard label="Hours worked"        value={`${totalHours} hrs`}   accent="#6366f1"   valueColor="#4338ca" />
         </div>
 
         {/* ── Error ── */}
@@ -286,6 +343,28 @@ const AdminAttendance = () => {
             <ShieldAlert size={16} color="#ef4444" />
             {errorMsg}
           </div>
+        )}
+
+        {/* ── Hours per person ── */}
+        {!loading && perPerson.length > 0 && (
+          <Card style={{ marginBottom: 16 }}>
+            <div style={{ padding: "12px 16px", borderBottom: "0.5px solid #f3f4f6", display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+              <h2 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#111827" }}>Hours per person</h2>
+              <span style={{ fontSize: 12, color: "#6b7280" }}>{periodLabel}</span>
+            </div>
+            <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+              {perPerson.map((p, i) => (
+                <li key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderTop: i ? "0.5px solid #f3f4f6" : "none" }}>
+                  <span style={{ flex: 1, minWidth: 0, fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {p.name}
+                    {p.onShift && <span style={{ marginLeft: 8 }}><Badge color="amber">On shift</Badge></span>}
+                  </span>
+                  <span style={{ fontSize: 12, color: "#6b7280", flexShrink: 0 }}>{p.shifts} shift{p.shifts === 1 ? "" : "s"}</span>
+                  <span style={{ fontWeight: 700, color: GREEN_DARK, flexShrink: 0, minWidth: 64, textAlign: "right" }}>{p.hours.toFixed(1)} hrs</span>
+                </li>
+              ))}
+            </ul>
+          </Card>
         )}
 
         {/* ── Filter bar ── */}
@@ -385,8 +464,37 @@ const AdminAttendance = () => {
                   fontSize: 13,
                 }}
               >
-                No matching shift logs found.
+                No shifts in this period{searchTerm || filterProject !== "all" ? " match these filters" : ""}.
               </div>
+            ) : isPhone ? (
+              /* Phones: one card per shift, everything visible without sideways scrolling */
+              <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+                {filteredLogs.map((log, idx) => (
+                  <li key={log.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px",
+                    borderTop: idx ? "0.5px solid #f3f4f6" : "none" }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ fontWeight: 700, color: "#111827" }}>{log.staff_name}</span>
+                        {log.booking ? (
+                          <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 600, color: "#4338ca", background: "#eef2ff",
+                            border: "0.5px solid #c7d2fe", borderRadius: 6, padding: "1px 6px" }}>#{log.booking}</span>
+                        ) : <Badge color="gray">General</Badge>}
+                      </div>
+                      <div style={{ marginTop: 3, fontSize: 13, color: "#4b5563" }}>
+                        {fmtDate(log.clock_in_time)} · {fmtTime(log.clock_in_time)} – {log.clock_out_time ? fmtTime(log.clock_out_time) : <Badge color="amber">On shift</Badge>}
+                        {log.clock_out_time && log.total_hours != null && (
+                          <b style={{ color: Number(log.total_hours || 0) === 0 ? "#9ca3af" : GREEN_DARK, marginLeft: 6 }}>{log.total_hours} hrs</b>
+                        )}
+                      </div>
+                    </div>
+                    <button onClick={() => setSelectedAttendance(log)}
+                      style={{ flexShrink: 0, minHeight: 44, padding: "0 14px", borderRadius: 10, border: `1px solid ${GREEN_BORDER}`,
+                        background: GREEN_BG, color: GREEN_DARK, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                      Proof
+                    </button>
+                  </li>
+                ))}
+              </ul>
             ) : (
               <div style={{ overflowX: "auto" }}>
                 <table

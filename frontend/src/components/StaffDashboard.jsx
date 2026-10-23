@@ -390,13 +390,13 @@ const StaffDashboard = () => {
 
         </div>
 
-        {/* ── Stat Cards ── */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        {/* ── Stat Cards (Overview only: on the work tabs the list itself comes first) ── */}
+        {activeTab === 'overview' && <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
           <StatCard icon={Calendar}      label="Today's Bookings"  value={todaysBookings}  iconBg="bg-emerald-50"  iconColor="text-emerald-600" border="border-slate-100" />
           <StatCard icon={Package}       label="Orders to Pack"    value={ordersToPack}    iconBg="bg-blue-50"     iconColor="text-blue-600"    border="border-slate-100" />
           <StatCard icon={FileText}      label="Pending Reviews"   value={pendingDesigns}  iconBg="bg-purple-50"   iconColor="text-purple-600"  border="border-slate-100" />
           <StatCard icon={AlertTriangle} label="Low Stock Alerts"  value={lowStock}        iconBg="bg-red-50"      iconColor="text-red-500"     border="border-slate-100" />
-        </div>
+        </div>}
 
         {/* ── Tab Navigation Bar (desktop + OFFICE_ADMIN) ── */}
         <div className="flex items-center gap-1 mb-6 bg-white border border-slate-200 rounded-2xl p-1.5 shadow-sm w-fit max-w-full overflow-x-auto">
@@ -429,7 +429,6 @@ const StaffDashboard = () => {
         )}
 
         {/* ── Overview Tab ── */}
-        {/* ── Overview Tab ── */}
         {!loading && activeTab === 'overview' && (
           <div className="space-y-6">
             {/* Welcome banner */}
@@ -443,7 +442,7 @@ const StaffDashboard = () => {
               {[
                 {
                   icon: Star, iconBg: 'bg-purple-100', iconColor: 'text-purple-600',
-                  title: 'Design Queue', tab: 'designs',
+                  title: 'Designs', tab: 'designs',
                   body: pendingDesigns
                     ? `${pendingDesigns} layout${pendingDesigns > 1 ? 's' : ''} awaiting your review.`
                     : 'All design reviews are up to date.',
@@ -451,7 +450,7 @@ const StaffDashboard = () => {
                 },
                 {
                   icon: Calendar, iconBg: 'bg-emerald-100', iconColor: 'text-emerald-600',
-                  title: 'Appointments', tab: 'bookings',
+                  title: 'Bookings', tab: 'bookings',
                   body: todaysBookings
                     ? `${todaysBookings} consultation${todaysBookings > 1 ? 's' : ''} scheduled for today.`
                     : 'No consultations scheduled for today.',
@@ -459,7 +458,7 @@ const StaffDashboard = () => {
                 },
                 {
                   icon: Package, iconBg: 'bg-blue-100', iconColor: 'text-blue-600',
-                  title: 'Order Fulfillment', tab: 'orders',
+                  title: 'Orders', tab: 'orders',
                   body: (ordersToPack
                     ? `${ordersToPack} order${ordersToPack > 1 ? 's' : ''} ready to pack and ship.`
                     : 'No orders waiting to be packed.')
@@ -689,7 +688,7 @@ function DesignReviewModal({ design, arMode, setArMode, onClose, toCanvasPlants 
             backgroundImageUrl={design.reference_image_url || design.image_url || null}
             arMode={arMode}
             arGrid={arMode}
-            horizonY={design.dimensions?.horizonY ?? 0.5}
+            photoCorners={design.dimensions?.photoCorners}
             readOnly={true}
           />
         </div>
