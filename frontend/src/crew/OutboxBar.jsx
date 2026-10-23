@@ -38,7 +38,7 @@ export default function OutboxBar({ online }) {
                 <Clock size={15} className="shrink-0 mt-0.5 text-slate-400" />
                 <div className="flex-1 min-w-0">
                   <p className="m-0 text-sm font-semibold">{e.label}</p>
-                  <p className="m-0 text-xs text-slate-500">Tapped at {time(e.at)} · {e.state === 'failed' ? 'not accepted' : 'waiting'}</p>
+                  <p className="m-0 text-xs text-slate-500">{e.kind === 'photo' ? 'Taken' : 'Tapped'} at {time(e.at)} · {e.state === 'failed' ? 'not accepted' : 'waiting'}</p>
                   {e.error && <p className="m-0 mt-1 text-xs font-semibold text-red-700">{e.error}</p>}
                 </div>
               </div>

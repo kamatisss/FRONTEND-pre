@@ -1,6 +1,8 @@
-import React, { useEffect, useState } from 'react';
-import { Camera, Trash2, ChevronDown, ChevronUp, Upload } from 'lucide-react';
-import { listProgressPhotos, uploadProgressPhoto, deleteProgressPhoto } from '../services/api';
+import React, { useEffect, useRef, useState } from 'react';
+import { Camera, Trash2, ChevronDown, ChevronUp, Upload, CloudUpload } from 'lucide-react';
+import { listProgressPhotos, deleteProgressPhoto } from '../services/api';
+import { sendPhoto, pendingPhotos } from '../crew/outbox';
+import { useOutbox, useKeptPhoto } from '../crew/useOutbox';
 
 const PHASES = [
   { key: 'BEFORE', label: 'Before', hint: 'Site as you found it' },
@@ -12,6 +14,7 @@ const PHASES = [
  * Before / during / after site photos for one booking (field crew).
  * These feed the Project Hub portfolio once the job is signed off.
  * Photos are re-encoded on the server, which strips the phone's GPS metadata.
+ * With no signal a photo is kept on the phone and sent later (crew/outbox.js); it shows here as "Waiting".
  */
 export default function ProgressPhotos({ booking, user, toast, canUpload = true, onUploaded }) {
   const [open,     setOpen]     = useState(false);
@@ -22,24 +25,41 @@ export default function ProgressPhotos({ booking, user, toast, canUpload = true,
   const [busy,     setBusy]     = useState(false);
   const [error,    setError]    = useState(null);
   const [inputKey, setInputKey] = useState(0);
+  const kept = pendingPhotos(useOutbox(), booking.id);
 
+  const load = () => listProgressPhotos(booking.id).then(list => { setPhotos(list); setError(null); }).catch(e => {
+    setPhotos(prev => prev || []);
+    setError(navigator.onLine === false ? "No signal: photos already sent can't be shown right now." : e.message);
+  });
   useEffect(() => {
     if (!open || photos !== null) return;
-    listProgressPhotos(booking.id).then(setPhotos).catch(e => { setPhotos([]); setError(e.message); });
+    load();
   }, [open]);
+
+  // A kept photo was sent: show the server's copy instead
+  const keptBefore = useRef(kept.length);
+  useEffect(() => {
+    if (kept.length < keptBefore.current && open) load();
+    keptBefore.current = kept.length;
+  }, [kept.length]); // eslint-disable-line react-hooks/exhaustive-deps -- only when the count drops
 
   const handleUpload = async () => {
     if (!file) return;
     setBusy(true);
     setError(null);
     try {
-      const created = await uploadProgressPhoto(booking.id, { file, phase, description: note.trim() });
-      setPhotos(prev => [created, ...(prev || [])]);
+      const label = PHASES.find(p => p.key === phase).label;
+      const res = await sendPhoto({ label: `${label} photo (booking #${booking.id})`, bookingId: booking.id, file, phase, description: note.trim() });
       setFile(null);
       setNote('');
       setInputKey(k => k + 1);
-      toast && toast(`${PHASES.find(p => p.key === phase).label} photo saved.`);
-      onUploaded && onUploaded();
+      if (res.data) {
+        setPhotos(prev => [res.data.photo, ...(prev || [])]);
+        toast && toast(`${label} photo saved.`);
+        onUploaded && onUploaded();
+      } else {
+        toast && toast(`No signal: the ${label.toLowerCase()} photo is kept on this phone and sends by itself later.`);
+      }
     } catch (e) {
       setError(e.message);
     }
@@ -57,7 +77,9 @@ export default function ProgressPhotos({ booking, user, toast, canUpload = true,
     }
   };
 
-  const counts = Object.fromEntries(PHASES.map(p => [p.key, (photos || []).filter(x => x.construction_phase === p.key).length]));
+  const counts = Object.fromEntries(PHASES.map(p => [p.key,
+    (photos || []).filter(x => x.construction_phase === p.key).length + kept.filter(e => e.body.phase === p.key).length]));
+  const total = (photos?.length || 0) + kept.length;
 
   return (
     <div className="border border-slate-200 rounded-xl overflow-hidden">
@@ -67,8 +89,11 @@ export default function ProgressPhotos({ booking, user, toast, canUpload = true,
       >
         <span className="flex items-center gap-2 text-sm font-bold text-slate-700">
           <Camera size={15} className="text-emerald-600" /> Site photos
-          {photos && photos.length > 0 && (
-            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800">{photos.length}</span>
+          {total > 0 && (
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800">{total}</span>
+          )}
+          {kept.length > 0 && (
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800">{kept.length} waiting</span>
           )}
         </span>
         {open ? <ChevronUp size={14} className="text-slate-400" /> : <ChevronDown size={14} className="text-slate-400" />}
@@ -87,7 +112,7 @@ export default function ProgressPhotos({ booking, user, toast, canUpload = true,
                     className={`min-h-[44px] rounded-lg text-sm font-bold border cursor-pointer transition-colors
                       ${phase === p.key ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-600 border-slate-200 hover:border-emerald-300'}`}
                   >
-                    {p.label}{photos ? ` · ${counts[p.key]}` : ''}
+                    {p.label}{photos || kept.length ? ` · ${counts[p.key]}` : ''}
                   </button>
                 ))}
               </div>
@@ -123,13 +148,14 @@ export default function ProgressPhotos({ booking, user, toast, canUpload = true,
 
           {error && <p className="text-sm text-red-700 font-semibold m-0" role="alert">{error}</p>}
 
-          {photos === null ? (
+          {photos === null && !kept.length ? (
             <p className="text-xs text-slate-400 m-0">Loading photos…</p>
-          ) : photos.length === 0 ? (
+          ) : total === 0 ? (
             <p className="text-xs text-slate-400 m-0">No photos yet.</p>
           ) : (
             <div className="grid grid-cols-3 gap-2">
-              {photos.map(p => (
+              {kept.map(e => <KeptPhoto key={e.id} entry={e} />)}
+              {(photos || []).map(p => (
                 <div key={p.id} className="relative rounded-lg overflow-hidden border border-slate-200 bg-white">
                   <a href={p.file_url} target="_blank" rel="noopener noreferrer">
                     <img src={p.file_url} alt={p.description || p.phase_display} className="w-full h-20 object-cover block" loading="lazy" />
@@ -152,6 +178,27 @@ export default function ProgressPhotos({ booking, user, toast, canUpload = true,
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/* A photo still on this phone: waiting for signal, or refused by the server (reason in the outbox bar) */
+function KeptPhoto({ entry }) {
+  const url = useKeptPhoto(entry.id);
+  const failed = entry.state === 'failed';
+  const phase = PHASES.find(p => p.key === entry.body.phase)?.label || '';
+  return (
+    <div className={`relative rounded-lg overflow-hidden border bg-white ${failed ? 'border-red-300' : 'border-amber-300'}`}
+      title={failed ? entry.error : 'Sends by itself when you have signal'}>
+      {url ? <img src={url} alt={entry.body.description || phase} className="w-full h-20 object-cover block opacity-80" />
+        : <div className="w-full h-20 bg-slate-100" />}
+      <span className="absolute top-1 left-1 text-[9px] font-black uppercase tracking-wide bg-black/60 text-white px-1.5 py-0.5 rounded">
+        {phase}
+      </span>
+      <span className={`absolute bottom-1 left-1 right-1 text-[10px] font-bold px-1.5 py-0.5 rounded inline-flex items-center gap-1 justify-center
+        ${failed ? 'bg-red-600 text-white' : 'bg-amber-100 text-amber-900'}`}>
+        <CloudUpload size={10} /> {failed ? 'Not sent' : 'Waiting'}
+      </span>
     </div>
   );
 }

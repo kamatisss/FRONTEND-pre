@@ -7,10 +7,16 @@
  *                no signal they wait here and are sent, in order, when the signal comes back.
  *                Each action carries an Idempotency-Key (a retry after a dropped connection is done
  *                once) and X-Action-Time (the server keeps the real time). Backend: apps/library/offline.py
+ * Photos         Site photos and "Take photo & finish" wait too (phase 3): the picture is kept in
+ *                IndexedDB (photoStore.js), the outbox entry says where it goes. A stage photo is one
+ *                entry: upload, then mark the stage done with it (each step has its own key, so a
+ *                retry after the upload went through doesn't upload it twice).
  * Privacy        Only this crew member's own work is kept, and all of it is wiped on sign-out.
- * Things that only make sense live (On my way, photos, sign-off) are NOT queued.
+ * Things that only make sense live (On my way, sign-off) are NOT queued.
  */
 import { API_BASE_URL } from '../config';
+import { compressImage } from '../services/imageCompress';
+import { putPhoto, getPhoto, removePhoto, clearPhotos } from './photoStore';
 
 const OUTBOX_KEY = 'gs.crew.outbox';
 const SNAP_PREFIX = 'gs.crew.snap.';
@@ -58,6 +64,7 @@ export function clearCrewOffline() {
   try {
     Object.keys(localStorage).filter((k) => k.startsWith('gs.crew.')).forEach((k) => localStorage.removeItem(k));
   } catch { /* storage blocked: nothing was kept */ }
+  clearPhotos();
   listeners.forEach((fn) => fn([]));
 }
 
@@ -66,9 +73,11 @@ export function clearCrewOffline() {
 // Weak signal can leave a request hanging: give up after this and keep the action for later
 // (if it did reach the server, the Idempotency-Key makes the resend harmless)
 const SEND_TIMEOUT_MS = 15000;
-const timeoutSignal = () => (AbortSignal.timeout ? AbortSignal.timeout(SEND_TIMEOUT_MS) : undefined);
+const PHOTO_TIMEOUT_MS = 120000;   // a photo on weak mobile data takes longer
+const timeoutSignal = (ms = SEND_TIMEOUT_MS) => (AbortSignal.timeout ? AbortSignal.timeout(ms) : undefined);
 
 async function deliver(entry) {
+  if (entry.kind === 'photo') return deliverPhoto(entry);
   const r = await fetch(`${API_BASE_URL}${entry.path}`, {
     signal: timeoutSignal(),
     method: entry.method,
@@ -82,6 +91,36 @@ async function deliver(entry) {
   return { ok: r.ok, status: r.status, data };
 }
 
+/** Upload a kept photo, then (stage photos) mark the stage done with it. */
+async function deliverPhoto(entry, picture = null) {
+  const { bookingId, stage } = entry.ref;
+  const blob = picture || await getPhoto(entry.id);
+  if (!blob) return { ok: false, status: 410, data: { error: 'The photo is no longer on this phone. Please take it again.' } };
+  const form = new FormData();
+  form.append('file', blob, 'photo.jpg');
+  form.append('construction_phase', entry.body.phase);
+  form.append('description', entry.body.description || '');
+  const headers = { Authorization: `Bearer ${token()}`, 'X-Action-Time': entry.at };
+  const r = await fetch(`${API_BASE_URL}${entry.path}`, {
+    signal: timeoutSignal(PHOTO_TIMEOUT_MS), method: 'POST', body: form,
+    headers: { ...headers, 'Idempotency-Key': entry.id },
+  });
+  const photo = await r.json().catch(() => ({}));
+  if (!r.ok) return { ok: false, status: r.status, data: photo };
+  let result = { ok: true, status: r.status, data: { photo } };
+  if (stage) {
+    const m = await fetch(`${API_BASE_URL}/bookings/${bookingId}/update_milestone/`, {
+      signal: timeoutSignal(), method: 'PATCH',
+      headers: { ...headers, 'Content-Type': 'application/json', 'Idempotency-Key': `${entry.id}-stage` },
+      body: JSON.stringify({ phase: stage, completion_pct: 100, proof_photo_url: photo.file_url }),
+    });
+    const data = await m.json().catch(() => ({}));
+    result = m.ok ? { ok: true, status: m.status, data: { photo, ...data } } : { ok: false, status: m.status, data };
+  }
+  if (result.ok) await removePhoto(entry.id);
+  return result;
+}
+
 const errorText = (data) => data?.error || data?.detail || 'The server refused this.';
 
 /**
@@ -90,7 +129,39 @@ const errorText = (data) => data?.error || data?.detail || 'The server refused t
  * A refusal from the server (e.g. "You are 300 m from the site") is thrown as an Error, not queued.
  */
 export async function sendAction({ label, path, method = 'POST', body = {}, kind, ref = {} }) {
-  const entry = { id: newId(), label, path, method, body, kind, ref, at: new Date().toISOString(), state: 'waiting', attempts: 0 };
+  return attempt({ id: newId(), label, path, method, body, kind, ref, at: new Date().toISOString(), state: 'waiting', attempts: 0 });
+}
+
+const NOT_KEPT = 'No signal, and this phone could not keep the photo. Try again when you have signal.';
+
+/**
+ * Upload a site photo now, or keep it on the phone until there's signal.
+ *   { label, bookingId, file, phase: BEFORE|DURING|AFTER, description, stage }  — stage (e.g. 'site_prep')
+ *   also marks that stage done with the photo.  →  { data: { photo, milestone? } } or { queued: true }.
+ * If the phone can't store it and it can't be sent, an Error is thrown (the screen keeps the photo for a retry).
+ */
+export async function sendPhoto({ label, bookingId, file, phase, description = '', stage = null }) {
+  const blob = await compressImage(file);
+  const entry = {
+    id: newId(), label, kind: 'photo', path: `/bookings/${bookingId}/progress-media/`, method: 'POST',
+    body: { phase, description }, ref: { bookingId, stage }, at: new Date().toISOString(), state: 'waiting', attempts: 0,
+  };
+  const kept = await putPhoto(entry.id, blob);
+  if (!kept) {
+    // Not stored: try it live once, never queue a photo that isn't there
+    if (navigator.onLine === false) throw new Error(NOT_KEPT);
+    let result;
+    try {
+      result = await deliverPhoto(entry, blob);
+    } catch { throw new Error(NOT_KEPT); }
+    if (result.ok) return { data: result.data };
+    throw new Error(result.status === 410 ? NOT_KEPT : errorText(result.data));
+  }
+  return attempt(entry);
+}
+
+/** Try an entry now; keep it in the outbox when there's no signal or the server is having trouble. */
+async function attempt(entry) {
   if (navigator.onLine === false) {
     setOutbox([...getOutbox(), entry]);
     return { queued: true };
@@ -108,6 +179,7 @@ export async function sendAction({ label, path, method = 'POST', body = {}, kind
     setOutbox([...getOutbox(), { ...entry, attempts: 1 }]);
     return { queued: true };
   }
+  if (entry.kind === 'photo') removePhoto(entry.id);   // refused: it won't be sent
   throw new Error(errorText(result.data));
 }
 
@@ -153,7 +225,10 @@ export function flushOutbox() {
   return flushing;
 }
 
-export function discardAction(id) { setOutbox(getOutbox().filter((e) => e.id !== id)); }
+export function discardAction(id) {
+  removePhoto(id);
+  setOutbox(getOutbox().filter((e) => e.id !== id));
+}
 
 export function retryAction(id) {
   setOutbox(getOutbox().map((e) => (e.id === id ? { ...e, state: 'waiting', error: '', attempts: 0 } : e)));
@@ -196,3 +271,7 @@ export function withPendingDeliveries(run, outbox) {
   const plus = (v) => (v == null ? v : (Number(v) + cash).toFixed(2));
   return { ...run, active, delivered_today: done, cash_today: plus(run.cash_today), cash_to_hand_in: plus(run.cash_to_hand_in) };
 }
+
+/** This booking's photos still on the phone (waiting, or not accepted), oldest first. */
+export const pendingPhotos = (outbox, bookingId) =>
+  outbox.filter((e) => e.kind === 'photo' && e.ref.bookingId === bookingId);

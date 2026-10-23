@@ -1,14 +1,14 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Navigation, Phone, StickyNote, Play, LogOut, Camera, Check, Lock, Layers, Eye, FileText, Loader2, AlertTriangle,
   Car, PackageCheck, ChevronDown, ChevronUp, RotateCcw, Flag,
 } from 'lucide-react';
 import ProgressPhotos from './ProgressPhotos';
 import ProblemSheet from './ui/ProblemSheet';
-import { uploadProgressPhoto } from '../services/api';
 import { SERVICE, TIME, statusOf, dayLabel, clockTime, navUrl as mapsUrl, telOf } from '../data/crewJobs';
 import { productImage } from '../data/productImage';
-import { sendAction } from '../crew/outbox';
+import { sendAction, sendPhoto, pendingPhotos } from '../crew/outbox';
+import { useOutbox } from '../crew/useOutbox';
 
 /*
  * One crew job, phone-first. Top to bottom: who and when → where (Navigate / Call) → the customer's
@@ -110,13 +110,20 @@ export function JobShift({ booking, todayIso, activeAttendance, toast, onChanged
 
 /* ── The crew's three stages: one photo each ────────────────────────────── */
 function FieldStages({ booking, api, headers, onChanged, onTheJob }) {
-  const [milestones, setMilestones] = useState(() => Object.fromEntries((booking.project_milestones || []).map(m => [m.phase, m])));
+  const fromBooking = () => Object.fromEntries((booking.project_milestones || []).map(m => [m.phase, m]));
+  const [milestones, setMilestones] = useState(fromBooking);
+  // Fresh job data (e.g. after saved stage photos were sent) replaces what this card knew
+  useEffect(() => { setMilestones(fromBooking()); }, [booking.project_milestones]); // eslint-disable-line react-hooks/exhaustive-deps
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState({});
   const [failed, setFailed] = useState({});   // stage → the photo that didn't upload (retry without retaking)
   const inputs = useRef({});
+  // Stage photos taken with no signal: the stage counts as done here, and is sent with the photo later
+  const waitingStage = Object.fromEntries(pendingPhotos(useOutbox(), booking.id)
+    .filter(e => e.ref.stage).map(e => [e.ref.stage, e.state]));
   const office = milestones.design_contract?.completion_pct === 100;
-  const done = STAGES.filter(s => milestones[s.key]?.completion_pct === 100).length;
+  const isDoneHere = key => milestones[key]?.completion_pct === 100 || waitingStage[key] === 'waiting';
+  const done = STAGES.filter(s => isDoneHere(s.key)).length;
 
   const save = async (stage, pct, proof = '') => {
     const r = await fetch(`${api}/bookings/${booking.id}/update_milestone/`, {
@@ -133,9 +140,14 @@ function FieldStages({ booking, api, headers, onChanged, onTheJob }) {
     if (!file) return;
     setBusy(stage.key); setError(e => ({ ...e, [stage.key]: '' }));
     try {
-      // The proof is saved as a progress photo too (cleaned of GPS data, shown to the office)
-      const photo = await uploadProgressPhoto(booking.id, { file, phase: stage.phase, description: `${stage.label} done` });
-      await save(stage, 100, photo.file_url);
+      // The proof is saved as a progress photo too (cleaned of GPS data, shown to the office).
+      // No signal: the photo stays on the phone and the stage is finished when it's sent.
+      const res = await sendPhoto({
+        label: `${stage.label} done (booking #${booking.id})`, bookingId: booking.id, file,
+        phase: stage.phase, description: `${stage.label} done`, stage: stage.key,
+      });
+      if (res.data?.milestone) setMilestones(prev => ({ ...prev, [stage.key]: res.data.milestone }));
+      if (res.data) onChanged?.();
       setFailed(prev => ({ ...prev, [stage.key]: null }));
     } catch (e) {
       setFailed(prev => ({ ...prev, [stage.key]: file }));
@@ -167,7 +179,8 @@ function FieldStages({ booking, api, headers, onChanged, onTheJob }) {
       </p>
       {STAGES.map((stage, i) => {
         const m = milestones[stage.key];
-        const isDone = m?.completion_pct === 100;
+        const isDone = isDoneHere(stage.key);
+        const waiting = waitingStage[stage.key] === 'waiting' && m?.completion_pct !== 100;
         const saving = busy === stage.key;
         return (
           <div key={stage.key} className={`rounded-xl border p-3 ${isDone ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-slate-200'}`}>
@@ -178,8 +191,10 @@ function FieldStages({ booking, api, headers, onChanged, onTheJob }) {
               <div className="flex-1 min-w-0">
                 <p className={`m-0 text-[15px] font-bold ${isDone ? 'text-emerald-900' : 'text-slate-900'}`}>{stage.label}</p>
                 {!isDone && <p className="m-0 text-xs text-slate-500">{stage.hint}</p>}
+                {waiting && <p className="m-0 text-xs font-semibold text-amber-700">Photo saved on this phone. Sends when you have signal.</p>}
+                {waitingStage[stage.key] === 'failed' && !isDone && <p className="m-0 text-xs font-semibold text-red-700">Photo not accepted. See “not accepted” at the top.</p>}
               </div>
-              {isDone && onTheJob && (
+              {isDone && !waiting && onTheJob && (
                 <button type="button" disabled={saving} onClick={() => undo(stage)}
                   className="min-h-[40px] px-2 bg-transparent border-none text-xs font-semibold text-slate-500 underline cursor-pointer">
                   {saving ? 'Saving…' : 'Undo'}
@@ -366,6 +381,7 @@ export default function CrewJobCard({
   const blockers = booking.sign_off_blockers || [];
   const design = booking.design_details;
   const [problem, setProblem] = useState(false);
+  const photosWaiting = pendingPhotos(useOutbox(), booking.id).length;
   const hasAr = !!(design?.reference_image_url || design?.image_url);
 
   return (
@@ -428,7 +444,12 @@ export default function CrewJobCard({
         )}
 
         {booking.status === 'Installing' && (
-          blockers.length ? (
+          photosWaiting > 0 ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+              <p className="m-0 text-sm font-bold text-amber-900 flex items-center gap-1.5"><AlertTriangle size={15} /> {photosWaiting === 1 ? '1 photo' : `${photosWaiting} photos`} still on this phone</p>
+              <p className="m-0 mt-1 text-sm text-amber-900">You can submit for sign-off once they are sent. They go by themselves when you have signal.</p>
+            </div>
+          ) : blockers.length ? (
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
               <p className="m-0 text-sm font-bold text-slate-800 flex items-center gap-1.5"><AlertTriangle size={15} className="text-amber-600" /> Before you can submit for sign-off</p>
               <ul className="m-0 mt-1.5 pl-5 text-sm text-slate-700">{blockers.map(b => <li key={b}>{b}</li>)}</ul>

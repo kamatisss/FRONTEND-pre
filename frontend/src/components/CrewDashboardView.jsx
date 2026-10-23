@@ -381,7 +381,7 @@ export default function CrewDashboardView({
               <span><b>No signal.</b> Your work is saved and sent later.</span>
             </div>
             <p className="m-0 mb-4 px-1 text-xs text-slate-600 leading-snug">
-              Your jobs are saved on this phone. Starting or ending a job, deliveries and problem reports are sent when the signal is back. Photos and "On my way" need signal.
+              Your jobs are saved on this phone. Starting or ending a job, photos, deliveries and problem reports are sent when the signal is back. "On my way" needs signal.
             </p>
           </>
         )}
