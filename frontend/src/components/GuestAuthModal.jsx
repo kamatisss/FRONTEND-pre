@@ -21,7 +21,7 @@ export default function GuestAuthModal({
   const [tab, setTab] = useState('signin'); // 'signin' | 'register'
 
   const [signIn, setSignIn] = useState({ username: '', password: '' });
-  const [reg, setReg] = useState({ username: '', first_name: '', last_name: '', email: '', password: '', confirm: '' });
+  const [reg, setReg] = useState({ username: '', first_name: '', last_name: '', email: '', password: '', confirm: '', accept: false });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -60,6 +60,7 @@ export default function GuestAuthModal({
           last_name: reg.last_name,
           email: reg.email,
           password: reg.password,
+          accept_privacy: reg.accept,
         }),
       });
       const data = await res.json();
@@ -73,7 +74,7 @@ export default function GuestAuthModal({
           onAuthSuccess('register');
         }
       } else {
-        const msg = data.username?.[0] || data.email?.[0] || data.password?.[0] || data.detail || 'Registration failed.';
+        const msg = data.username?.[0] || data.email?.[0] || data.password?.[0] || data.accept_privacy?.[0] || data.detail || 'Registration failed.';
         setError(msg);
       }
     } catch (err) {
@@ -151,6 +152,9 @@ export default function GuestAuthModal({
         }
         .gam-input:focus { border-color: #10b981; box-shadow: 0 0 0 3px rgba(16,185,129,0.12); background: #fff; }
         .gam-field { margin-bottom: 14px; }
+        .gam-consent { display: flex; align-items: flex-start; gap: 10px; margin: 2px 0 14px; font-size: 13px; line-height: 1.5; color: #475569; cursor: pointer; }
+        .gam-consent input { width: 18px; height: 18px; margin-top: 1px; accent-color: #10b981; flex-shrink: 0; }
+        .gam-consent a { color: #059669; font-weight: 600; }
         .gam-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
         .gam-submit {
           width: 100%; padding: 13px;
@@ -253,6 +257,12 @@ export default function GuestAuthModal({
                       value={reg.confirm} onChange={e => setReg(p => ({ ...p, confirm: e.target.value }))} />
                   </div>
                 </div>
+                {/* Data Privacy Act: consent before any account exists (the server records it).
+                    The notice opens in a new tab so the guest's design and this form stay as they are. */}
+                <label className="gam-consent">
+                  <input type="checkbox" required checked={reg.accept} onChange={e => setReg(p => ({ ...p, accept: e.target.checked }))} />
+                  <span>I have read the <a href="/privacy" target="_blank" rel="noopener noreferrer">Privacy Notice</a> and agree to the collection and use of my information as described there.</span>
+                </label>
                 <button className="gam-submit" type="submit" disabled={loading}>
                   {loading ? 'Creating account…' : <><Sparkles size={15} style={{ marginRight: 6, verticalAlign: 'middle' }} />Create Account &amp; Continue</>}
                 </button>

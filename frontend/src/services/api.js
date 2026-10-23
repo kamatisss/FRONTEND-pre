@@ -42,7 +42,7 @@ export const generateDepthMap = async (imageFile) => {
     const res = await api.post('/generate-depth/', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 300000, // 5 minutes timeout for model download/inference
-      onUploadProgress: (p) => console.log(`⏳ Upload: ${Math.round((p.loaded * 100) / p.total)}%`),
+      onUploadProgress: (p) => { if (import.meta.env.DEV) console.log(`⏳ Upload: ${Math.round((p.loaded * 100) / p.total)}%`); },
     });
     const data = res.data;
     const required = ['depth_map_url', 'normal_map_url', 'rock_mask_url', 'grass_mask_url'];

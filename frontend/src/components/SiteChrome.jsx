@@ -284,8 +284,7 @@ export function SiteFooter() {
         <div className="sf-bottom">
           <p style={{ margin: 0 }}>© {new Date().getFullYear()} {BUSINESS.name}. All rights reserved.</p>
           <div className="sf-legal">
-            <a href="#">Privacy Policy</a>
-            <a href="#">Terms of Service</a>
+            <Link to="/privacy">Privacy Notice</Link>
           </div>
         </div>
       </div>

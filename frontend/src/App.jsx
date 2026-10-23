@@ -45,6 +45,7 @@ const AIDesignerGate = lazy(() => import("./components/AIDesignerGate"));
 const ProjectGallery = lazy(() => import("./components/ProjectHub").then(m => ({ default: m.ProjectGallery })));
 const ProjectDetail = lazy(() => import("./components/ProjectHub").then(m => ({ default: m.ProjectDetail })));
 const NotFound = lazy(() => import("./components/NotFound"));
+const PrivacyPolicy = lazy(() => import("./components/PrivacyPolicy"));
 
 function PageLoading() {
   return (
@@ -94,6 +95,7 @@ function App() {
               <Route path="/projects" element={<ProjectGallery />} />
               <Route path="/projects/:slug" element={<ProjectDetail />} />
               <Route path="/track-record" element={<TrackRecord />} />
+              <Route path="/privacy" element={<PrivacyPolicy />} />
 
               {/* User Dashboard / Studio */}
               <Route

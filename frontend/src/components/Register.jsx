@@ -25,6 +25,7 @@ export default function Register() {
     password: '',
     confirmPassword: ''
   });
+  const [acceptPrivacy, setAcceptPrivacy] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -57,7 +58,8 @@ export default function Register() {
           first_name: formData.firstName,
           last_name: formData.lastName,
           email: formData.email,
-          password: formData.password
+          password: formData.password,
+          accept_privacy: acceptPrivacy
         })
       });
 
@@ -71,6 +73,7 @@ export default function Register() {
         const errorMsg = data.username ? `Username: ${data.username[0]}` :
                          data.email ? `Email: ${data.email[0]}` :
                          data.password ? `Password: ${data.password[0]}` :
+                         data.accept_privacy ? data.accept_privacy[0] :
                          'Registration failed. Please try again.';
         throw new Error(errorMsg);
       }
@@ -198,6 +201,13 @@ export default function Register() {
                 onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
               />
             </div>
+
+            {/* Data Privacy Act: consent before any account exists (the server records it) */}
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', fontSize: '14px', color: '#475569', lineHeight: 1.5, cursor: 'pointer' }}>
+              <input type="checkbox" checked={acceptPrivacy} onChange={(e) => setAcceptPrivacy(e.target.checked)} required
+                style={{ width: '18px', height: '18px', marginTop: '2px', accentColor: '#10b981', flexShrink: 0 }} />
+              <span>I have read the <Link to="/privacy" target="_blank" style={{ color: '#059669', fontWeight: 600 }}>Privacy Notice</Link> and agree to the collection and use of my information as described there.</span>
+            </label>
 
             <button 
               type="submit" 
