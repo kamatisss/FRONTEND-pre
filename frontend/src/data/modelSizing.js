@@ -9,7 +9,8 @@
 export const SIZE_MEASURE = { plant: 'height', furniture: 'height', hardscape: 'longest' };
 
 export const sizeLabel = (category) =>
-  (SIZE_MEASURE[category] === 'longest' ? 'Size, longest side (m)' : 'Height (m)');
+  (SIZE_MEASURE[category] === 'longest' ? 'Size, longest side (m)'
+    : category === 'plant' ? 'Height after ~2 years (m)' : 'Height (m)');
 
 export const sizeHint = (category) => (SIZE_MEASURE[category] === 'longest'
   ? 'Accent boulders are usually 0.5–0.9 m.'
@@ -31,3 +32,23 @@ export const placedScale = (raw) => {
   if (!Number.isFinite(n)) return 1;
   return Math.abs(n - LEGACY_PLACED_SCALE) < 1e-6 ? 1 : n;
 };
+
+// ─── Growth stages (Studio "At planting · In 2 years · Fully grown") ─────────────
+// real_world_size is the ESTABLISHED height (~2 years). planting_height / mature_height are optional;
+// when one is missing that stage shows the established size. Only plants grow.
+export const GROWTH_STAGES = [
+  { key: 'planting', label: 'At planting', short: 'Planting' },
+  { key: 'established', label: 'In 2 years', short: '2 years' },
+  { key: 'mature', label: 'Fully grown', short: 'Grown' },
+];
+export const DEFAULT_GROWTH_STAGE = 'established';
+
+/** Metres to draw this product at for a growth stage (non-plants: their size, unchanged). */
+export function stageSize(product, stage, category = product?.category) {
+  const established = Number(product?.real_world_size) || 0;
+  if (category !== 'plant' || !established) return established || undefined;
+  if (stage === 'planting') return Number(product?.planting_height) || established;
+  if (stage === 'mature') return Number(product?.mature_height) || established;
+  return established;
+}
+

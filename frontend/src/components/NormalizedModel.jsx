@@ -2,6 +2,7 @@ import { useMemo, useEffect } from 'react';
 import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { realScale } from '../data/modelSizing';
+import { exactBounds } from '../services/modelBounds';
 
 // ─── Category scale multipliers ────────────────────────────────────────────────
 // After normalizing every model to 1 unit, these multipliers make each category
@@ -70,8 +71,8 @@ export default function NormalizedModel({ url, scale = 1, category = 'plant', re
     // ── 3. Compute the world-space bounding box of the raw clone ──────────────
     //    We must do this BEFORE modifying position/scale so the box reflects
     //    the model's original exported values.
-    clone.updateWorldMatrix(true, true);
-    const box    = new THREE.Box3().setFromObject(clone);
+    // Exact vertex bounds (the fast box floated models whose mesh is rotated in the file), measured once per model
+    const box    = exactBounds(clone, scene);
     const size   = new THREE.Vector3();
     const center = new THREE.Vector3();
     box.getSize(size);

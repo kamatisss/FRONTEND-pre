@@ -8,6 +8,7 @@ import {
 import { submitOrder, createCheckoutSession, getPricing, getEstimate } from '../services/api';
 import { normalizePhMobile, codBlockReason, PHONE_HINT } from '../services/checkout';
 import { useAuth } from '../context/AuthContext';
+import { lotOf } from '../data/lot';
 
 /* ─────────────────────────────────────────────────────────────────────────
    GLOBAL STYLES
@@ -283,7 +284,8 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
     if (i.productId != null) acc[i.productId] = (acc[i.productId] || 0) + 1;
     return acc;
   }, {}));
-  const area = Number(state.dimensions?.width || 0) * Number(state.dimensions?.length || 0);
+  const lot = lotOf(state.dimensions);   // the same (clamped) lot the 3D ground shows
+  const area = lot.width * lot.length;
   useEffect(() => {
     const counts = JSON.parse(itemCounts);
     const items = Object.entries(counts).map(([product_id, quantity]) => ({ product_id: Number(product_id), quantity }));
@@ -657,7 +659,7 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
                 <p style={{ margin: '0 0 11px', fontSize: 10.5, color: C.textMid, lineHeight: 1.45 }}>
                   <strong style={{ color: C.greenDark }}>Installed by our crew:</strong>{' '}
                   est. ₱{installEst.low.toLocaleString()}–₱{installEst.high.toLocaleString()} incl. site prep, soil &amp; labour
-                  {area ? ` for ${state.dimensions.width} × ${state.dimensions.length} m` : ''}. Final price after a site visit.
+                  {area ? ` for ${lot.width} × ${lot.length} m` : ''}. Final price after a site visit.
                 </p>
               )}
 

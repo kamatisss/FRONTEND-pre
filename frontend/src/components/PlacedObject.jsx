@@ -1,9 +1,10 @@
 import { useRef, useState, useEffect, useCallback, Suspense } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { TransformControls, Html, ContactShadows } from '@react-three/drei';
-import { placedScale } from '../data/modelSizing';
+import { placedScale, stageSize, GROWTH_STAGES } from '../data/modelSizing';
 import { ErrorBoundary } from 'react-error-boundary';
 import { useDesign } from '../context/DesignContext';
+import { lotOf, clampToLot } from '../data/lot';
 import * as THREE from 'three';
 import NormalizedModel from './NormalizedModel';
 import ModelPlaceholder from './ModelPlaceholder';
@@ -75,6 +76,17 @@ export default function PlacedObject({ item, orbitControlsRef }) {
   const modelUrl = resolveModelUrl(rawUrl);
   const category = item.category || productMatch?.category;
 
+  // ── Height label (plants): ground-to-top measuring line + growth in metres ──
+  // The model is scaled so its top is exactly at real_world_size (established height, ~2 years)
+  // in this group's own units; the group's scale makes the shown height realH × objScale.
+  const sizeSource = productMatch || item;
+  const establishedH = Number(sizeSource.real_world_size) || 0;
+  const plantingH = Number(productMatch?.planting_height) || 0;
+  const matureH = Number(productMatch?.mature_height) || 0;
+  const stage = state.growthStage || 'established';
+  // Drawn (and measured) at the Studio's growth stage; non-plants keep their size
+  const realH = Number(stageSize(sizeSource, stage, category)) || 0;
+
   // ── Hover emissive effect ──────────────────────────────────────
   useFrame(() => {
     if (!modelGroupRef.current) return;
@@ -137,9 +149,8 @@ export default function PlacedObject({ item, orbitControlsRef }) {
 
       raycaster.setFromCamera(mouse.current, camera);
       if (raycaster.ray.intersectPlane(GROUND_PLANE, intersection.current)) {
-        // Clamp to terrain bounds
-        const x = THREE.MathUtils.clamp(intersection.current.x, -12, 12);
-        const z = THREE.MathUtils.clamp(intersection.current.z, -12, 12);
+        // Items stay inside the customer's lot
+        const { x, z } = clampToLot(intersection.current.x, intersection.current.z, lotOf(state.dimensions));
 
         // Update position in state (keep original Y)
         dispatch({
@@ -168,7 +179,7 @@ export default function PlacedObject({ item, orbitControlsRef }) {
 
     canvas.addEventListener('pointermove', onPointerMove);
     canvas.addEventListener('pointerup', onPointerUp);
-  }, [isPlacing, dispatch, item.id, item.position, gl, camera, raycaster, orbitControlsRef]);
+  }, [isPlacing, dispatch, item.id, item.position, gl, camera, raycaster, orbitControlsRef, state.dimensions]);
 
   // ── Disable OrbitControls while dragging TransformControls ─────
   useEffect(() => {
@@ -271,6 +282,11 @@ export default function PlacedObject({ item, orbitControlsRef }) {
     window.addEventListener('pointerup', onPointerUp);
   }, [dispatch, item.id, item.rotation]);
 
+  const showHeight = category === 'plant' && realH > 0 && !isPlacing && !isDragging && (hovered || isSelected);
+  const metres = (v) => `${Math.round(v * 10) / 10} m`;
+  const tick = 0.32 / objScale;      // tick marks keep the same real size whatever the item's scale
+  const lineW = 0.025 / objScale;
+
   // ── The renderable model content ──────────────────────────────
   const modelContent = (
     <group
@@ -300,7 +316,7 @@ export default function PlacedObject({ item, orbitControlsRef }) {
             <NormalizedModel
               url={modelUrl}
               category={category}
-              realWorldSize={productMatch?.real_world_size || item.real_world_size}
+              realWorldSize={realH || undefined}
             />
           </Suspense>
         </ErrorBoundary>
@@ -331,10 +347,56 @@ export default function PlacedObject({ item, orbitControlsRef }) {
         </mesh>
       )}
 
-      {/* Floating action buttons when selected (not while dragging) */}
+      {/* Height: a measuring line from the ground to the top, drawn over the leaves */}
+      {showHeight && (
+        <group renderOrder={999}>
+          <mesh position={[0, realH / 2, 0]} renderOrder={999}>
+            <cylinderGeometry args={[lineW, lineW, realH, 6]} />
+            <meshBasicMaterial color="#ffffff" depthTest={false} transparent opacity={0.95} />
+          </mesh>
+          {[0.02, realH].map(y => (
+            <mesh key={y} position={[0, y, 0]} renderOrder={999}>
+              <boxGeometry args={[tick, lineW * 2, lineW * 2]} />
+              <meshBasicMaterial color="#ffffff" depthTest={false} transparent opacity={0.95} />
+            </mesh>
+          ))}
+          <Html position={[0, realH, 0]} zIndexRange={[18, 10]} style={{ pointerEvents: 'none' }}>
+            <div role="tooltip" style={{
+              // Beside the top, hanging down into view: tall plants never push it off the top of the canvas
+              transform: 'translate(14px, -25%)', width: 'max-content', maxWidth: 270,
+              padding: '7px 10px', borderRadius: 10, background: 'rgba(15,23,42,0.88)', color: '#fff',
+              fontFamily: "'Inter', system-ui, sans-serif", fontSize: 11.5, lineHeight: 1.4,
+              boxShadow: '0 6px 18px rgba(0,0,0,0.25)', userSelect: 'none',
+            }}>
+              <div style={{ fontWeight: 800, fontSize: 12.5 }}>
+                {productMatch?.name || item.name} · <span style={{ color: '#6ee7b7' }}>{metres(realH * objScale)}</span>
+              </div>
+              <div style={{ color: '#cbd5e1' }}>
+                {stage === 'planting' ? 'when we plant it' : stage === 'mature' ? 'fully grown' : 'about 2 years after planting'}
+              </div>
+              {(plantingH > 0 || matureH > 0) && (
+                <div style={{ display: 'flex', gap: 8, marginTop: 4, color: '#94a3b8' }}>
+                  {GROWTH_STAGES.map(g => {
+                    const h = g.key === 'planting' ? plantingH : g.key === 'mature' ? matureH : establishedH;
+                    if (!h) return null;
+                    const on = g.key === stage;
+                    return (
+                      <span key={g.key} style={{ color: on ? '#6ee7b7' : '#cbd5e1', fontWeight: on ? 800 : 500 }}>
+                        {g.short} {metres(h)}
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </Html>
+        </group>
+      )}
+
+      {/* Floating action buttons when selected (not while dragging): just below the base, clear of the height label */}
       {isSelected && !isPlacing && !isDragging && (
-        <Html position={[0, 2.4, 0]} center distanceFactor={10}>
-          <div className="flex gap-1.5 items-center bg-white/95 dark:bg-slate-800/95 px-3 py-2 rounded-full shadow-xl backdrop-blur-md border border-gray-100 dark:border-slate-700 ring-1 ring-black/5">
+        <Html position={[0, 0, 0]} center distanceFactor={10}>
+          <div style={{ marginTop: 64 }} className="flex gap-1.5 items-center bg-white/95 dark:bg-slate-800/95 px-3 py-2 rounded-full shadow-xl backdrop-blur-md border border-gray-100 dark:border-slate-700 ring-1 ring-black/5">
             {/* Re-place / Move button */}
             <button
               onClick={(e) => { e.stopPropagation(); dispatch({ type: 'START_EDITING', payload: item.id }); }}

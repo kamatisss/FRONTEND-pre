@@ -4,6 +4,7 @@ import { Sparkles, Lock, X, ArrowRight } from 'lucide-react';
 import { useDesign } from '../context/DesignContext';
 import { saveAiPrefill, trackFunnel } from '../services/guestSession';
 import { useIsPhone } from './ui/useMediaQuery';
+import { clampLot } from '../data/lot';   // same 2–50 m range as the Studio's lot
 
 /*
  * Floating "Let AI design this yard" card inside the 3D Studio. Carries the lot
@@ -17,7 +18,6 @@ const STYLES = [
   { name: 'Tropical',    bg: 'linear-gradient(135deg,#14532d 0%,#22c55e 40%,#facc15 100%)' },
 ];
 
-const clampLot = (v) => Math.max(2, Math.min(100, Number(v) || 0));
 
 export default function StudioAITeaser({ guest, onGate }) {
   const { state, dispatch } = useDesign();
@@ -34,7 +34,7 @@ export default function StudioAITeaser({ guest, onGate }) {
   const setLot = (field, value) => dispatch({ type: 'SET_DIMENSIONS', payload: { [field]: value } });
 
   const go = () => {
-    saveAiPrefill({ lotWidth: clampLot(width), lotLength: clampLot(length), plantIds });
+    saveAiPrefill({ lotWidth: clampLot(width), lotLength: clampLot(length, 15), plantIds });
     if (guest) {
       trackFunnel('ai_teaser_clicked');
       onGate('ai');
@@ -89,13 +89,13 @@ export default function StudioAITeaser({ guest, onGate }) {
                  onChange={e => setLot('width', e.target.value)} onBlur={e => setLot('width', clampLot(e.target.value))} style={input} />
           ×
           <input type="number" min="2" max="100" step="0.5" value={length} aria-label="Yard length in meters"
-                 onChange={e => setLot('length', e.target.value)} onBlur={e => setLot('length', clampLot(e.target.value))} style={input} />
+                 onChange={e => setLot('length', e.target.value)} onBlur={e => setLot('length', clampLot(e.target.value, 15))} style={input} />
           m
         </div>
         <p style={{ margin: '0 0 10px', fontSize: 11, color: '#6B7280' }}>
           {plantIds.length
-            ? `Uses the ${plantIds.length} plant type${plantIds.length > 1 ? 's' : ''} you picked as favourites.`
-            : 'Tip: place a few plants you like and the AI will build around them.'}
+            ? `Designs will use only the ${plantIds.length} plant type${plantIds.length > 1 ? 's' : ''} you placed. Remove them to let the AI choose.`
+            : 'Tip: place the plants you want and the AI designs with only those, or place none and it chooses for you.'}
         </p>
 
         {/* Locked previews — a hint of what the AI produces */}

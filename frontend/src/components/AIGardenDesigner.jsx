@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { evaluatePlantCompatibility } from '../data/plantCompatibility';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { Sparkles, ArrowLeft, Check, Compass, ShieldAlert, Upload, X, CalendarPlus, Info, Cpu, Wrench, RefreshCw, Box, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Sparkles, ArrowLeft, Check, Compass, ShieldAlert, Upload, X, CalendarPlus, Info, Cpu, Wrench, RefreshCw, Box, ChevronLeft, ChevronRight, Leaf, Sun, CloudSun, Cloud, Droplet } from 'lucide-react';
+import { productImage } from '../data/productImage';
 import ZonePicker from './ZonePicker';
 import BudgetPicker from './BudgetPicker';
 import PageHero from './ui/PageHero';
@@ -19,6 +21,7 @@ import GuestAuthModal from './GuestAuthModal';
 import { useIsPhone, useMediaQuery } from './ui/useMediaQuery';
 import { DEFAULT_TIME_OF_DAY } from '../data/studioLight';
 import { defaultCorners } from '../data/photoPose';
+import { LOT_MAX } from '../data/lot';
 
 const LOADING_PHASES = [
   'Analyzing your garden space…',
@@ -29,22 +32,56 @@ const LOADING_PHASES = [
   'Finalizing your garden options…',
 ];
 
-const getPlantEmoji = (name = '') => {
-  const n = name.toLowerCase();
-  if (n.includes('palm')) return '🌴';
-  if (n.includes('pine') || n.includes('fir') || n.includes('spruce')) return '🌲';
-  if (n.includes('oak') || n.includes('maple') || n.includes('tree')) return '🌳';
-  if (n.includes('rose')) return '🌹';
-  if (n.includes('lavender') || n.includes('violet')) return '💜';
-  if (n.includes('sunflower')) return '🌻';
-  if (n.includes('flower') || n.includes('bloom') || n.includes('blossom')) return '🌸';
-  if (n.includes('banana') || n.includes('tropical')) return '🍌';
-  if (n.includes('bamboo')) return '🎋';
-  if (n.includes('cactus') || n.includes('succulent')) return '🌵';
-  if (n.includes('fern') || n.includes('grass')) return '🌿';
-  if (n.includes('shrub') || n.includes('boxwood') || n.includes('hedge')) return '🫧';
-  return '🪴';
+// Garden features the AI Designer places (mirrors garden_ai.FEATURE_CATEGORIES / MAX_SEATS / MAX_ROCKS)
+const FEATURE_KIND = { furniture: 'seat', hardscape: 'rock' };
+const MAX_SEATS = 2;
+const MAX_ROCKS = 9;
+const ROCK_GROUP = 3;
+
+// The product's real photo (uploaded, or rendered from its 3D model). No photo or a broken link →
+// a leaf tile: never an emoji, which Windows shows as an empty box for many plant emojis.
+// Growing needs as small chips (icons, not emoji: they render the same on every device)
+const SUN_CHIP = {
+  full_sun: { Icon: Sun, label: 'Full sun', fg: '#B45309', bg: '#FEF3C7' },
+  partial_shade: { Icon: CloudSun, label: 'Part shade', fg: '#047857', bg: '#D1FAE5' },
+  full_shade: { Icon: Cloud, label: 'Shade', fg: '#475569', bg: '#E2E8F0' },
 };
+const WATER_CHIP = {
+  low: { label: 'Low water', fg: '#92400E', bg: '#FEF3C7' },
+  moderate: { label: 'Moderate', fg: '#0369A1', bg: '#E0F2FE' },
+  high: { label: 'High water', fg: '#1D4ED8', bg: '#DBEAFE' },
+};
+const chip = (fg, bg) => ({ display: 'inline-flex', alignItems: 'center', gap: 3, padding: '2px 6px', borderRadius: 999,
+  fontSize: '0.62rem', fontWeight: 700, lineHeight: 1.3, color: fg, background: bg, whiteSpace: 'nowrap' });
+
+function NeedChips({ plant }) {
+  const sun = SUN_CHIP[plant.sunlight] || SUN_CHIP.full_sun;
+  const water = WATER_CHIP[plant.water_need] || WATER_CHIP.moderate;
+  const SunIcon = sun.Icon;
+  return (
+    <span style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+      <span style={chip(sun.fg, sun.bg)}><SunIcon size={10} aria-hidden="true" />{sun.label}</span>
+      <span style={chip(water.fg, water.bg)}><Droplet size={10} aria-hidden="true" />{water.label}</span>
+      {plant.is_invasive && <span style={chip('#9A3412', '#FFEDD5')} title="Aggressive roots: needs a root barrier">Spreader</span>}
+    </span>
+  );
+}
+
+function PlantThumb({ item, size, rounded = 8, style }) {
+  const [failed, setFailed] = useState(false);
+  const src = !failed && productImage(item);
+  const box = { width: size || '100%', height: size || 'auto', borderRadius: rounded, flexShrink: 0,
+    background: '#F1F5F9', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', ...style };
+  if (!src) {
+    return <span style={box} aria-hidden="true"><Leaf size={size ? Math.max(12, size * 0.5) : 28} color="#059669" /></span>;
+  }
+  return (
+    <span style={box}>
+      <img src={src} alt="" loading="lazy" decoding="async" onError={() => setFailed(true)}
+        style={{ width: '100%', height: '100%', objectFit: size ? 'contain' : 'cover', display: 'block' }} />
+    </span>
+  );
+}
 
 const BotanicalSVG = () => (
   <svg viewBox="0 0 800 200" xmlns="http://www.w3.org/2000/svg" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0.12 }}>
@@ -108,6 +145,52 @@ export default function AIGardenDesigner() {
       .finally(() => { if (alive) setInventoryLoading(false); });
     return () => { alive = false; };
   }, []);
+
+  // Garden features the designer can place: seating (furniture) and accent rocks (hardscape) with a 3D model
+  const [featureItems, setFeatureItems] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    getInventoryItems()
+      .then(data => {
+        if (!alive) return;
+        setFeatureItems((data || []).filter(i => FEATURE_KIND[i.category] && i.model_file && Number(i.stock_quantity) > 0));
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  // Everything a design can contain: plants + features (results, Studio, cart all look items up here)
+  const catalog = useMemo(() => [...inventory, ...featureItems], [inventory, featureItems]);
+  const [featureQty, setFeatureQty] = useState({});   // { id: quantity }
+  // A restored guest choice may name a feature that has since sold out or been archived: drop it
+  useEffect(() => {
+    if (!featureItems.length) return;
+    const live = new Set(featureItems.map(i => String(i.id)));
+    setFeatureQty(prev => {
+      const kept = Object.fromEntries(Object.entries(prev).filter(([id]) => live.has(id)));
+      return Object.keys(kept).length === Object.keys(prev).length ? prev : kept;
+    });
+  }, [featureItems]);
+  const seatTotal = featureItems.filter(i => FEATURE_KIND[i.category] === 'seat')
+    .reduce((n, i) => n + (featureQty[String(i.id)] || 0), 0);
+  const toggleFeature = (item) => {
+    const id = String(item.id);
+    setFeatureQty(prev => {
+      const next = { ...prev };
+      if (next[id]) delete next[id];
+      else next[id] = FEATURE_KIND[item.category] === 'seat' ? 1 : ROCK_GROUP;
+      return next;
+    });
+  };
+  const changeFeatureQty = (item, delta) => {
+    const id = String(item.id);
+    setFeatureQty(prev => {
+      const max = FEATURE_KIND[item.category] === 'seat' ? (prev[id] || 0) + MAX_SEATS - seatTotal : MAX_ROCKS;
+      const qty = Math.min(max, Math.min(Number(item.stock_quantity) || 0, (prev[id] || 0) + delta));
+      const next = { ...prev };
+      if (qty <= 0) delete next[id]; else next[id] = qty;
+      return next;
+    });
+  };
 
   const handleDesignManually = () => {
     dispatch({ type: 'RESET' });
@@ -176,6 +259,7 @@ export default function AIGardenDesigner() {
         else if (saved.budget) setBudgetRange({ min: saved.budget, max: saved.budget });
         if (saved.lotWidth) setLotWidth(saved.lotWidth);
         if (saved.lotLength) setLotLength(saved.lotLength);
+        if (saved.featureQty && typeof saved.featureQty === 'object') setFeatureQty(saved.featureQty);
       }
     }
   }, []);
@@ -211,6 +295,28 @@ export default function AIGardenDesigner() {
       setToastMessage('');
     }
   }, [preferredPlants, lotWidth, lotLength, inventory]);
+
+  // Real-time botanical compatibility evaluator (sunlight, irrigation, root competition, canopy)
+  // Height groups, as the layout engine sorts them (layout_engine.PlantSpec.layer)
+  const missingLayers = useMemo(() => {
+    const ids = new Set(preferredPlants.map(String));
+    const picked = inventory.filter(p => ids.has(String(p.id)));
+    if (!picked.length) return [];
+    // By fully grown height, like the layout engine (PlantSpec.layer → grown)
+    const layer = (p) => { const h = Math.max(Number(p.real_world_size) || 1, Number(p.mature_height) || 0); return h >= 2.5 ? 'tall' : h >= 0.8 ? 'mid-height' : 'low'; };
+    const have = new Set(picked.map(layer));
+    return ['tall', 'mid-height', 'low'].filter(l => !have.has(l));
+  }, [preferredPlants, inventory]);
+
+  const selectedPlantObjects = useMemo(() => {
+    return preferredPlants
+      .map(id => inventory.find(p => String(p.id) === String(id)))
+      .filter(Boolean);
+  }, [preferredPlants, inventory]);
+
+  const compatibilityWarnings = useMemo(() => {
+    return evaluatePlantCompatibility(selectedPlantObjects);
+  }, [selectedPlantObjects]);
 
   // Pre-flight budget guard: what's left for plants after site prep, materials, delivery and fees
   const lotAreaNow = Number(lotWidth) * Number(lotLength);
@@ -317,13 +423,14 @@ export default function AIGardenDesigner() {
     formData.append('lot_width', Number(lotWidth));
     formData.append('lot_length', Number(lotLength));
     formData.append('preferred_plant_ids', JSON.stringify(preferredPlants));
+    formData.append('features', JSON.stringify(Object.entries(featureQty).map(([id, quantity]) => ({ id: Number(id), quantity }))));
     // The photo stays in the browser for the AR view; only the confirmed zones are sent
     formData.append('keep_clear_zones', JSON.stringify(keepClear));
     formData.append('seed', variationSeed);
     try {
       const response = await axios.post(`${API_BASE_URL}/generate-layouts/`, formData, { headers });
       if (response.data?.designs) {
-        const inventoryIds = new Set(inventory.map(item => String(item.id)));
+        const inventoryIds = new Set(catalog.map(item => String(item.id)));
         const validated = response.data.designs.map(design => ({
           ...design,
           plants: (design.plants || []).filter(p =>
@@ -336,7 +443,7 @@ export default function AIGardenDesigner() {
         setNotice(response.data.notice || '');
         if (response.data.budget_warning) setBudgetWarning(response.data.budget_warning);
         if (!user) {
-          saveGuestDesign({ layouts: validated, budgetRange, lotWidth, lotLength });
+          saveGuestDesign({ layouts: validated, budgetRange, lotWidth, lotLength, featureQty });
         }
       } else {
         throw new Error("Invalid response format");
@@ -384,7 +491,7 @@ export default function AIGardenDesigner() {
       payload: {
         designId: null,
         designName: `${design.design_name} (from AI Designer)`,
-        placedItems: lotPlantsToStudioItems(design.plants || [], inventory, w, l),
+        placedItems: lotPlantsToStudioItems(design.plants || [], catalog, w, l),
         dimensions: { width: w, length: l, terrainType: 'flat' },
         depthData: null,
         originalImageUrl: null,
@@ -427,7 +534,7 @@ export default function AIGardenDesigner() {
     if (activeLayout && activeLayout.plants && !install) {
       // Plants only: put this design's plant list in the shop cart
       (activeLayout.plant_breakdown || []).forEach(row => {
-        const product = inventory.find(p => String(p.id) === String(row.plant_id));
+        const product = catalog.find(p => String(p.id) === String(row.plant_id));
         if (product) addToCart(product, row.quantity);
       });
       navigate('/shop?cart=open');
@@ -546,14 +653,24 @@ export default function AIGardenDesigner() {
     uploadIcon: { width: '36px', height: '36px', background: color.brandSurface, borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px' },
     plantsGrid: {
       display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
-      gap: '10px',
+      // Phones: always two columns (150 px minimum would drop to one); wider screens fill the row
+      gridTemplateColumns: phone ? 'repeat(2, minmax(0, 1fr))' : 'repeat(auto-fill, minmax(150px, 1fr))',
+      gap: phone ? '8px' : '10px',
+      alignItems: 'stretch',
     },
     plantCard: (isSelected) => ({
+      position: 'relative',
       display: 'flex',
-      alignItems: 'center',
-      gap: '12px',
-      padding: '12px 14px',
+      flexDirection: 'column',
+      alignItems: 'stretch',
+      gap: '8px',
+      padding: '8px',
+      textAlign: 'left',
+      font: 'inherit',
+      width: '100%',
+      height: '100%',
+      minWidth: 0,
+      boxSizing: 'border-box',
       borderRadius: '12px',
       border: isSelected ? '2px solid #059669' : '1.5px solid #E2E8F0',
       background: isSelected ? color.brandSurface : color.white,
@@ -561,18 +678,31 @@ export default function AIGardenDesigner() {
       transition: 'all 0.18s',
       boxShadow: isSelected ? '0 4px 16px rgba(5,150,105,0.15)' : 'none',
     }),
-    plantEmoji: {
-      fontSize: '1.5rem',
-      lineHeight: 1,
+    plantPhoto: {
+      aspectRatio: '1 / 1',
     },
+    stepBtn: (enabled) => ({
+      width: 36, height: 36, flexShrink: 0, borderRadius: 10, border: '1px solid #A7F3D0', background: '#fff',
+      color: '#065F46', fontWeight: 800, fontSize: '1rem', lineHeight: 1,
+      cursor: enabled ? 'pointer' : 'not-allowed', opacity: enabled ? 1 : 0.4,
+    }),
     plantInfo: {
       flex: 1,
+      display: 'flex',
+      flexDirection: 'column',
+      minWidth: 0,
+      padding: '0 4px 4px',
     },
     plantName: (isSelected) => ({
       fontWeight: 700,
       fontSize: '0.8rem',
+      lineHeight: 1.3,
       color: isSelected ? '#1E293B' : '#334155',
-      display: 'block',
+      display: '-webkit-box',
+      WebkitLineClamp: 2,
+      WebkitBoxOrient: 'vertical',
+      overflow: 'hidden',
+      overflowWrap: 'anywhere',
     }),
     plantPrice: (isSelected) => ({
       fontSize: '0.72rem',
@@ -582,8 +712,12 @@ export default function AIGardenDesigner() {
       display: 'block',
     }),
     plantCheck: {
-      width: '18px',
-      height: '18px',
+      position: 'absolute',
+      top: '12px',
+      right: '12px',
+      boxShadow: '0 0 0 2px #fff',
+      width: '20px',
+      height: '20px',
       background: '#059669',
       borderRadius: '50%',
       display: 'flex',
@@ -994,7 +1128,18 @@ export default function AIGardenDesigner() {
 
                 {/* Plant Picker */}
                 <div>
-                  <label style={styles.sectionLabel}>Preferred Plants <span style={{ color: '#94A3B8', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>(optional)</span></label>
+                  <label style={styles.sectionLabel}>Your Plants <span style={{ color: '#94A3B8', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>(optional)</span></label>
+                  <p style={{ margin: '0 0 10px', fontSize: '0.78rem', color: '#64748B', lineHeight: 1.45 }}>
+                    {selectedPlantObjects.length
+                      ? <>Every design will use <strong style={{ color: '#065F46' }}>only the {selectedPlantObjects.length} plant{selectedPlantObjects.length > 1 ? 's' : ''} you picked</strong>. Clear them all and we choose from the whole catalog.</>
+                      : 'Pick plants and every design uses only those. Leave this empty and we choose from the whole catalog.'}
+                  </p>
+                  {missingLayers.length > 0 && (
+                    <p role="note" style={{ margin: '0 0 10px', padding: '8px 10px', borderRadius: 10, background: '#F0FDF4', border: '1px solid #BBF7D0', fontSize: '0.75rem', color: '#166534', lineHeight: 1.45 }}>
+                      <strong>Design tip:</strong> your picks have no {missingLayers.join(' or ')} plants. Gardens look fuller with
+                      tall plants at the back, mid-height in the middle and low ones in front: add one of each height for a layered design.
+                    </p>
+                  )}
                   {inventoryLoading ? (
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '10px' }}>
                       {Array.from({ length: 6 }).map((_, i) => (
@@ -1007,7 +1152,6 @@ export default function AIGardenDesigner() {
                     <div style={styles.plantsGrid}>
                       {inventory.map(plant => {
                         const isSelected = preferredPlants.includes(String(plant.id));
-                        const emoji = getPlantEmoji(plant.name);
                         return (
                           <button
                             key={plant.id} type="button"
@@ -1015,10 +1159,11 @@ export default function AIGardenDesigner() {
                             className="plant-card"
                             style={styles.plantCard(isSelected)}
                           >
-                            <span style={styles.plantEmoji}>{emoji}</span>
+                            <PlantThumb item={plant} style={styles.plantPhoto} />
                             <span style={styles.plantInfo}>
                               <span style={styles.plantName(isSelected)}>{plant.name}</span>
                               <span style={styles.plantPrice(isSelected)}>₱{Number(plant.unit_price).toLocaleString()}</span>
+                              <NeedChips plant={plant} />
                             </span>
                             {isSelected && (
                               <span style={styles.plantCheck}>
@@ -1030,7 +1175,108 @@ export default function AIGardenDesigner() {
                       })}
                     </div>
                   )}
+
+                  {/* Botanical Compatibility Advisory */}
+                  {compatibilityWarnings.length > 0 && (
+                    <div style={{
+                      marginTop: '1rem',
+                      background: '#FFFBEB',
+                      border: '1.5px solid #FCD34D',
+                      borderRadius: '12px',
+                      padding: '14px 16px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px',
+                      animation: 'fadeUp 0.3s ease-out both',
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#B45309', fontWeight: 800, fontSize: '0.85rem' }}>
+                        <ShieldAlert size={17} style={{ flexShrink: 0 }} />
+                        <span>Botanical Compatibility Advisory ({compatibilityWarnings.length})</span>
+                      </div>
+                      <p style={{ margin: 0, fontSize: '0.78rem', color: '#78350F', lineHeight: 1.45 }}>
+                        Some of the plants you picked have different sun, water or root needs. You can still generate: the layout keeps them apart as described below.
+                      </p>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '2px' }}>
+                        {compatibilityWarnings.map(w => (
+                          <div key={w.id} style={{
+                            background: 'rgba(255, 255, 255, 0.7)',
+                            border: '1px solid #FDE68A',
+                            borderRadius: '8px',
+                            padding: '8px 12px',
+                            fontSize: '0.75rem',
+                          }}>
+                            <div style={{ fontWeight: 700, color: '#92400E', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span>{w.icon}</span>
+                              <span>{w.title}</span>
+                            </div>
+                            <div style={{ color: '#451A03', marginTop: '2px', lineHeight: 1.4 }}>
+                              {w.message}
+                            </div>
+                            <div style={{ color: '#047857', marginTop: '4px', fontStyle: 'italic', fontSize: '0.72rem' }}>
+                              💡 <strong>Horticultural tip:</strong> {w.recommendation}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
+
+                {/* Garden features: seating and accent rocks, placed before any plant */}
+                {featureItems.length > 0 && (
+                  <div style={{ marginTop: '1.5rem' }}>
+                    <label style={styles.sectionLabel}>Garden Features <span style={{ color: '#94A3B8', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>(optional)</span></label>
+                    <p style={{ margin: '0 0 10px', fontSize: '0.78rem', color: '#64748B', lineHeight: 1.45 }}>
+                      A seating spot gets open ground and a path to the house; rocks go in small groups in the planting beds.
+                      They are placed first and paid for from your budget before the plants.
+                    </p>
+                    <div style={styles.plantsGrid}>
+                      {featureItems.map(item => {
+                        const id = String(item.id);
+                        const qty = featureQty[id] || 0;
+                        const isSeat = FEATURE_KIND[item.category] === 'seat';
+                        const canAdd = isSeat ? seatTotal < MAX_SEATS : qty < MAX_ROCKS;
+                        return (
+                          // The card is the frame; the tap area and the counter both live inside it,
+                          // so a selected card grows with its row instead of hanging a counter below it
+                          <div key={id} className="plant-card"
+                            style={{ ...styles.plantCard(qty > 0), cursor: 'default', opacity: !qty && !canAdd ? 0.55 : 1 }}>
+                            <button type="button" onClick={() => toggleFeature(item)} aria-pressed={qty > 0}
+                              disabled={!qty && !canAdd}
+                              style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, width: '100%', minWidth: 0, padding: 0,
+                                border: 'none', background: 'transparent', font: 'inherit', textAlign: 'left',
+                                cursor: !qty && !canAdd ? 'not-allowed' : 'pointer' }}>
+                              <PlantThumb item={item} style={styles.plantPhoto} />
+                              <span style={styles.plantInfo}>
+                                <span style={styles.plantName(qty > 0)}>{item.name}</span>
+                                <span style={styles.plantPrice(qty > 0)}>₱{Number(item.unit_price).toLocaleString()} each</span>
+                                <span style={{ display: 'flex', marginTop: 6 }}>
+                                  <span style={chip(isSeat ? '#6D28D9' : '#475569', isSeat ? '#EDE9FE' : '#F1F5F9')}>{isSeat ? 'Seating' : 'Accent rock'}</span>
+                                </span>
+                              </span>
+                            </button>
+                            {qty > 0 && <span style={styles.plantCheck}><Check size={10} color="#fff" /></span>}
+                            {qty > 0 && (
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6,
+                                paddingTop: 8, borderTop: '1px solid #D1FAE5' }}>
+                                <button type="button" onClick={() => changeFeatureQty(item, -1)} aria-label={`One less ${item.name}`}
+                                  style={styles.stepBtn(true)}>−</button>
+                                <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#065F46', minWidth: 0 }} aria-live="polite">
+                                  {qty}<span style={{ fontWeight: 600, color: '#64748B', fontSize: '0.7rem' }}> {isSeat ? (qty > 1 ? 'seats' : 'seat') : (qty > 1 ? 'rocks' : 'rock')}</span>
+                                </span>
+                                <button type="button" onClick={() => changeFeatureQty(item, 1)} disabled={!canAdd} aria-label={`One more ${item.name}`}
+                                  style={styles.stepBtn(canAdd)}>+</button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {seatTotal >= MAX_SEATS && (
+                      <p style={{ margin: '8px 0 0', fontSize: '0.72rem', color: '#64748B' }}>Up to {MAX_SEATS} seats make one seating spot.</p>
+                    )}
+                  </div>
+                )}
 
                 {/* Submit */}
                 <button type="submit" className="submit-btn" style={styles.submitBtn}>
@@ -1172,27 +1418,46 @@ export default function AIGardenDesigner() {
                       </div>
                       <div style={styles.layoutBody}>
                         {(() => {
-                          const newPlants = design.plants?.filter(p => !p.is_existing) || [];
-                          return <span style={styles.plantListLabel}>Flora Arrangement · {newPlants.length} plants</span>;
+                          const items = design.plants?.filter(p => !p.is_existing) || [];
+                          const featureIds = new Set(featureItems.map(f => String(f.id)));
+                          const nFeatures = items.filter(p => featureIds.has(String(p.plant_id))).length;
+                          return <span style={styles.plantListLabel}>Flora Arrangement · {items.length - nFeatures} plants{nFeatures ? ` · ${nFeatures} garden feature${nFeatures > 1 ? 's' : ''}` : ''}</span>;
                         })()}
-                        <div>
-                          {design.plants?.filter(p => !p.is_existing).slice(0, 5).map((plant, pIdx) => {
-                            const detail = inventory.find(item => String(item.id) === String(plant.plant_id));
-                            const emoji = detail ? getPlantEmoji(detail.name) : '🪴';
-                            const displayName = detail ? detail.name : `Plant #${plant.plant_id}`;
-                            return (
-                              <div key={pIdx} style={styles.plantItem}>
-                                <span style={styles.plantItemName}>{emoji} {displayName}</span>
-                                <span style={styles.plantItemCoord}>{Number(plant.x).toFixed(1)}, {Number(plant.z).toFixed(1)}</span>
-                              </div>
-                            );
-                          })}
-                          {(design.plants?.filter(p => !p.is_existing)?.length || 0) > 5 && (
-                            <div style={{ textAlign: 'center', padding: '10px 0 2px', fontSize: '0.78rem', color: '#64748B', fontWeight: 600 }}>
-                              + {design.plants.filter(p => !p.is_existing).length - 5} more plants
+                        {(() => {
+                          // Plants first, then garden features (the engine places features first, so the raw
+                          // order led with rocks); the "more" line counts each kind separately
+                          const featureIds = new Set(featureItems.map(f => String(f.id)));
+                          const all = design.plants?.filter(p => !p.is_existing) || [];
+                          const isFeature = (p) => featureIds.has(String(p.plant_id));
+                          const ordered = [...all.filter(p => !isFeature(p)), ...all.filter(isFeature)];
+                          const shown = ordered.slice(0, 5);
+                          const rest = ordered.slice(5);
+                          const restFeatures = rest.filter(isFeature).length;
+                          const restPlants = rest.length - restFeatures;
+                          const parts = [
+                            restPlants && `${restPlants} more plant${restPlants > 1 ? 's' : ''}`,
+                            restFeatures && `${restFeatures} more garden feature${restFeatures > 1 ? 's' : ''}`,
+                          ].filter(Boolean);
+                          return (
+                            <div>
+                              {shown.map((plant, pIdx) => {
+                                const detail = catalog.find(item => String(item.id) === String(plant.plant_id));
+                                const displayName = detail ? detail.name : `Plant #${plant.plant_id}`;
+                                return (
+                                  <div key={pIdx} style={styles.plantItem}>
+                                    <span style={{ ...styles.plantItemName, display: 'flex', alignItems: 'center', gap: 8 }}><PlantThumb item={detail} size={24} rounded={6} /> {displayName}</span>
+                                    <span style={styles.plantItemCoord}>{Number(plant.x).toFixed(1)}, {Number(plant.z).toFixed(1)}</span>
+                                  </div>
+                                );
+                              })}
+                              {parts.length > 0 && (
+                                <div style={{ textAlign: 'center', padding: '10px 0 2px', fontSize: '0.78rem', color: '#64748B', fontWeight: 600 }}>
+                                  + {parts.join(' and ')}
+                                </div>
+                              )}
                             </div>
-                          )}
-                        </div>
+                          );
+                        })()}
                         {design.adjustments?.length > 0 && (
                           <div style={{ marginTop: '0.75rem', padding: '8px 10px', borderRadius: '8px', background: '#F1F5F9', fontSize: '0.72rem', color: '#475569', lineHeight: 1.45 }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 800, color: '#334155', marginBottom: '2px' }}>
@@ -1247,7 +1512,7 @@ export default function AIGardenDesigner() {
                                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem', textAlign: 'left' }}>
                                   <thead>
                                     <tr style={{ borderBottom: '1.5px solid #E2E8F0' }}>
-                                      <th style={{ padding: '6px 4px', color: '#94A3B8', fontWeight: 700 }}>Plant</th>
+                                      <th style={{ padding: '6px 4px', color: '#94A3B8', fontWeight: 700 }}>Item</th>
                                       <th style={{ padding: '6px 4px', color: '#94A3B8', fontWeight: 700, textAlign: 'center' }}>Qty</th>
                                       <th style={{ padding: '6px 4px', color: '#94A3B8', fontWeight: 700, textAlign: 'right' }}>Unit</th>
                                       <th style={{ padding: '6px 4px', color: '#94A3B8', fontWeight: 700, textAlign: 'right' }}>Subtotal</th>
@@ -1256,7 +1521,7 @@ export default function AIGardenDesigner() {
                                   <tbody>
                                     {(design.plant_breakdown || []).map((item, itemIdx) => (
                                       <tr key={itemIdx} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                                        <td style={{ padding: '8px 4px', fontWeight: 600, color: '#1E293B' }}>{getPlantEmoji(item.name)} {item.name}</td>
+                                        <td style={{ padding: '8px 4px', fontWeight: 600, color: '#1E293B' }}><span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><PlantThumb item={catalog.find(i => String(i.id) === String(item.plant_id)) || catalog.find(i => i.name === item.name)} size={22} rounded={5} /> {item.name}</span></td>
                                         <td style={{ padding: '8px 4px', textAlign: 'center', color: '#059669', fontWeight: 700 }}>{item.quantity}</td>
                                         <td style={{ padding: '8px 4px', textAlign: 'right', color: '#64748B' }}>₱{Number(item.unit_price).toLocaleString()}</td>
                                         <td style={{ padding: '8px 4px', textAlign: 'right', fontWeight: 700, color: '#0F172A' }}>₱{Number(item.subtotal).toLocaleString()}</td>
@@ -1284,6 +1549,11 @@ export default function AIGardenDesigner() {
                         >
                           <Box size={14} /> Edit in Studio
                         </button>
+                        {(Number(lotWidth) > LOT_MAX || Number(lotLength) > LOT_MAX) && (
+                          <p style={{ margin: '6px 0 0', fontSize: '0.7rem', color: '#92400E', lineHeight: 1.4 }}>
+                            The 3D Studio handles up to {LOT_MAX} × {LOT_MAX} m: it opens on a {LOT_MAX} m lot and offers to move plants beyond it inside.
+                          </p>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -1490,7 +1760,8 @@ export default function AIGardenDesigner() {
                         onMouseLeave={e => { e.currentTarget.style.background = color.brand; }}
                       >
                          <CalendarPlus size={15} />
-                         {bookingLoading ? 'Saving Design…' : install ? 'Book Final Site Inspection & Consultation' : 'Add these plants to my cart'}
+                         {bookingLoading ? 'Saving Design…' : install ? 'Book Final Site Inspection & Consultation'
+                           : (activeLayout?.plant_breakdown || []).some(r => (r.category || 'plant') !== 'plant') ? 'Add these items to my cart' : 'Add these plants to my cart'}
                        </button>
                     </div>
                   </div>

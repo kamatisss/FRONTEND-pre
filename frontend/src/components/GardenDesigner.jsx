@@ -5,8 +5,11 @@ import { EffectComposer, N8AO, Bloom, Vignette, ToneMapping } from '@react-three
 import { ToneMappingMode } from 'postprocessing';
 import * as THREE from 'three';
 import {
-  Upload, AlertTriangle, Mountain, Sun, X, Pencil, Lock, CloudOff, Save, Sprout, BrickWall, Armchair
+  Upload, AlertTriangle, Mountain, Sun, X, Pencil, Lock, CloudOff, Save, Sprout, BrickWall, Armchair, Ruler
 } from 'lucide-react';
+import LotSizePanel from './LotSizePanel';
+import { lotOf, itemsOutsideLot } from '../data/lot';
+import { GROWTH_STAGES, DEFAULT_GROWTH_STAGE } from '../data/modelSizing';
 
 import { useDesign } from '../context/DesignContext';
 import { generateDepthMap, getInventoryItems, loadDesign } from '../services/api';
@@ -122,6 +125,39 @@ const SKY_FRAGMENT = `
     gl_FragColor = vec4(col, 1.0);
     #include <colorspace_fragment>
   }`;
+
+// Frame the whole lot whenever its size changes (and on first load): far enough back to see
+// every edge on this screen's shape, phones in portrait included. Eased, then hands control back.
+function LotFraming({ width, length, onFogRange }) {
+  const { camera, controls, size } = useThree();
+  const goal = useRef(null);
+  useEffect(() => {
+    const aspect = size.width / Math.max(1, size.height);
+    const halfV = THREE.MathUtils.degToRad(camera.fov / 2);
+    const fitWidth = (width / 2) / (Math.tan(halfV) * aspect) * 1.3;
+    const d = Math.max(length * 1.05, fitWidth) + 6;
+    // Aim a little in front of the lot so it sits higher on screen, clear of the panels that
+    // float over the bottom of the canvas (AI card, project summary, phone buttons)
+    const lead = length * 0.22 + 1;
+    goal.current = new THREE.Vector3(0, d * 0.55, d + lead);
+    if (controls) {
+      controls.target.set(0, 0, lead);
+      controls.maxDistance = Math.max(50, d * 2.2);
+    }
+    // Haze starts beyond the lot from this viewpoint (a fixed 18–55 m greyed out big lots on phones)
+    const dist = Math.hypot(d * 0.55, d);
+    onFogRange?.([Math.max(18, Math.round(dist * 0.9)), Math.max(55, Math.round(dist * 2.6))]);
+    // size is read, not watched: resizing the window shouldn't yank the camera
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [width, length, controls, camera, onFogRange]);
+  useFrame(() => {
+    if (!goal.current) return;
+    camera.position.lerp(goal.current, 0.12);
+    controls?.update?.();
+    if (camera.position.distanceTo(goal.current) < 0.05) goal.current = null;
+  });
+  return null;
+}
 
 function SkyDome({ timeOfDay }) {
   const materialRef = useRef();
@@ -319,7 +355,26 @@ const S = {
     order: 2, width: '100%', height: 64, flexDirection: 'row', justifyContent: 'space-around',
     padding: '0 8px', borderRight: 'none', borderTop: '1px solid #E5E7EB', boxShadow: '0 -1px 4px rgba(0,0,0,0.04)',
   },
-  phoneSidebarTop: { flexDirection: 'row', flex: 'none', gap: 0, justifyContent: 'space-around', width: '75%' },
+  phoneSidebarTop: { flexDirection: 'row', flex: 'none', gap: 0, justifyContent: 'space-around', width: '60%' },
+  canvasTopLeft: {
+    position: 'absolute', top: 12, left: 12, right: 12, zIndex: 10, display: 'flex', flexWrap: 'wrap',
+    alignItems: 'center', gap: 8, pointerEvents: 'none',
+  },
+  growthGroup: {
+    display: 'flex', alignItems: 'center', gap: 2, padding: 3, borderRadius: 999, pointerEvents: 'auto',
+    border: '1px solid #A7F3D0', background: 'rgba(255,255,255,0.94)', boxShadow: '0 2px 10px rgba(0,0,0,0.1)',
+    backdropFilter: 'blur(6px)',
+  },
+  growthBtn: (on) => ({
+    minHeight: 30, padding: '0 10px', borderRadius: 999, border: 'none', cursor: 'pointer', whiteSpace: 'nowrap',
+    fontSize: 12, fontWeight: 800, background: on ? '#059669' : 'transparent', color: on ? '#fff' : '#065F46',
+  }),
+  lotChip: {
+    pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: 6,
+    minHeight: 36, padding: '6px 12px', borderRadius: 999, border: '1px solid #A7F3D0',
+    background: 'rgba(255,255,255,0.94)', color: '#065F46', fontSize: 12.5, fontWeight: 800, cursor: 'pointer',
+    boxShadow: '0 2px 10px rgba(0,0,0,0.1)', backdropFilter: 'blur(6px)',
+  },
   tabBtn: (active) => ({
     minWidth: 64, height: 54, borderRadius: 12, border: 'none', cursor: 'pointer', padding: '4px 6px',
     display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3,
@@ -498,6 +553,12 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
 
   const isPlacing = state.placementMode !== 'idle';
 
+  // The customer's lot: drawn in 3D, enforced for placement, used by the estimate (data/lot.js)
+  const lot = lotOf(state.dimensions);
+  const [fogRange, setFogRange] = useState([18, 55]);   // follows the lot framing (LotFraming)
+  const [showGrid, setShowGrid] = useState(false);
+  const outside = itemsOutsideLot(state.placedItems, lot);
+
   const getMediaUrl = (path) => path ? `${MEDIA_ROOT}${path}` : null;
 
   // ── Image Upload ──────────────────────────────────────────
@@ -547,11 +608,11 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
           }
         });
 
-        const TERRAIN_SIZE = 24;
+        // Detected objects land on the customer's lot (the photo covers the lot)
         const TERRAIN_Y_OFFSET = 0;
         validObjects.forEach((obj, idx) => {
-          const worldX = obj.position.norm_x * (TERRAIN_SIZE / 2);
-          const worldZ = obj.position.norm_z * (TERRAIN_SIZE / 2);
+          const worldX = obj.position.norm_x * (lot.width / 2);
+          const worldZ = obj.position.norm_z * (lot.length / 2);
           const yNorm = (obj.position.norm_z + 1) / 2;
           const groundHeight = 0.1 + 0.05 * Math.sin(yNorm * Math.PI * 0.5);
           const worldY = TERRAIN_Y_OFFSET + (groundHeight + 0.015) * (state.terrainHeight * 5);
@@ -608,11 +669,13 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
     setOpenDrawer(openDrawer === category ? null : category);
     setFullLibrary(false);
   };
-  const trayOpen = phone && !!openDrawer && openDrawer !== 'environment' && !fullLibrary;
+  const isSettings = openDrawer === 'environment' || openDrawer === 'lot';
+  const trayOpen = phone && !!openDrawer && !isSettings && !fullLibrary;
   const sheetOpen = !!openDrawer && !trayOpen;
 
   const drawerTitle = openDrawer === 'environment'
     ? 'Environment Settings'
+    : openDrawer === 'lot' ? 'Lot Size'
     : openDrawer ? `${openDrawer.charAt(0).toUpperCase() + openDrawer.slice(1)} Library` : '';
 
   return (
@@ -628,6 +691,10 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
             </button>
           ))}
         </div>
+        <button onClick={() => toggleDrawer('lot')} style={phone ? S.tabBtn(openDrawer === 'lot') : S.sidebarBtn(openDrawer === 'lot')}
+          title="Lot size" aria-label="Lot size" aria-pressed={openDrawer === 'lot'}>
+          <Ruler size={phone ? 21 : 24} />{phone && <span style={S.tabLabel}>Lot</span>}
+        </button>
         <button onClick={() => toggleDrawer('environment')} style={phone ? S.tabBtn(openDrawer === 'environment') : S.sidebarBtn(openDrawer === 'environment')}
           title="Light and terrain" aria-label="Light and terrain" aria-pressed={openDrawer === 'environment'}>
           <Sun size={phone ? 21 : 24} />{phone && <span style={S.tabLabel}>Light</span>}
@@ -635,7 +702,7 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
       </div>
 
       {/* ── SLIDE-OUT DRAWER ── */}
-      <div style={phone ? { ...S.drawer(sheetOpen), ...S.phoneDrawer(sheetOpen, openDrawer === 'environment') } : S.drawer(!!openDrawer)}>
+      <div style={phone ? { ...S.drawer(sheetOpen), ...S.phoneDrawer(sheetOpen, isSettings) } : S.drawer(!!openDrawer)}>
         <div style={phone ? { ...S.drawerInner, padding: '16px 16px 8px' } : S.drawerInner}>
           <div style={S.drawerHeader}>
             <h3 style={S.drawerTitle}>{drawerTitle}</h3>
@@ -645,7 +712,9 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
           </div>
 
           <div style={S.drawerContent}>
-            {openDrawer === 'environment' ? (
+            {openDrawer === 'lot' ? (
+              <LotSizePanel showGrid={showGrid} onToggleGrid={() => setShowGrid(g => !g)} />
+            ) : openDrawer === 'environment' ? (
               <div>
                 {/* Reference image previews */}
                 {state.originalImageUrl && (
@@ -799,7 +868,7 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
             >
               <SkyDome timeOfDay={state.timeOfDay} />
 
-              <fog attach="fog" args={[getSkyColors(state.timeOfDay).fog, 18, 55]} />
+              <fog attach="fog" args={[getSkyColors(state.timeOfDay).fog, fogRange[0], fogRange[1]]} />
 
               <DynamicAmbience timeOfDay={state.timeOfDay} />
               <SunLight timeOfDay={state.timeOfDay} />
@@ -818,6 +887,9 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
                   grassMaskUrl={state.depthData ? getMediaUrl(state.depthData.grass_mask_url) : null}
                   displacementScale={terrainDepth}
                   onTerrainClick={handleTerrainClick}
+                  lotWidth={lot.width}
+                  lotLength={lot.length}
+                  showGrid={showGrid}
                 />
                 {state.placedItems.map(item => (
                   item.id === state.editingItemId ? null : (
@@ -842,9 +914,57 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
                 minDistance={5} maxDistance={50}
                 enableDamping dampingFactor={0.1}
               />
+              <LotFraming width={lot.width} length={lot.length} onFogRange={setFogRange} />
               <Preload all />
             </Canvas>
           </ErrorBoundary>
+
+          {/* Items outside the lot (lot made smaller, or a design for a lot over 50 m) */}
+          {!isPlacing && outside.length > 0 && (
+            <div role="status" style={{ position: 'absolute', top: 56, left: '50%', transform: 'translateX(-50%)', zIndex: 12,
+              width: phone ? 'calc(100% - 24px)' : 'auto', maxWidth: 560, boxSizing: 'border-box',
+              display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '10px 12px', borderRadius: 14,
+              background: '#FFFBEB', border: '1px solid #FCD34D', boxShadow: '0 6px 20px rgba(0,0,0,0.12)' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 700, color: '#92400E', flex: '1 1 200px', minWidth: 0 }}>
+                <AlertTriangle size={16} style={{ flexShrink: 0 }} />
+                {outside.length} item{outside.length > 1 ? 's are' : ' is'} outside your {lot.width} × {lot.length} m lot
+              </span>
+              <span style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                <button type="button" onClick={() => dispatch({ type: 'MOVE_ITEMS_INTO_LOT' })}
+                  style={{ minHeight: 36, padding: '0 12px', borderRadius: 10, border: 'none', background: '#059669', color: '#fff', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
+                  Move inside
+                </button>
+                <button type="button" onClick={() => dispatch({ type: 'FIT_LOT_TO_ITEMS' })}
+                  style={{ minHeight: 36, padding: '0 12px', borderRadius: 10, border: '1px solid #FCD34D', background: '#fff', color: '#92400E', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
+                  Enlarge lot
+                </button>
+              </span>
+            </div>
+          )}
+
+          {/* Lot size at a glance (opens the Lot drawer) + how grown the plants are shown */}
+          {!isPlacing && (
+            <div style={S.canvasTopLeft}>
+              <button type="button" style={S.lotChip} onClick={() => toggleDrawer('lot')}
+                aria-label={`Lot ${lot.width} by ${lot.length} metres. Change lot size`}>
+                <Ruler size={14} /> Lot {lot.width} × {lot.length} m
+              </button>
+              <div role="radiogroup" aria-label="Show plants" style={S.growthGroup}
+                title="See your plants when planted, after about 2 years, or fully grown">
+                <Sprout size={14} style={{ color: '#059669', margin: '0 2px 0 6px', flexShrink: 0 }} aria-hidden="true" />
+                {GROWTH_STAGES.map(g => {
+                  const on = (state.growthStage || DEFAULT_GROWTH_STAGE) === g.key;
+                  return (
+                    <button key={g.key} type="button" role="radio" aria-checked={on} aria-label={g.label}
+                      onClick={() => dispatch({ type: 'SET_GROWTH_STAGE', payload: g.key })}
+                      style={S.growthBtn(on)}>
+                      {phone ? g.short : g.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Placement controls overlay */}
           {isPlacing && !(trayOpen && state.placementMode === 'placing') && <PlacementControls />}

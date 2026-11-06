@@ -746,7 +746,7 @@ function PlantBOM({ breakdown }) {
     <div className="mt-3 border border-slate-200 rounded-xl">
       <button onClick={() => setOpen(o => !o)} aria-expanded={open}
         className="w-full flex items-center justify-between gap-2 px-3 py-2 bg-transparent border-none cursor-pointer text-xs font-bold text-slate-600">
-        <span>Plant list · {breakdown.length} item{breakdown.length > 1 ? 's' : ''}</span>
+        <span>{breakdown.some(r => (r.category || 'plant') !== 'plant') ? 'Plants & garden features' : 'Plant list'} · {breakdown.length} item{breakdown.length > 1 ? 's' : ''}</span>
         <span className="text-emerald-700">{peso(total)} {open ? '▲' : '▼'}</span>
       </button>
       {open && (

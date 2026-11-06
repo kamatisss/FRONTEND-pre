@@ -450,7 +450,7 @@ export function ProjectDetail() {
             {project.plants.length > 0 && (
               <div className="bg-white border border-slate-200 rounded-2xl p-5">
                 <p className="text-xs font-bold uppercase tracking-wider text-slate-400 m-0 mb-1 flex items-center gap-1.5"><Sprout size={13} /> Shop the look</p>
-                <p className="text-xs text-slate-400 m-0 mb-3">Plants used in this garden. Prices are today's shop prices.</p>
+                <p className="text-xs text-slate-400 m-0 mb-3">{project.plants.some(p => p.category && p.category !== 'plant') ? 'Plants and garden features' : 'Plants'} used in this garden. Prices are today's shop prices.</p>
                 <ul className="list-none m-0 p-0 flex flex-col gap-3">
                   {project.plants.map(p => (
                     <li key={p.name} className="flex items-center gap-3">

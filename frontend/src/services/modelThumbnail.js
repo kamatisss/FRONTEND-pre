@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 // Catalog models are Meshopt-compressed (see scripts/optimize-models.md)
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
+import { exactBounds } from './modelBounds';
 
 /*
  * Product photo from a 3D model: an off-screen studio shot (three-quarter view, soft daylight,
@@ -24,8 +25,8 @@ export async function renderModelThumbnail(modelUrl, { size = 800 } = {}) {
     const scene = new THREE.Scene();
     model.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
 
-    // Stand the model on the ground, centred
-    const box = new THREE.Box3().setFromObject(model);
+    // Stand the model on the ground, centred (exact vertex bounds: see modelBounds.js)
+    const box = exactBounds(model);
     const dims = box.getSize(new THREE.Vector3());
     const centre = box.getCenter(new THREE.Vector3());
     model.position.set(-centre.x, -box.min.y, -centre.z);

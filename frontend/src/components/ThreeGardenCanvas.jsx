@@ -8,6 +8,7 @@ import { realScale } from '../data/modelSizing';
 import { getInventoryItems } from '../services/api';
 import { resolveModelUrl } from '../data/modelCatalog';
 import { CORNER_LABELS, defaultCorners, solvePhotoCamera, suggestLength, validCorners } from '../data/photoPose';
+import { exactBounds } from '../services/modelBounds';
 
 const FIT_WARN = 0.025;   // pins further than this (share of the photo) from a W × L rectangle: say so
 
@@ -71,12 +72,13 @@ export default function ThreeGardenCanvas({
 
   useEffect(() => {
     let isMounted = true;
-    getInventoryItems('plant')
+    // All categories: AI designs can include garden features (seating, rocks) as well as plants
+    getInventoryItems()
       .then(data => {
         if (isMounted) setInventory(data);
       })
       .catch(err => {
-        console.error('Error fetching plant inventory in 3D Canvas:', err);
+        console.error('Error fetching inventory in 3D Canvas:', err);
       });
     return () => { isMounted = false; };
   }, []);
@@ -548,8 +550,8 @@ export default function ThreeGardenCanvas({
                 }
               });
 
-              model.updateWorldMatrix(true, true);
-              const box = new THREE.Box3().setFromObject(model);
+              // Exact vertex bounds: the fast box floated models whose mesh is rotated in the file
+              const box = exactBounds(model);
               const size = new THREE.Vector3();
               box.getSize(size);
               const maxDim = Math.max(size.x, size.y, size.z);

@@ -117,6 +117,8 @@ function ItemForm({ item, items, onClose, onSaved }) {
     name: item?.name || '', category: item?.category || 'plant', description: item?.description || '',
     unit_price: item?.unit_price || '', reorder_level: item?.reorder_level ?? 10, stock_quantity: 0,
     model_file: item?.model_file || '', thumbnail: null, real_world_size: item?.real_world_size ?? 1,
+    sunlight: item?.sunlight || 'full_sun', water_need: item?.water_need || 'moderate', is_invasive: !!item?.is_invasive,
+    planting_height: item?.planting_height ?? '', mature_height: item?.mature_height ?? '',
   }));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -129,6 +131,14 @@ function ItemForm({ item, items, onClose, onSaved }) {
     try {
       const data = new FormData();
       ['name', 'category', 'description', 'unit_price', 'reorder_level', 'model_file', 'real_world_size'].forEach(k => data.append(k, form[k] ?? ''));
+      // Growing needs drive the AI Designer's compatibility warnings and planting gaps (plants only)
+      const isPlant = form.category === 'plant';
+      data.append('sunlight', isPlant ? form.sunlight : 'full_sun');
+      data.append('water_need', isPlant ? form.water_need : 'moderate');
+      data.append('is_invasive', isPlant && form.is_invasive ? 'true' : 'false');
+      // Empty = unknown (the Studio label then shows just the height after ~2 years)
+      data.append('planting_height', isPlant ? form.planting_height : '');
+      data.append('mature_height', isPlant ? form.mature_height : '');
       if (!item) data.append('stock_quantity', form.stock_quantity || 0);   // opening stock, new items only
       if (form.thumbnail) data.append('thumbnail', form.thumbnail);
       // A model and no photo yet: photograph the model so the shop isn't left blank
@@ -181,6 +191,44 @@ function ItemForm({ item, items, onClose, onSaved }) {
             </div>
           )}
         </div>
+        {form.category === 'plant' && (
+          <fieldset className="m-0 p-0 border-0">
+            <legend className={label}>Growing needs <span className="font-normal text-slate-500">(the AI Designer uses these to keep clashing plants apart)</span></legend>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className={label} htmlFor="inv-sun">Sunlight</label>
+                <select id="inv-sun" className={input} value={form.sunlight} onChange={set('sunlight')}>
+                  <option value="full_sun">Full sun (6+ h)</option>
+                  <option value="partial_shade">Partial shade</option>
+                  <option value="full_shade">Full shade</option>
+                </select>
+              </div>
+              <div>
+                <label className={label} htmlFor="inv-water">Water</label>
+                <select id="inv-water" className={input} value={form.water_need} onChange={set('water_need')}>
+                  <option value="low">Low / drought tolerant</option>
+                  <option value="moderate">Moderate</option>
+                  <option value="high">High / moist soil</option>
+                </select>
+              </div>
+              <div>
+                <label className={label} htmlFor="inv-planting">Height at planting (m)</label>
+                <input id="inv-planting" className={input} type="number" step="0.05" min="0.05" max="40" value={form.planting_height}
+                  onChange={set('planting_height')} placeholder="e.g. 1.2" />
+              </div>
+              <div>
+                <label className={label} htmlFor="inv-mature">Fully grown (m)</label>
+                <input id="inv-mature" className={input} type="number" step="0.05" min="0.05" max="40" value={form.mature_height}
+                  onChange={set('mature_height')} placeholder="e.g. 4" />
+              </div>
+              <label htmlFor="inv-invasive" className="flex items-center gap-2 text-sm text-slate-700 sm:mt-6 min-h-[44px] cursor-pointer">
+                <input id="inv-invasive" type="checkbox" className="w-4 h-4 accent-emerald-600" checked={form.is_invasive}
+                  onChange={e => setForm(f => ({ ...f, is_invasive: e.target.checked }))} />
+                Aggressive roots (e.g. bamboo)
+              </label>
+            </div>
+          </fieldset>
+        )}
         <div>
           <label className={label} htmlFor="inv-desc">Description</label>
           <textarea id="inv-desc" className={`${input} h-auto py-2.5`} rows={3} value={form.description} onChange={set('description')} />

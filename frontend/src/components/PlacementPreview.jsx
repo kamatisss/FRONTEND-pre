@@ -8,11 +8,11 @@ import { HARDSCAPE_COMPONENTS } from './ProceduralHardscape';
 import NormalizedModel from './NormalizedModel';
 import ModelPlaceholder from './ModelPlaceholder';
 import { resolveModelUrl } from '../data/modelCatalog';
+import { lotOf, insideLot } from '../data/lot';
+import { stageSize } from '../data/modelSizing';
 
 const ALL_COMPONENTS = { ...PLANT_COMPONENTS, ...HARDSCAPE_COMPONENTS };
 
-// Terrain boundaries (matches GardenBackground TERRAIN_SIZE / 2)
-const TERRAIN_HALF = 12;
 
 /**
  * PlacementPreview — renders a semi-transparent ghost of the selected asset
@@ -75,10 +75,8 @@ export default function PlacementPreview({ terrainRef }) {
       const point = intersects[0].point;
       const face = intersects[0].face;
 
-      // Check if within terrain bounds
-      const withinBounds =
-        Math.abs(point.x) <= TERRAIN_HALF &&
-        Math.abs(point.z) <= TERRAIN_HALF;
+      // Only inside the customer's lot (the ray also hits the plain ground around it: red ring there)
+      const withinBounds = insideLot(point.x, point.z, lotOf(state.dimensions));
 
       // Check if surface is roughly upward-facing
       // R3F plane geometry has a local normal of [0, 0, 1]. Since the mesh is rotated -90deg on X,
@@ -106,7 +104,7 @@ export default function PlacementPreview({ terrainRef }) {
         },
       });
     }
-  }, [placementMode, terrainRef, gl, camera, raycaster, dispatch, previewObject?.position]);
+  }, [placementMode, terrainRef, gl, camera, raycaster, dispatch, previewObject?.position, state.dimensions]);
 
   // ── Attach/detach pointer listener ─────────────────────────
   // pointerdown too: on touch screens there is no hover, so a tap moves the ghost
@@ -157,7 +155,7 @@ export default function PlacementPreview({ terrainRef }) {
             <NormalizedModel
               url={modelUrl}
               category={category}
-              realWorldSize={productMatch?.real_world_size || previewObject.real_world_size}
+              realWorldSize={stageSize(productMatch || previewObject, state.growthStage, category)}
             />
           </Suspense>
         </ErrorBoundary>

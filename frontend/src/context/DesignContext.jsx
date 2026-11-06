@@ -1,5 +1,6 @@
 import { createContext, useContext, useReducer, useCallback } from 'react';
 import { DEFAULT_TIME_OF_DAY } from '../data/studioLight';
+import { fitLotToItems, lotOf, insideLot, moveInsideLot } from '../data/lot';
 
 const DesignContext = createContext(null);
 
@@ -26,6 +27,7 @@ const initialState = {
   terrainHeight: 1.5,
   timeOfDay: DEFAULT_TIME_OF_DAY,
   dimensions: { width: 10, length: 15, terrainType: 'flat' },
+  growthStage: 'established',   // view only (not saved): 'planting' | 'established' | 'mature'
 
   // Save/load
   designId: null,
@@ -213,15 +215,34 @@ function reducer(state, action) {
     case 'SET_DIMENSIONS':
       return { ...state, dimensions: { ...state.dimensions, ...action.payload }, isDirty: true };
 
+    // Items left outside after the lot was made smaller: bring them just inside the edge…
+    case 'MOVE_ITEMS_INTO_LOT': {
+      const lot = lotOf(state.dimensions);
+      return {
+        ...state,
+        isDirty: true,
+        placedItems: state.placedItems.map(it => {
+          const x = Number(it?.position?.x), z = Number(it?.position?.z);
+          if (!Number.isFinite(x) || !Number.isFinite(z) || insideLot(x, z, lot)) return it;
+          return { ...it, position: { ...it.position, ...moveInsideLot(x, z, lot) } };
+        }),
+      };
+    }
+    // …or grow the lot to fit them
+    case 'FIT_LOT_TO_ITEMS':
+      return { ...state, isDirty: true, dimensions: fitLotToItems(state.dimensions, state.placedItems) };
+
+    case 'SET_GROWTH_STAGE':
+      return { ...state, growthStage: action.payload };   // a view setting: the design isn't changed
+
     case 'SET_TRANSFORM_MODE':
       return { ...state, transformMode: action.payload };
 
-    case 'LOAD_DESIGN':
-      return {
-        ...state,
-        ...action.payload,
-        isDirty: false,
-      };
+    case 'LOAD_DESIGN': {
+      // Older designs (made on the fixed 24 m ground) get a lot that fits their items
+      const next = { ...state, ...action.payload, isDirty: false };
+      return { ...next, dimensions: fitLotToItems(next.dimensions, next.placedItems) };
+    }
 
     case 'SET_DESIGN_META':
       return { ...state, ...action.payload };

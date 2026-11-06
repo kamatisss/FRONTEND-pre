@@ -1,6 +1,11 @@
-import React, { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
-import { Html } from '@react-three/drei';
+import React, { useState, useEffect, useRef, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
+import { Html, Grid } from '@react-three/drei';
 import * as THREE from 'three';
+import { DEFAULT_LOT, LOT_MARGIN } from '../data/lot';
+
+// Grass texture tile size in metres: the lawn keeps real-world scale at any lot size
+const GRASS_TILE_M = 6;   // mirrored tiling hides the photo's seams (plain repeat showed a checkerboard)
+const EDGING = { width: 0.12, height: 0.2, color: '#d8d4ca' };
 
 /* ═══════════════════════════════════════════════════════════════════════
    GARDEN BACKGROUND — Displacement Terrain with Grass Normal Map
@@ -12,6 +17,10 @@ import * as THREE from 'three';
      displacementScale  – how far vertices push up/down (default 2.5)
      onTerrainClick(e)  – fired with the raw R3F event on every click
      onPlaceItem([x,y,z]) – fired with world-space coords for item placement
+     lotWidth / lotLength – the customer's lot in metres (centred on the origin, +z = front /
+                            house side). Drawn at true size with an edging and labels, inside a
+                            strip of plain ground; the ref is the group of both (placement
+                            raycasts hit the surround too, so the ghost can turn red outside).
    ═══════════════════════════════════════════════════════════════════════ */
 
 const GardenBackground = forwardRef(function GardenBackground(
@@ -22,6 +31,9 @@ const GardenBackground = forwardRef(function GardenBackground(
     rockMaskUrl,
     grassMaskUrl,
     displacementScale = 2.5,
+    lotWidth = DEFAULT_LOT.width,
+    lotLength = DEFAULT_LOT.length,
+    showGrid = false,
     onTerrainClick,   // legacy: raw event (used by GardenDesigner to confirm placement)
     onPlaceItem,      // new: receives [x, y, z] world coords for item drop
   },
@@ -29,17 +41,15 @@ const GardenBackground = forwardRef(function GardenBackground(
 ) {
   const [textures, setTextures] = useState(null);
   const meshRef = useRef();
-
-  // Physical world dimensions of the terrain plane (must match GardenDesigner constants)
-  const TERRAIN_WIDTH  = 24;
-  const TERRAIN_HEIGHT = 24;
+  const groupRef = useRef();
 
   // Number of grass-normal tile repetitions across the surface.
   // Higher = smaller, more realistic grass blades.
   const GRASS_NORMAL_REPEAT = 8;
 
-  // Expose terrain mesh to parent (used by PlacementPreview for raycasting)
-  useImperativeHandle(ref, () => meshRef.current, []);
+  // Expose the ground (lot + surround) to the parent for raycasting. No dependency list on
+  // purpose: the group only exists once the textures have loaded, so refresh on every render.
+  useImperativeHandle(ref, () => groupRef.current);
 
   // ── Texture Loading ────────────────────────────────────────────────
   useEffect(() => {
@@ -90,10 +100,12 @@ const GardenBackground = forwardRef(function GardenBackground(
       loadTex(depthUrl,      [128, 128, 128]),         // MiDaS depth (displacement)
       loadTex(normalMapUrl,     [128, 128, 255]),         // MiDaS normal from backend
       loadTex('/textures/grass_normal.jpg', [128, 128, 255], GRASS_NORMAL_REPEAT), // seamless grass detail
-    ]).then(([colorMap, depthMap, backendNormal, grassNormal]) => {
+      loadTex('/default_garden.jpg', [100, 130, 80]),   // plain lawn for the surround (and tiled lot)
+    ]).then(([colorMap, depthMap, backendNormal, grassNormal, lawn]) => {
       // ── Color space corrections ──────────────────────────────────
       // Photographic / display textures → sRGB
       colorMap.colorSpace = THREE.SRGBColorSpace;
+      lawn.colorSpace = THREE.SRGBColorSpace;
 
       // Data textures (depth, normals) must stay linear to avoid banding
       depthMap.colorSpace    = THREE.LinearSRGBColorSpace;
@@ -111,9 +123,44 @@ const GardenBackground = forwardRef(function GardenBackground(
       grassNormal.minFilter = THREE.LinearMipmapLinearFilter;
       grassNormal.magFilter = THREE.LinearFilter;
 
-      setTextures({ colorMap, depthMap, backendNormal, grassNormal });
+      setTextures({ colorMap, depthMap, backendNormal, grassNormal, lawn });
     });
   }, [originalImageUrl, depthMapUrl, normalMapUrl]);
+
+  const isPhoto = !!originalImageUrl;
+  const outerW = lotWidth + LOT_MARGIN * 2, outerL = lotLength + LOT_MARGIN * 2;
+  const maps = useMemo(() => {
+    if (!textures) return null;
+    const tile = (tex, w, l) => {
+      const t = tex.clone();
+      t.wrapS = t.wrapT = THREE.MirroredRepeatWrapping;
+      t.repeat.set(w / GRASS_TILE_M, l / GRASS_TILE_M);
+      t.needsUpdate = true;
+      return t;
+    };
+    const grass = (w, l) => {
+      const t = textures.grassNormal.clone();
+      t.repeat.set(Math.max(2, w / 3), Math.max(2, l / 3));
+      t.needsUpdate = true;
+      return t;
+    };
+    return {
+      // A customer's photo is stretched over the lot (it IS the lot); the default lawn is tiled
+      lot: isPhoto ? textures.colorMap : tile(textures.lawn, lotWidth, lotLength),
+      lotNormal: grass(lotWidth, lotLength),
+      outer: tile(textures.lawn, outerW, outerL),
+      outerNormal: grass(outerW, outerL),
+    };
+  }, [textures, isPhoto, lotWidth, lotLength, outerW, outerL]);
+  useEffect(() => () => {
+    if (!maps) return;
+    [maps.lotNormal, maps.outer, maps.outerNormal].forEach(t => t.dispose());
+    if (!isPhoto) maps.lot.dispose();
+  }, [maps, isPhoto]);
+
+  // Enough vertices for smooth displacement without wasting them on small lots
+  const segW = Math.min(256, Math.max(32, Math.round(lotWidth * 8)));
+  const segL = Math.min(256, Math.max(32, Math.round(lotLength * 8)));
 
   // ── Pointer / Click Handler ────────────────────────────────────────
   /**
@@ -142,7 +189,7 @@ const GardenBackground = forwardRef(function GardenBackground(
   );
 
   // ── Loading state ─────────────────────────────────────────────────
-  if (!textures) {
+  if (!textures || !maps) {
     return (
       <Html center>
         <div
@@ -164,53 +211,79 @@ const GardenBackground = forwardRef(function GardenBackground(
     );
   }
 
+  const hw = lotWidth / 2, hl = lotLength / 2;
+  const edgeY = EDGING.height / 2 - 0.04;
+  const label = {
+    padding: '3px 9px', borderRadius: 999, background: 'rgba(255,255,255,0.92)', color: '#065F46',
+    fontFamily: "'Inter', system-ui, sans-serif", fontSize: 12, fontWeight: 800, whiteSpace: 'nowrap',
+    boxShadow: '0 1px 4px rgba(0,0,0,0.18)', pointerEvents: 'none', userSelect: 'none',
+  };
+
   return (
-    <group position={[0, 0, 0]}>
-      {/* ── Main terrain surface ─────────────────────────────────── */}
+    <group ref={groupRef} position={[0, 0, 0]}>
+      {/* ── The customer's lot: true size, displaced by the depth map ── */}
       <mesh
         ref={meshRef}
         receiveShadow
         castShadow
         rotation={[-Math.PI / 2, 0, 0]}
         onPointerDown={handlePointerDown}
+        userData={{ isLot: true }}
       >
-        {/*
-          256×256 segments → 66,049 vertices.
-          Each vertex can be pushed independently by the displacement map,
-          giving smooth hills and dips instead of a blocky staircase.
-        */}
-        <planeGeometry args={[TERRAIN_WIDTH, TERRAIN_HEIGHT, 256, 256]} />
-
+        <planeGeometry args={[lotWidth, lotLength, segW, segL]} />
         <meshStandardMaterial
-          // ── Color ────────────────────────────────────────────────
-          map={textures.colorMap}
-
-          // ── Displacement (physical vertex push from MiDaS) ───────
+          map={maps.lot}
+          // Displacement (physical vertex push from MiDaS); bias keeps flat ground near y = 0
           displacementMap={textures.depthMap}
           displacementScale={displacementScale}
-          // Bias pulls the base slightly down so flat ground sits at y=0
           displacementBias={-displacementScale * 0.1}
-
-          // ── Normal maps (layered detail) ─────────────────────────
-          // The backend normal map provides large-scale shape information.
-          // The grass normal map adds fine micro-surface detail (blade texture).
-          // Three.js meshStandardMaterial accepts a single normalMap slot, so
-          // we choose the grass normal for maximum visual pop. If you want to
-          // blend both, a custom ShaderMaterial would be required.
-          normalMap={textures.grassNormal}
-          normalScale={[0.6, 0.6]}  // tune 0–1: higher = deeper grass grooves
-
-          // ── Surface properties ───────────────────────────────────
-          roughness={0.85}   // matte — not shiny plastic
-          metalness={0.0}    // grass/soil is never metallic
-
+          // Fine grass blade detail (a single normalMap slot: the grass one reads best)
+          normalMap={maps.lotNormal}
+          normalScale={[0.6, 0.6]}
+          roughness={0.85}
+          metalness={0.0}
           side={THREE.FrontSide}
         />
       </mesh>
 
-      {/* ── Shadow-catching ground beneath terrain ───────────────── */}
+      {/* ── Plain ground around the lot: duller, flat, not part of the design ── */}
+      <mesh position={[0, -0.03, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+        <planeGeometry args={[outerW, outerL]} />
+        <meshStandardMaterial map={maps.outer} color="#8e9a84" normalMap={maps.outerNormal}
+          normalScale={[0.4, 0.4]} roughness={0.95} metalness={0} />
+      </mesh>
+
+      {/* ── Lot edging (concrete) ── */}
+      {[
+        [0, hl, lotWidth + EDGING.width, EDGING.width],    // front (house side)
+        [0, -hl, lotWidth + EDGING.width, EDGING.width],   // back
+        [-hw, 0, EDGING.width, lotLength],                  // left
+        [hw, 0, EDGING.width, lotLength],                   // right
+      ].map(([x, z, w, d], i) => (
+        <mesh key={i} position={[x, edgeY, z]} castShadow receiveShadow>
+          <boxGeometry args={[w, EDGING.height, d]} />
+          <meshStandardMaterial color={EDGING.color} roughness={0.9} />
+        </mesh>
+      ))}
+
+      {/* ── Optional 1 m grid (5 m lines stronger), just above the grass ── */}
+      {showGrid && (
+        <Grid position={[0, 0.17, 0]} args={[lotWidth, lotLength]} cellSize={1} cellThickness={0.7}
+          cellColor="#f0fdf4" sectionSize={5} sectionThickness={1.3} sectionColor="#bbf7d0"
+          fadeDistance={400} fadeStrength={0} infiniteGrid={false} followCamera={false} />
+      )}
+
+      {/* ── Measurements and the house side ── */}
+      <Html position={[0, 0.05, hl + 1.1]} center zIndexRange={[5, 0]}>
+        <div style={label}>{lotWidth} m · Front (house side)</div>
+      </Html>
+      <Html position={[hw + 1.1, 0.05, 0]} center zIndexRange={[5, 0]}>
+        <div style={label}>{lotLength} m</div>
+      </Html>
+
+      {/* ── Shadow-catching ground far beneath ── */}
       <mesh position={[0, -1, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-        <planeGeometry args={[100, 100]} />
+        <planeGeometry args={[Math.max(100, outerW * 3), Math.max(100, outerL * 3)]} />
         <meshStandardMaterial
           color="#0d0d1a"
           roughness={1}

@@ -35,3 +35,9 @@ and add the file name to `src/data/modelCatalog.js`.
   `.setMeshoptDecoder(MeshoptDecoder)` too.
 - Compare before/after visually before replacing a model.
 - Models uploaded through the Inventory Dashboard are served as uploaded (not compressed).
+- **Orientation (seats and other furniture):** the front faces **+z** (towards the viewer / the house)
+  and the long side runs along **x**. The AI Designer places seats with rotation 0 and relies on this
+  (`layout_engine.SEAT_FACING`). Check a new model from the front before adding it; to turn one,
+  rotate the file about the vertical axis with gltf-transform (keeps Meshopt/WebP), e.g. a node pivot
+  with rotation `[0, sin(θ/2), 0, cos(θ/2)]`. `bamboo_bench.glb` and `outdoor_bench.glb` were turned
+  +90° on 2026-11-06 for this reason; `rocking_chair.glb` was already correct.
