@@ -456,9 +456,12 @@ export default function OrderQueue({ api, headers, toast, onCounts }) {
               <p className="text-sm text-slate-400 mt-1">{filtersOn ? 'Try a different search or clear the filters.' : 'New orders will appear here automatically.'}</p>
             </div>
           ) : (
-            <>
+            <div className="@container">
+              {/* Sized by the CARD, not the window (container queries): beside the staff sidebar a 1366 px
+                  laptop leaves ~1010 px, and the full table (1100 px) pushed "Next step" out of sight.
+                  Table from 860 px of card, Items + Status columns from 1140 px, cards below 860 px. */}
               {/* Laptop / desktop: one row per order */}
-              <div className="hidden lg:block overflow-x-auto">
+              <div className="hidden @min-[860px]:block overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-[11px] uppercase tracking-wider text-slate-400 border-b border-slate-100">
@@ -467,11 +470,12 @@ export default function OrderQueue({ api, headers, toast, onCounts }) {
                     )}
                     <th className="px-3 py-3 font-bold">Order</th>
                     <th className="px-3 py-3 font-bold">Customer</th>
-                    <th className="px-3 py-3 font-bold hidden xl:table-cell">Items</th>
+                    <th className="px-3 py-3 font-bold hidden @min-[1140px]:table-cell">Items</th>
                     <th className="px-3 py-3 font-bold">Payment</th>
                     <th className="px-3 py-3 font-bold text-right">Total</th>
-                    <th className="px-3 py-3 font-bold hidden xl:table-cell">Status</th>
-                    <th className="px-4 py-3 font-bold text-right">Next step</th>
+                    <th className="px-3 py-3 font-bold hidden @min-[1140px]:table-cell">Status</th>
+                    {/* Pinned to the right: the action stays in view even if a long name widens the table */}
+                    <th className="px-4 py-3 font-bold text-right sticky right-0 bg-white">Next step</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -479,7 +483,7 @@ export default function OrderQueue({ api, headers, toast, onCounts }) {
                     const next = primaryAction(o);
                     return (
                       <tr key={o.id} onClick={() => setOpenId(o.id)}
-                        className={`cursor-pointer hover:bg-slate-50 ${selected.has(o.id) ? 'bg-emerald-50/50' : ''}`}>
+                        className={`group cursor-pointer hover:bg-slate-50 ${selected.has(o.id) ? 'bg-emerald-50/50' : ''}`}>
                         {canSelect && (
                           <td className="pl-4 py-3" onClick={e => e.stopPropagation()}>
                             <input type="checkbox" checked={selected.has(o.id)} onChange={() => toggle(o.id)} aria-label={`Select order ${o.id}`} className="w-4 h-4 accent-emerald-600 cursor-pointer" />
@@ -493,7 +497,7 @@ export default function OrderQueue({ api, headers, toast, onCounts }) {
                           <div className="font-semibold text-slate-800 truncate">{o.customer_name}</div>
                           <div className="text-xs text-slate-400 truncate">{o.customer_phone || o.customer_email}</div>
                         </td>
-                        <td className="px-3 py-3 hidden xl:table-cell max-w-[220px]">
+                        <td className="px-3 py-3 hidden @min-[1140px]:table-cell max-w-[220px]">
                           <div className="flex items-center gap-2 min-w-0">
                             <Thumb src={o.items?.[0]?.item_image} size="w-8 h-8" />
                             <span className="text-slate-600 truncate">{itemSummary(o)}</span>
@@ -501,8 +505,9 @@ export default function OrderQueue({ api, headers, toast, onCounts }) {
                         </td>
                         <td className="px-3 py-3"><PaymentChip order={o} /></td>
                         <td className="px-3 py-3 text-right font-bold text-slate-800 whitespace-nowrap">{peso(o.total_price)}</td>
-                        <td className="px-3 py-3 hidden xl:table-cell"><StatusPill status={o.status} /></td>
-                        <td className="px-4 py-3 text-right" onClick={e => e.stopPropagation()}>
+                        <td className="px-3 py-3 hidden @min-[1140px]:table-cell"><StatusPill status={o.status} /></td>
+                        <td className={`px-4 py-3 text-right sticky right-0 ${selected.has(o.id) ? 'bg-emerald-50' : 'bg-white group-hover:bg-slate-50'}`}
+                          onClick={e => e.stopPropagation()}>
                           {o.needs_refund ? (
                             <button onClick={() => setStatus(o, { payment_status: 'Refunded' })} disabled={busy}
                               className="h-8 px-3 rounded-lg text-xs font-bold border border-red-200 bg-white text-red-600 hover:bg-red-50 cursor-pointer disabled:opacity-50 whitespace-nowrap">Mark refunded</button>
@@ -521,8 +526,8 @@ export default function OrderQueue({ api, headers, toast, onCounts }) {
               </table>
               </div>
 
-              {/* Phones and tablets: compact cards */}
-              <ul className="lg:hidden divide-y divide-slate-100">
+              {/* Narrow cards (phones, tablets, small laptops): compact cards */}
+              <ul className="@min-[860px]:hidden divide-y divide-slate-100">
                 {rows.map(o => {
                   const next = primaryAction(o);
                   return (
@@ -558,7 +563,7 @@ export default function OrderQueue({ api, headers, toast, onCounts }) {
                   );
                 })}
               </ul>
-            </>
+            </div>
           )}
         </div>
 

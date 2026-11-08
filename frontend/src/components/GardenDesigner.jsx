@@ -642,7 +642,9 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
   useEffect(() => {
     const handleKey = (e) => {
       if (isPlacing) return;
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      // Not while a dialog is open (e.g. checkout: Backspace on one of its buttons must not delete a plant)
+      if (document.querySelector('[aria-modal="true"]')) return;
+      if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable) return;
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (state.selectedItemId) dispatch({ type: 'REMOVE_ITEM', payload: state.selectedItemId });
       }

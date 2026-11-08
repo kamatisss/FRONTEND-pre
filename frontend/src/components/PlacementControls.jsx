@@ -17,6 +17,7 @@ export default function PlacementControls() {
   // ── Keyboard shortcuts ─────────────────────────────────────
   useEffect(() => {
     const handleKey = (e) => {
+      if (document.querySelector('[aria-modal="true"]')) return;   // a dialog is open over the Studio
       if (e.key === 'Enter' && previewValid) {
         e.preventDefault();
         dispatch({ type: 'CONFIRM_PLACEMENT' });

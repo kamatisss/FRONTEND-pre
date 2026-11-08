@@ -524,20 +524,23 @@ const ManageUsers = () => {
                         </ul>
                     )
                 ) : (
-                    <div className="rs-scroll-x" style={{ borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+                    // Columns by the card's own width (container queries), not the window's: beside the sidebar a
+                    // 1366 px laptop left too little room and "Deactivate" was pushed out of sight. User ID shows
+                    // from 1000 px of card, Date Created from 900 px; Action is pinned to the right edge.
+                    <div className="rs-scroll-x @container" style={{ borderRadius: '12px', border: '1px solid #e2e8f0' }}>
                         {filteredUsers.length === 0 ? (
                             <p style={{ padding: 'clamp(16px, 4vw, 32px)', color: '#64748b', textAlign: 'center', margin: 0 }}>No matching accounts found.</p>
                         ) : (
                             <table style={{ width: '100%', minWidth: '760px', borderCollapse: 'collapse', textAlign: 'left' }}>
                                 <thead>
                                     <tr style={{ background: '#f8fafc' }}>
-                                        <th style={{ padding: '16px 24px', color: '#475569', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #e2e8f0', fontWeight: '700' }}>User ID</th>
-                                        <th style={{ padding: '16px 24px', color: '#475569', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #e2e8f0', fontWeight: '700' }}>Name</th>
-                                        <th style={{ padding: '16px 24px', color: '#475569', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #e2e8f0', fontWeight: '700' }}>Email</th>
-                                        <th style={{ padding: '16px 24px', color: '#475569', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #e2e8f0', fontWeight: '700' }}>Role</th>
-                                        <th style={{ padding: '16px 24px', color: '#475569', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #e2e8f0', fontWeight: '700' }}>Status</th>
-                                        <th style={{ padding: '16px 24px', color: '#475569', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #e2e8f0', fontWeight: '700' }}>Date Created</th>
-                                        <th style={{ padding: '16px 24px', color: '#475569', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #e2e8f0', fontWeight: '700' }}>Action</th>
+                                        <th className="hidden @min-[1000px]:table-cell" style={{ padding: '14px 16px', color: '#475569', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #e2e8f0', fontWeight: '700' }}>User ID</th>
+                                        <th style={{ padding: '14px 16px', color: '#475569', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #e2e8f0', fontWeight: '700' }}>Name</th>
+                                        <th style={{ padding: '14px 16px', color: '#475569', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #e2e8f0', fontWeight: '700' }}>Email</th>
+                                        <th style={{ padding: '14px 16px', color: '#475569', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #e2e8f0', fontWeight: '700' }}>Role</th>
+                                        <th style={{ padding: '14px 16px', color: '#475569', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #e2e8f0', fontWeight: '700' }}>Status</th>
+                                        <th className="hidden @min-[900px]:table-cell" style={{ padding: '14px 16px', color: '#475569', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #e2e8f0', fontWeight: '700' }}>Date Created</th>
+                                        <th style={{ padding: '14px 16px', color: '#475569', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #e2e8f0', fontWeight: '700', position: 'sticky', right: 0, background: 'inherit' }}>Action</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -550,15 +553,15 @@ const ManageUsers = () => {
                                                 onMouseEnter={e => e.currentTarget.style.background = '#f8fafc'} 
                                                 onMouseLeave={e => e.currentTarget.style.background = '#ffffff'}
                                             >
-                                                <td style={{ padding: '16px 24px', color: '#475569', borderBottom: '1px solid #f1f5f9', fontWeight: '600' }}>{item.id}</td>
-                                                <td style={{ padding: '16px 24px', color: '#1e293b', borderBottom: '1px solid #f1f5f9', fontWeight: '700' }}>
+                                                <td className="hidden @min-[1000px]:table-cell" style={{ padding: '14px 16px', color: '#475569', borderBottom: '1px solid #f1f5f9', fontWeight: '600' }}>{item.id}</td>
+                                                <td style={{ padding: '14px 16px', color: '#1e293b', borderBottom: '1px solid #f1f5f9', fontWeight: '700' }}>
                                                     {nameOf(item)}
                                                 </td>
-                                                <td style={{ padding: '16px 24px', color: '#334155', borderBottom: '1px solid #f1f5f9', fontWeight: '500' }}>{item.email || '-'}</td>
-                                                <td style={{ padding: '16px 24px', borderBottom: '1px solid #f1f5f9' }}>
+                                                <td style={{ padding: '14px 16px', color: '#334155', borderBottom: '1px solid #f1f5f9', fontWeight: '500', overflowWrap: 'anywhere' }}>{item.email || '-'}</td>
+                                                <td style={{ padding: '14px 16px', borderBottom: '1px solid #f1f5f9' }}>
                                                     <RoleBadge role={roleOf(item)} />
                                                 </td>
-                                                <td style={{ padding: '16px 24px', borderBottom: '1px solid #f1f5f9' }}>
+                                                <td style={{ padding: '14px 16px', borderBottom: '1px solid #f1f5f9' }}>
                                                     {item.is_active ? (
                                                         <span className="inline-flex items-center gap-x-1.5 rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-semibold text-green-700 border border-green-200/50">
                                                             Active
@@ -569,10 +572,11 @@ const ManageUsers = () => {
                                                         </span>
                                                     )}
                                                 </td>
-                                                <td style={{ padding: '16px 24px', color: '#64748b', borderBottom: '1px solid #f1f5f9', fontSize: '13.5px' }}>
+                                                <td className="hidden @min-[900px]:table-cell" style={{ padding: '14px 16px', color: '#64748b', borderBottom: '1px solid #f1f5f9', fontSize: '13.5px', whiteSpace: 'nowrap' }}>
                                                     {new Date(item.date_joined).toLocaleDateString()}
                                                 </td>
-                                                <td style={{ padding: '16px 24px', borderBottom: '1px solid #f1f5f9' }}>
+                                                {/* Pinned right; takes the row's hover colour so it never looks detached */}
+                                                <td style={{ padding: '14px 16px', borderBottom: '1px solid #f1f5f9', position: 'sticky', right: 0, background: 'inherit' }}>
                                                     <button 
                                                         onClick={(e) => { e.stopPropagation(); handleToggleStatus(item.id, item.is_active); }}
                                                         disabled={isMe(item)}

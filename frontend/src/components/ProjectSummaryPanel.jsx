@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
+import useDialog from './ui/useDialog';
 import { useDesign } from '../context/DesignContext';
 import {
   ShoppingCart, X, CreditCard, Loader2, Truck,
@@ -15,7 +17,7 @@ import { addressReady, toPayload, rememberAddress } from '../data/address';
 /* ─────────────────────────────────────────────────────────────────────────
    GLOBAL STYLES
 ───────────────────────────────────────────────────────────────────────── */
-const STYLE_ID = 'psp-global-styles-v2';
+const STYLE_ID = 'psp-global-styles-v4';   // bump when the CSS below changes (it is injected once)
 if (typeof document !== 'undefined') {
   let s = document.getElementById(STYLE_ID);
   if (!s) {
@@ -32,6 +34,11 @@ if (typeof document !== 'undefined') {
     @keyframes psp-modalIn {
       from { opacity: 0; transform: scale(0.95) translateY(12px); }
       to   { opacity: 1; transform: scale(1) translateY(0); }
+    }
+    /* "Reduce motion" (OS setting): the checkout dialog just appears, the summary pill stays still */
+    @media (prefers-reduced-motion: reduce) {
+      .psp-root [role="dialog"] { animation: none !important; }
+      .psp-pill { animation: none !important; }   /* no endless floating either */
     }
     @keyframes psp-spin {
       from { transform: rotate(0deg); }
@@ -229,6 +236,8 @@ const Label = ({ children, style }) => (
 
 const IconBtn = ({ onClick, bg, color, tooltip, size = 28, radius = 8, children }) => (
   <button
+    type="button"
+    aria-label={tooltip}
     className="psp-icon-btn"
     onClick={onClick}
     style={{ width: size, height: size, borderRadius: radius, background: bg, color }}
@@ -268,6 +277,8 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
   const [codMax, setCodMax]             = useState(5000);  // COD cap, also from the rate card
   const { user } = useAuth() || {};
   const [installEst, setInstallEst]     = useState(null);  // { low, high } with crew installation
+  // The checkout dialog: focus inside, Tab kept in, Escape closes (not while the order is being placed)
+  const dialogRef = useDialog(showCheckout, () => setShowCheckout(false), { busy: loading });
 
   useEffect(() => {
     getPricing().then(p => {
@@ -403,7 +414,11 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
           userSelect: 'none',
         }}
       >
-        <div className="psp-pill" onClick={() => setCollapsed(false)}>
+        {/* A button for keyboards and screen readers too (it was only clickable): on phones it is the way to checkout */}
+        <div className="psp-pill" role="button" tabIndex={0}
+          aria-label={`Open project summary: ₱${totalCost.toLocaleString()}, ${placedItems.length} ${placedItems.length === 1 ? 'item' : 'items'}`}
+          onClick={() => setCollapsed(false)}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsed(false); } }}>
           {/* Brand icon */}
           <span style={{
             width: 34, height: 34, borderRadius: '50%', flexShrink: 0,
@@ -693,26 +708,37 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
       {/* ═══════════════════════════════════════════════════════════
           CHECKOUT MODAL
       ═══════════════════════════════════════════════════════════ */}
-      {showCheckout && (
+      {/* Rendered into document.body: this panel sits in a low corner layer of the Studio, so a dialog
+          drawn inside it stayed BELOW the tool rail, the Plant Library and the site header (they stayed
+          sharp and clickable over the backdrop, and the dialog's top slid under the header).
+          From the body it covers the whole page; useDialog makes the page behind inert. */}
+      {showCheckout && createPortal(
         <div
+          className="psp-root"
           style={{
-            position: 'fixed', inset: 0, zIndex: 300,
+            position: 'fixed', inset: 0, zIndex: 1100,   // above the site header (200) and every Studio layer
             background: 'rgba(15,23,42,0.4)',
             backdropFilter: 'blur(10px)',
             WebkitBackdropFilter: 'blur(10px)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            padding: 16,
+            display: 'flex', alignItems: compact ? 'flex-end' : 'center', justifyContent: 'center',
+            padding: compact ? 0 : 16,
           }}
-          onClick={(e) => { if (e.target === e.currentTarget) setShowCheckout(false); }}
+          onClick={(e) => { if (e.target === e.currentTarget && !loading) setShowCheckout(false); }}
         >
-          <div style={{
+          <div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="psp-checkout-title"
+            tabIndex={-1}
+            style={{
             background: '#ffffff',
-            backdropFilter: 'blur(28px)',
-            WebkitBackdropFilter: 'blur(28px)',
             border: `1px solid ${C.panelBorder}`,
-            borderRadius: 22,
-            width: '100%', maxWidth: 440,
-            maxHeight: '90vh',
+            // Phones: a sheet from the bottom with room for the form and the address map
+            borderRadius: compact ? '22px 22px 0 0' : 22,
+            width: '100%', maxWidth: compact ? '100%' : 440,
+            maxHeight: compact ? '92dvh' : 'min(90dvh, 860px)',
+            outline: 'none',
             display: 'flex', flexDirection: 'column',
             boxShadow: '0 32px 80px rgba(15,23,42,0.12), inset 0 1px 0 rgba(255,255,255,0.8)',
             overflow: 'hidden',
@@ -737,9 +763,9 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
                   <ShoppingCart size={18} color="#fff" />
                 </div>
                 <div>
-                  <p style={{ margin: 0, fontSize: '1rem', fontWeight: 900, color: C.text, letterSpacing: '-0.025em' }}>
+                  <h2 id="psp-checkout-title" style={{ margin: 0, fontSize: '1rem', fontWeight: 900, color: C.text, letterSpacing: '-0.025em' }}>
                     Complete Order
-                  </p>
+                  </h2>
                   <p style={{ margin: '2px 0 0', fontSize: 9.5, color: C.textDim, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
                     Garden Studio
                   </p>
@@ -747,7 +773,7 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
               </div>
 
               <IconBtn
-                onClick={() => setShowCheckout(false)}
+                onClick={() => { if (!loading) setShowCheckout(false); }}
                 bg={C.surface} color={C.textMid}
                 size={34} radius={10}
                 tooltip="Close"
@@ -936,7 +962,8 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
               </button>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
