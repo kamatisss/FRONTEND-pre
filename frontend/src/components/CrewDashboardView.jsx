@@ -1,12 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
+import CustomerEditsNote from './CustomerEditsNote';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Sun, Briefcase, Truck, UserRound, X, ChevronRight, ChevronLeft, RefreshCw, Navigation, Phone, StickyNote,
-  LogOut, CalendarCheck, Banknote, WifiOff,
+  LogOut, CalendarCheck, Banknote, WifiOff, Crosshair,
 } from 'lucide-react';
 import ThreeGardenCanvas from './ThreeGardenCanvas';
 import CrewJobCard, { JobShift, JobSteps, OnMyWay } from './CrewJobCard';
 import CrewDeliveries from './CrewDeliveries';
+import StopsMap from './StopsMap';
+import CrewArrival from './CrewArrival';
+import useShiftTracking from '../crew/useShiftTracking';
 import CrewMe from './CrewMe';
 import PushAlertsCard from './PushAlertsCard';
 import { SERVICE, TIME, TIME_SHORT, statusOf, dayLabel, clockTime, groupJobs, navUrl, telOf, todayIso } from '../data/crewJobs';
@@ -124,6 +128,12 @@ export default function CrewDashboardView({
     fetchDeliveries().finally(() => setDeliveriesLoading(false));
   };
   useEffect(() => { fetchDeliveries(); }, [fetchDeliveries, location.key]);
+  // The business's crew base: where the suggested stop order starts (cached for offline days)
+  const [crewBase, setCrewBase] = useState(null);
+  useEffect(() => {
+    if (!token) return;
+    cachedGet('/business/', 'business').then(({ data }) => setCrewBase(data?.base || null)).catch(() => {});
+  }, [token]);
   const toDeliver = (deliveries?.active || []).filter(o => ['Shipped', 'Out for Delivery'].includes(o.status));
   const codToCollect = toDeliver.filter(o => o.payment_method === 'cod' && o.payment_status !== 'Paid')
     .reduce((s, o) => s + Number(o.total_price || 0), 0);
@@ -131,6 +141,17 @@ export default function CrewDashboardView({
   const session = activeAttendance?.clocked_in ? activeAttendance.attendance : null;
   const groups = groupJobs(bookings, today, session?.booking ?? null);
   const job = jobId ? bookings.find(b => b.id === jobId) : null;
+
+  // On shift = clocked in, or out on a delivery: the office sees where you are (only then, app open)
+  const onShift = !!session || toDeliver.some(o => o.status === 'Out for Delivery');
+  const tracking = useShiftTracking(onShift, { api: API, headers });
+
+  // "Find it": the last stretch to a job or a delivery, in our own map
+  const [arrival, setArrival] = useState(null);
+  const findJob = (b) => setArrival({ kind: 'job', id: b.id, title: b.customer_name || `Booking #${b.id}`,
+    address: b.service_address, lat: b.site_lat ?? NaN, lng: b.site_lng ?? NaN, phone: b.contact_number });
+  const findDelivery = (o) => setArrival({ kind: 'delivery', id: o.id, title: `${o.customer_name || 'Customer'} · order #${o.id}`,
+    address: o.customer_address, lat: o.delivery_lat ?? NaN, lng: o.delivery_lng ?? NaN, phone: o.customer_phone });
 
   const refreshAll = async () => {
     setRefreshing(true);
@@ -257,13 +278,17 @@ export default function CrewDashboardView({
                   <StatusChip status={upNext.status} />
                 </div>
                 <p className="m-0 text-[15px] text-slate-800 leading-snug">{upNext.service_address || 'No address on file. Call the customer.'}</p>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   {navUrl(upNext) ? (
                     <a href={navUrl(upNext)} target="_blank" rel="noopener noreferrer"
                       className="min-h-[48px] rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold no-underline inline-flex items-center justify-center gap-2">
                       <Navigation size={16} /> Navigate
                     </a>
                   ) : <span />}
+                  <button type="button" onClick={() => findJob(upNext)}
+                    className="min-h-[48px] rounded-xl bg-white border border-slate-300 text-slate-900 text-sm font-bold cursor-pointer inline-flex items-center justify-center gap-2">
+                    <Crosshair size={16} /> Find it
+                  </button>
                   {telOf(upNext) ? (
                     <a href={`tel:${telOf(upNext)}`}
                       className="min-h-[48px] rounded-xl bg-white border border-slate-300 text-slate-900 text-sm font-bold no-underline inline-flex items-center justify-center gap-2">
@@ -295,6 +320,16 @@ export default function CrewDashboardView({
         ) : (
           <Empty icon={CalendarCheck} title="No jobs for today"
             sub={groups.upcoming[0] ? `Next: ${groups.upcoming[0].customer_name || 'a job'}, ${dayLabel(groups.upcoming[0].scheduled_date, today)}.` : 'New jobs from the office will show up here.'} />
+        )}
+
+        {/* Every stop of the day on one map (jobs green, deliveries blue); tap a pin to open it */}
+        {groups.today.length + toDeliver.length > 1 && (
+          <StopsMap online={online} plan base={crewBase} stops={[
+            ...groups.today.map(b => ({ key: `job-${b.id}`, kind: 'job', lat: b.site_lat ?? NaN, lng: b.site_lng ?? NaN,
+              title: `#${b.id} ${b.customer_name || 'Customer'}`, onOpen: () => openJob(b.id) })),
+            ...toDeliver.map(o => ({ key: `order-${o.id}`, kind: 'delivery', lat: o.delivery_lat ?? NaN, lng: o.delivery_lng ?? NaN,
+              title: `Order #${o.id} ${o.customer_name || ''}`.trim(), onOpen: () => goTab('deliveries') })),
+          ]} />
         )}
 
         {laterToday.length > 0 && (
@@ -362,7 +397,7 @@ export default function CrewDashboardView({
             refreshActiveAttendance={refreshActiveAttendance} api={API} headers={headers} toast={toast} user={user}
             submitting={actionLoading === job.id} onSubmit={(id) => updateBookingStatus(id, 'For Review')}
             onOpenDesign={(design, ar) => { setDesignModal(design); setModalArMode(ar); }}
-            onWorkOrder={handleDownloadJobSheet} onChanged={reloadBookings} />
+            onWorkOrder={handleDownloadJobSheet} onChanged={reloadBookings} onFindIt={findJob} />
         </>
       )}
     </div>
@@ -391,6 +426,13 @@ export default function CrewDashboardView({
           </p>
         )}
         <OutboxBar online={online} />
+        {/* Say plainly when the office can see where you are (on shift only) */}
+        {onShift && (
+          <p role="status" className={`m-0 mb-3 px-3 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 ${tracking.problem ? 'bg-amber-50 text-amber-800' : 'bg-emerald-50 text-emerald-800'}`}>
+            <span className={`w-2 h-2 rounded-full shrink-0 ${tracking.sharing ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`} />
+            {tracking.problem || 'On shift: the office can see your location while this app is open.'}
+          </p>
+        )}
         {loading && !bookings.length && activeTab !== 'me' && activeTab !== 'deliveries' ? (
           <div className="flex flex-col gap-3">{[0, 1, 2].map(i => <div key={i} className="h-28 bg-white border border-slate-200 rounded-2xl animate-pulse" />)}</div>
         ) : jobId && activeTab === 'projects' ? renderJob()
@@ -399,7 +441,8 @@ export default function CrewDashboardView({
           : activeTab === 'deliveries' ? (
             <div className="flex flex-col gap-4">
               <h1 className="m-0 text-2xl font-extrabold text-slate-900 tracking-tight">Deliveries</h1>
-              <CrewDeliveries api={API} authHeaders={headers} toast={toast} run={deliveries} loading={deliveriesLoading} reload={reloadDeliveries} />
+              <CrewDeliveries api={API} authHeaders={headers} toast={toast} run={deliveries} loading={deliveriesLoading} reload={reloadDeliveries}
+                base={crewBase} onFindIt={findDelivery} />
             </div>
           ) : (
             <div className="flex flex-col gap-4">
@@ -409,6 +452,11 @@ export default function CrewDashboardView({
             </div>
           )}
       </div>
+
+      {arrival && (
+        <CrewArrival target={arrival} api={API} headers={headers} toast={toast} onClose={() => setArrival(null)}
+          onArrived={() => (arrival.kind === 'job' ? reloadBookings?.() : fetchDeliveries())} />
+      )}
 
       {/* Bottom tab bar (phones and tablets alike: this is a field app) */}
       <nav aria-label="Crew" className="fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-slate-200 shadow-[0_-2px_12px_rgba(15,23,42,0.06)]"
@@ -459,6 +507,9 @@ export default function CrewDashboardView({
                 <X size={20} />
               </button>
             </div>
+            {(designModal.dimensions?.customerEdits || designModal.dimensions?.editedByCustomer) && (
+              <div className="px-4 pb-2"><CustomerEditsNote dimensions={designModal.dimensions} /></div>
+            )}
             <div style={{ height: 'min(70vh, 480px)' }}>
               <ThreeGardenCanvas
                 plants={toCanvasPlants(designModal.placed_items)}
@@ -467,6 +518,7 @@ export default function CrewDashboardView({
                 backgroundImageUrl={designModal.reference_image_url || designModal.image_url || null}
                 arMode={modalArMode} arGrid={modalArMode}
                 photoCorners={designModal.dimensions?.photoCorners}
+                gardenPlan={designModal.dimensions?.gardenPlan}
                 readOnly
               />
             </div>

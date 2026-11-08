@@ -9,6 +9,8 @@ import { submitOrder, createCheckoutSession, getPricing, getEstimate } from '../
 import { normalizePhMobile, codBlockReason, PHONE_HINT } from '../services/checkout';
 import { useAuth } from '../context/AuthContext';
 import { lotOf } from '../data/lot';
+import AddressPicker from './AddressPicker';
+import { addressReady, toPayload, rememberAddress } from '../data/address';
 
 /* ─────────────────────────────────────────────────────────────────────────
    GLOBAL STYLES
@@ -258,7 +260,8 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
   const [minimized, setMinimized]       = useState(false);
   const [collapsed, setCollapsed]       = useState(compact);
   const [showCheckout, setShowCheckout] = useState(false);
-  const [formData, setFormData]         = useState({ name: '', email: '', phone: '', address: '' });
+  const [formData, setFormData]         = useState({ name: '', email: '', phone: '' });
+  const [deliveryAddress, setDeliveryAddress] = useState(null);   // AddressPicker value (pinned, Quezon)
   const [payMethod, setPayMethod]       = useState('online');
   const [loading, setLoading]           = useState(false);
   const [shippingFee, setShippingFee]   = useState(150);   // from the admin rate card
@@ -286,15 +289,20 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
   }, {}));
   const lot = lotOf(state.dimensions);   // the same (clamped) lot the 3D ground shows
   const area = lot.width * lot.length;
+  // A design from the AI Designer keeps an open lawn: priced as turf (or left alone), like the designer did
+  const plan = state.dimensions?.gardenPlan;
+  const lawnSqm = plan?.lawn ? Number(plan.lawn_area) || 0 : 0;
+  const newLawn = plan?.newLawn !== false;
   useEffect(() => {
     const counts = JSON.parse(itemCounts);
     const items = Object.entries(counts).map(([product_id, quantity]) => ({ product_id: Number(product_id), quantity }));
     if (!items.length) return undefined;  // nothing to estimate (the line is hidden below)
     const t = setTimeout(() => {
-      getEstimate(items, area).then(e => setInstallEst({ low: e.low, high: e.high })).catch(() => setInstallEst(null));
+      getEstimate(items, area, lawnSqm ? { sqm: lawnSqm, newLawn } : null)
+        .then(e => setInstallEst({ low: e.low, high: e.high })).catch(() => setInstallEst(null));
     }, 600);
     return () => clearTimeout(t);
-  }, [itemCounts, area]);
+  }, [itemCounts, area, lawnSqm, newLawn]);
 
   /* ── Drag ── */
   const panelRef  = useRef(null);
@@ -334,6 +342,10 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
     if (!placedItems.length) return;
     const phone = normalizePhMobile(formData.phone);
     if (!phone) { alert(PHONE_HINT); return; }
+    if (!addressReady(deliveryAddress)) {
+      alert('Choose your town and barangay, enter your street, and pin your house on the map.');
+      return;
+    }
     setLoading(true);
     try {
       const items = costBreakdown.map(item => {
@@ -345,12 +357,13 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
         customer_name: formData.name,
         customer_email: formData.email,
         customer_phone: phone,
-        customer_address: formData.address,
+        address: toPayload(deliveryAddress),
         payment_method: payMethod,
         items,
       };
 
       const orderResult = await submitOrder(orderPayload);
+      await rememberAddress(deliveryAddress);
 
       if (payMethod === 'online') {
         const receiptUrl = `/order-success?order_id=${orderResult.order_id}&token=${orderResult.receipt_token}`;
@@ -366,7 +379,8 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
         dispatch({ type: 'CLEAR_DESIGN' });
         setShowCheckout(false);
         setMinimized(false);
-        setFormData({ name: '', email: '', phone: '', address: '' });
+        setFormData({ name: '', email: '', phone: '' });
+        setDeliveryAddress(null);
         alert('🌿 Order confirmed! Your garden will be delivered. Pay on arrival.');
         setLoading(false);
       }
@@ -795,12 +809,7 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
               {/* Address */}
               <div>
                 <label style={{ display: 'block', marginBottom: 6 }}><Label>Delivery Address</Label></label>
-                <textarea
-                  required rows={2} className="w-full px-4 py-2 bg-gray-50 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#10b981] focus:border-transparent transition-all duration-200"
-                  value={formData.address} placeholder="123 Garden St, Brgy. Halaman…"
-                  onChange={e => setFormData(f => ({ ...f, address: e.target.value }))}
-                  style={{ resize: 'none' }}
-                />
+                <AddressPicker value={deliveryAddress} onChange={setDeliveryAddress} signedIn={!!user} mapHeight={200} />
               </div>
 
               {/* Divider */}

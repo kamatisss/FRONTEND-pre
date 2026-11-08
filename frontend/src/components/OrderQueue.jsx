@@ -584,7 +584,8 @@ function OrderDrawer({ order, busy, crew, onClose, onStatus, onAssign }) {
 
   const steps = (order.next_statuses || []).filter(s => s !== 'Cancelled');
   const canCancel = (order.next_statuses || []).includes('Cancelled');
-  const mapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(order.customer_address || '')}`;
+  const mapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+    order.delivery_lat != null ? `${order.delivery_lat},${order.delivery_lng}` : (order.customer_address || ''))}`;
   const subtotal = (order.items || []).reduce((s, i) => s + Number(i.price_at_booking) * i.quantity, 0);
 
   return (

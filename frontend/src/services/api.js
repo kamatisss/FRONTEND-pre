@@ -424,9 +424,10 @@ export const getPricing = async () => {
 };
 
 // mode: 'install' | 'plants' → { bands: [{label, min, max}], suggested: { low, high } | null }
-export const getBudgetSuggestion = async (areaSqm, mode = 'install') => {
+// yard: { width, length, scope, lawn } adds what the beds can hold (capacity) and caps the suggestion at it
+export const getBudgetSuggestion = async (areaSqm, mode = 'install', yard = {}) => {
   try {
-    const res = await publicGet('/pricing/suggest/', { params: { area_sqm: areaSqm, mode } });
+    const res = await publicGet('/pricing/suggest/', { params: { area_sqm: areaSqm, mode, ...yard } });
     return res.data;
   } catch (err) { throw errorOf(err, 'Failed to load budget suggestions'); }
 };
@@ -440,9 +441,12 @@ export const updatePricing = async (data) => {
 };
 
 // items: [{ product_id, quantity }]; area_sqm: garden area → { lines, total, low, high, is_sample_rates }
-export const getEstimate = async (items, areaSqm) => {
+// lawn: { sqm, newLawn } for a design with an open lawn (turf on the lawn, soil & mulch on the beds)
+export const getEstimate = async (items, areaSqm, lawn = null) => {
   try {
-    const res = await axios.post(`${API_BASE_URL}/pricing/estimate/`, { items, area_sqm: areaSqm });
+    const res = await axios.post(`${API_BASE_URL}/pricing/estimate/`, {
+      items, area_sqm: areaSqm, ...(lawn && { lawn_sqm: lawn.sqm, new_lawn: lawn.newLawn !== false }),
+    });
     return res.data;
   } catch (err) { throw errorOf(err, 'Failed to estimate'); }
 };
@@ -608,3 +612,37 @@ export const deletePortfolioPhoto = async (id, mediaId) => {
 };
 
 export default api;
+// ── Addresses (Quezon Province only, always with a map pin; backend addresses.py) ──
+let areasPromise = null;
+/** Towns and barangays with map centres; loaded once per visit (the server also lets browsers cache it). */
+export const getAddressAreas = () => {
+  if (!areasPromise) {
+    areasPromise = api.get('/address-areas/').then(r => r.data).catch(err => { areasPromise = null; throw errorOf(err, 'Could not load the towns'); });
+  }
+  return areasPromise;
+};
+// Validation messages come back under the field (address / contact_phone / label), sometimes as a list
+const addressError = (err, fallback) => {
+  const d = err.response?.data || {};
+  const first = d.error || d.address || d.contact_phone || d.label || d.detail;
+  return new Error((Array.isArray(first) ? first[0] : first) || err.message || fallback);
+};
+export const listAddresses = async () => (await api.get('/addresses/')).data;
+export const createAddress = async (data) => {
+  try { return (await api.post('/addresses/', data)).data; } catch (err) { throw addressError(err, 'Could not save the address'); }
+};
+export const updateAddress = async (id, data) => {
+  try { return (await api.patch(`/addresses/${id}/`, data)).data; } catch (err) { throw addressError(err, 'Could not save the address'); }
+};
+export const deleteAddress = async (id) => { await api.delete(`/addresses/${id}/`); };
+export const makeDefaultAddress = async (id) => (await api.post(`/addresses/${id}/make_default/`)).data;
+
+// One page of user accounts (owner): { results, counts: {staff, customers, all}, has_more }
+export const listUsersPage = async ({ group = 'staff', q = '', page = 1 } = {}) => {
+  try {
+    const res = await api.get('/users/', { params: { group, page, ...(q.trim() ? { q: q.trim() } : {}) } });
+    return res.data;
+  } catch (err) {
+    throw new Error(err.response?.data?.error || err.response?.data?.detail || err.message || 'Failed to fetch users');
+  }
+};

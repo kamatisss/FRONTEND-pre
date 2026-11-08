@@ -15,10 +15,12 @@ const GROUPS = [
     ['planting_mid', 'Shrubs (0.8–2.5 m)', '₱ / plant'],
     ['planting_low', 'Flowers & groundcover', '₱ / plant'],
     ['install_other', 'Stones, furniture & other items', '₱ / item'],
+    ['compost_per_plant', 'Compost & soil per plant (planting into an existing garden)', '₱ / plant'],
   ] },
-  { title: 'Per square metre of garden', note: 'Charged on the whole garden area.', fields: [
+  { title: 'Per square metre of garden', note: 'AI designs keep an open lawn: soil & mulch are charged on the planting beds, turf on the lawn (none when the customer keeps their grass).', fields: [
     ['site_prep_per_sqm', 'Site preparation (clearing, levelling)', '₱ / m²'],
-    ['materials_per_sqm', 'Garden soil, compost & mulch', '₱ / m²'],
+    ['materials_per_sqm', 'Garden soil, compost & mulch (beds)', '₱ / m²'],
+    ['turf_per_sqm', 'New lawn: grass sod supplied & laid', '₱ / m²'],
   ] },
   { title: 'Per project', note: null, fields: [
     ['mobilization_fee', 'Crew mobilisation & delivery', '₱'],

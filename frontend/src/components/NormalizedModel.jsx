@@ -1,7 +1,9 @@
+import { plantOut, hasPot } from '../data/plantedModel';
+import { rigGrowth, growsByParts } from '../data/plantGrowth';
 import { useMemo, useEffect } from 'react';
 import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
-import { realScale } from '../data/modelSizing';
+import { realScale, widthFit } from '../data/modelSizing';
 import { exactBounds } from '../services/modelBounds';
 
 // ─── Category scale multipliers ────────────────────────────────────────────────
@@ -32,7 +34,10 @@ const DEFAULT_CATEGORY_SCALE = 1.5; // fallback for unknown categories
  *   scale     {number}  — User's UI scale multiplier (e.g. 0.8 – 2.0)
  *   category  {string}  — 'plant' | 'hardscape' | 'furniture'
  */
-export default function NormalizedModel({ url, scale = 1, category = 'plant', realWorldSize }) {
+// targetWidth: metres wide to draw it (a plant's spread at the growth stage; data/modelSizing.widthFit keeps
+// the stretch believable). Empty = keep the model's own shape.
+// stage + establishedSize: plants that grow part by part (data/plantGrowth.js) are reshaped for the stage
+export default function NormalizedModel({ url, scale = 1, category = 'plant', realWorldSize, targetWidth, stage, establishedSize }) {
   const { scene } = useGLTF(url);
 
   const normalizedScene = useMemo(() => {
@@ -68,11 +73,21 @@ export default function NormalizedModel({ url, scale = 1, category = 'plant', re
       }
     });
 
+    // ── 2b. Planted, not potted: nursery models lose their pot and soil before being measured,
+    //        so the height is the plant's own and it grows from the ground (data/plantedModel.js)
+    plantOut(clone, url);
+    // ── 2c. Growing by parts: the palm's trunk lengthens under its crown; fruit and flowers come later
+    const rig = rigGrowth(clone, url);
+    const ratio = Number(establishedSize) > 0 && Number(realWorldSize) > 0 ? Number(realWorldSize) / Number(establishedSize) : 1;
+    rig?.pose(ratio, stage || 'established');
+
     // ── 3. Compute the world-space bounding box of the raw clone ──────────────
     //    We must do this BEFORE modifying position/scale so the box reflects
     //    the model's original exported values.
     // Exact vertex bounds (the fast box floated models whose mesh is rotated in the file), measured once per model
-    const box    = exactBounds(clone, scene);
+    // (a planted model is measured under its own key: the pot changes its size)
+    // (reshaped models are measured fresh: their shape depends on the stage)
+    const box    = growsByParts(url) ? exactBounds(clone) : exactBounds(clone, hasPot(url) ? (scene.userData.plantedKey ||= {}) : scene);
     const size   = new THREE.Vector3();
     const center = new THREE.Vector3();
     box.getSize(size);
@@ -91,20 +106,21 @@ export default function NormalizedModel({ url, scale = 1, category = 'plant', re
 
     // ── 6. Combined final scale (normalization × category × user slider) ──────
     const finalScale = normScale * catMult * scale;
-    clone.scale.setScalar(finalScale);
+    const wide = finalScale * widthFit(Number(targetWidth) || 0, Math.max(size.x, size.z) * finalScale);
+    clone.scale.set(wide, finalScale, wide);
 
     // ── 7. Center X / Z, pin bottom to Y = 0 ─────────────────────────────────
     //    After applying scale, the world-space positions shift, so we
     //    recompute position offsets using the pre-scale box values and
     //    multiply by finalScale to stay consistent.
     clone.position.set(
-      -center.x * finalScale,                  // X: center the model
+      -center.x * wide,                        // X: center the model
       -box.min.y * finalScale,                 // Y: lift so lowest point = 0
-      -center.z * finalScale                   // Z: center the model
+      -center.z * wide                         // Z: center the model
     );
 
     return clone;
-  }, [scene, scale, category, realWorldSize]);
+  }, [scene, scale, category, realWorldSize, url, targetWidth, stage, establishedSize]);
   // Re-run whenever the loaded scene, the user's scale, or the category changes.
 
   // Free this instance's cloned materials when replaced or unmounted.

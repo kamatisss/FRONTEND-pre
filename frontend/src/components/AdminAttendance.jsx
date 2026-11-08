@@ -16,6 +16,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { MEDIA_BASE_URL as MEDIA_ROOT } from '../config';
+import ForgottenShifts from './ForgottenShifts';
 
 /* ─── Design tokens ───────────────────────────────────────────────────── */
 const GREEN      = "#10b981";
@@ -291,6 +292,9 @@ const AdminAttendance = () => {
             Refresh logs
           </button>
         </div>
+
+        {/* ── Shifts nobody clocked out of: their hours are wrong until the owner closes them ── */}
+        <ForgottenShifts onClosed={loadLogs} highlight={params.get("forgotten") === "1"} />
 
         {/* ── Period ── */}
         <div role="tablist" aria-label="Period" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, overflowX: "auto" }}>
@@ -736,6 +740,8 @@ const AdminAttendance = () => {
                   { label: "Booking reference", value: selectedAttendance.booking_label },
                   { label: "Clock in",          value: fmtDateTime(selectedAttendance.clock_in_time) },
                   { label: "Clock out",         value: selectedAttendance.clock_out_time ? fmtDateTime(selectedAttendance.clock_out_time) : "Active shift" },
+                  // A shift the owner ended for someone who forgot to clock out (ForgottenShifts)
+                  ...(selectedAttendance.closed_by_name ? [{ label: "Closed by", value: `${selectedAttendance.closed_by_name}: ${selectedAttendance.close_note}` }] : []),
                 ].map(({ label, value }) => (
                   <div
                     key={label}

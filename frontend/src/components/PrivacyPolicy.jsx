@@ -9,7 +9,7 @@ import { useBusiness } from '../services/business';
  * It describes what this system really does; when a feature changes what is collected or who
  * receives it, update this page. The owner should read it through before going live.
  */
-export const PRIVACY_UPDATED = 'October 23, 2026';
+export const PRIVACY_UPDATED = 'November 7, 2026';
 
 const Section = ({ title, children }) => (
   <section className="mt-9">
@@ -45,12 +45,13 @@ export default function PrivacyPolicy() {
           <Section title="What we collect">
             <List items={[
               ['Your account:', 'name, username, email address and password (stored scrambled; nobody at our company can read it).'],
-              ['Bookings and orders:', 'service or delivery address, contact number, preferred dates, your notes, and the site location if you share it.'],
+              ['Bookings and orders:', 'service or delivery address (town, barangay, street and landmark), the map pin you place on your house, contact number, preferred dates and your notes. The pin is where our crew and riders go, and where our crew confirm they are on site.'],
+              ['Address book:', 'the addresses you choose to save (with their map pins), until you remove them. Past orders and bookings keep the address they were placed with.'],
               ['Your garden designs:', 'the designs you make in the 3D Studio or AI Designer, and any photo of your yard you upload.'],
               ['Payments:', 'the amount, method and status of each payment. Card and e-wallet details are entered on PayMongo and never reach us.'],
               ['Reviews:', 'the rating and comment you leave, shown the way you choose when you write it.'],
               ['Site photos:', 'before, during and after photos our crew take of the work. Location data is removed from every photo.'],
-              ['Our staff:', 'crew working hours, and the phone location at the moment they start and end a job (to confirm they are on site).'],
+              ['Our staff:', 'crew working hours, and the phone location at the moment they start and end a job (to confirm they are on site). While a crew member is on shift (clocked in, or out on a delivery) and has the crew app open, their phone location is also shared with the office about once a minute, so jobs and deliveries can be dispatched; it is never taken off shift, only office staff see it, and it is deleted after 30 days. When our crew reach your pin, we record the time and let you know they have arrived.'],
               ['Alerts:', 'if you turn on phone notifications, the address your browser gives us for sending them.'],
             ]} />
           </Section>
@@ -67,8 +68,9 @@ export default function PrivacyPolicy() {
               ['Google (Gemini AI)', 'receives your design request, and the yard photo if you upload one, to suggest a layout. Your name and contact details are not sent.'],
               ['Our hosting and email providers', 'store the system and send our emails, under their own security obligations.'],
               ['Browser notification services', '(Google, Mozilla, Apple) deliver phone alerts if you turn them on.'],
+              ['OpenStreetMap', 'supplies the map pictures. When you view a map, your browser downloads them from OpenStreetMap, which sees your internet address and the area shown, not your name or the pin you place.'],
             ]} />
-            <p className="m-0">Our crew see the address, contact number and notes of the jobs they are assigned to, and nothing else.
+            <p className="m-0">Our crew see the address, map pin, contact number and notes of the jobs and deliveries they are assigned to, and nothing else.
               We may also disclose information when the law or a court requires it.</p>
           </Section>
 

@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
-import { Truck, Phone, Navigation, Banknote, CheckCircle2, AlertTriangle, RefreshCw, Package, Wallet } from 'lucide-react';
+import { Truck, Phone, Navigation, Banknote, CheckCircle2, AlertTriangle, RefreshCw, Package, Wallet, Crosshair } from 'lucide-react';
 import ProblemSheet from './ui/ProblemSheet';
 import { sendAction } from '../crew/outbox';
+import StopsMap from './StopsMap';
+import { navLink } from '../data/navApps';
 
 /* Field crew delivery run (our own crew deliver shop orders).
    Shipped → "Start delivery" (Out for Delivery) → "Delivered". Marking a Cash on Delivery
@@ -11,7 +13,8 @@ import { sendAction } from '../crew/outbox';
 const peso = (v) => `₱${Number(v || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const isCod = (o) => o.payment_method === 'cod';
 const itemsText = (o) => (o.items || []).map(i => `${i.quantity}× ${i.item_name || 'Item'}`).join(', ') || 'No items';
-const directions = (address) => `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(address || '')}`;
+// Navigate to the customer's map pin (older orders: the typed address), in Google Maps or Waze
+const directions = (o) => navLink({ lat: o.delivery_lat ?? NaN, lng: o.delivery_lng ?? NaN, address: o.customer_address });
 
 const STAGE = {
   Pending:            { label: 'Being packed', cls: 'bg-slate-100 text-slate-600 border-slate-200' },
@@ -22,7 +25,7 @@ const STAGE = {
 
 const PROBLEMS = ['Customer not home', 'Wrong or unclear address', 'Customer refused the order', 'Item damaged', 'Other'];
 
-export default function CrewDeliveries({ api, authHeaders, toast, run, loading, reload }) {
+export default function CrewDeliveries({ api, authHeaders, toast, run, loading, reload, base = null, onFindIt = null }) {
   const [busy, setBusy] = useState(null);       // order id being updated
   const [problemFor, setProblemFor] = useState(null);
 
@@ -94,10 +97,20 @@ export default function CrewDeliveries({ api, authHeaders, toast, run, loading, 
         </div>
       ) : (
         <section>
+          {/* The run on one map: tap a pin to jump to that delivery */}
+          {toGo.length > 1 && (
+            <div className="mb-4">
+              <StopsMap title="Delivery run" plan base={base} online={navigator.onLine !== false} stops={toGo.map(o => ({
+                key: `order-${o.id}`, kind: 'delivery', lat: o.delivery_lat ?? NaN, lng: o.delivery_lng ?? NaN,
+                title: `#${o.id} ${o.customer_name || ''}`.trim(),
+                onOpen: () => document.getElementById(`delivery-${o.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+              }))} />
+            </div>
+          )}
           <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest mb-3">To deliver ({toGo.length})</h3>
           <ul className="space-y-3">
             {toGo.map(o => (
-              <li key={o.id} className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden">
+              <li key={o.id} id={`delivery-${o.id}`} className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden scroll-mt-20">
                 {/* Money first: the thing that must not go wrong at the door */}
                 <div className={`flex items-center gap-2 px-4 py-2.5 text-sm font-extrabold ${isCod(o) ? 'bg-amber-50 text-amber-900' : 'bg-emerald-50 text-emerald-800'}`}>
                   {isCod(o) ? <Banknote size={18} /> : <CheckCircle2 size={18} />}
@@ -113,11 +126,17 @@ export default function CrewDeliveries({ api, authHeaders, toast, run, loading, 
                   </div>
                   <p className="text-xs text-slate-500 mt-2 flex items-start gap-1.5"><Package size={13} className="shrink-0 mt-px" />{itemsText(o)}</p>
 
-                  <div className="grid grid-cols-2 gap-2 mt-3">
-                    <a href={directions(o.customer_address)} target="_blank" rel="noreferrer"
+                  <div className={`grid gap-2 mt-3 ${onFindIt ? 'grid-cols-3' : 'grid-cols-2'}`}>
+                    <a href={directions(o)} target="_blank" rel="noreferrer"
                       className="h-11 rounded-xl border border-slate-200 bg-white text-slate-700 text-sm font-bold inline-flex items-center justify-center gap-2 no-underline">
                       <Navigation size={16} /> Navigate
                     </a>
+                    {onFindIt && (
+                      <button type="button" onClick={() => onFindIt(o)}
+                        className="h-11 rounded-xl border border-slate-200 bg-white text-slate-700 text-sm font-bold inline-flex items-center justify-center gap-2 cursor-pointer">
+                        <Crosshair size={16} /> Find it
+                      </button>
+                    )}
                     {o.customer_phone ? (
                       <a href={`tel:${o.customer_phone}`}
                         className="h-11 rounded-xl border border-slate-200 bg-white text-slate-700 text-sm font-bold inline-flex items-center justify-center gap-2 no-underline">

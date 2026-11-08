@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo, forwardRef, u
 import { Html, Grid } from '@react-three/drei';
 import * as THREE from 'three';
 import { DEFAULT_LOT, LOT_MARGIN } from '../data/lot';
+import { planMaskCanvas } from '../data/gardenPlanMask';
 
 // Grass texture tile size in metres: the lawn keeps real-world scale at any lot size
 const GRASS_TILE_M = 6;   // mirrored tiling hides the photo's seams (plain repeat showed a checkerboard)
@@ -34,6 +35,7 @@ const GardenBackground = forwardRef(function GardenBackground(
     lotWidth = DEFAULT_LOT.width,
     lotLength = DEFAULT_LOT.length,
     showGrid = false,
+    gardenPlan = null, // beds + lawn from the AI Designer (dimensions.gardenPlan): beds drawn as mulch
     onTerrainClick,   // legacy: raw event (used by GardenDesigner to confirm placement)
     onPlaceItem,      // new: receives [x, y, z] world coords for item drop
   },
@@ -152,6 +154,18 @@ const GardenBackground = forwardRef(function GardenBackground(
       outerNormal: grass(outerW, outerL),
     };
   }, [textures, isPhoto, lotWidth, lotLength, outerW, outerL]);
+  // The design's planting beds: mulch over the lawn, cut out where the open lawn is (not on a photo,
+  // where the real ground is shown)
+  const bedMask = useMemo(() => {
+    if (isPhoto) return null;
+    const canvas = planMaskCanvas(gardenPlan, lotWidth, lotLength);
+    if (!canvas) return null;
+    const t = new THREE.CanvasTexture(canvas);
+    t.colorSpace = THREE.NoColorSpace;   // data, not colour
+    return t;
+  }, [gardenPlan, lotWidth, lotLength, isPhoto]);
+  useEffect(() => () => bedMask?.dispose(), [bedMask]);
+
   useEffect(() => () => {
     if (!maps) return;
     [maps.lotNormal, maps.outer, maps.outerNormal].forEach(t => t.dispose());
@@ -245,6 +259,29 @@ const GardenBackground = forwardRef(function GardenBackground(
           side={THREE.FrontSide}
         />
       </mesh>
+
+      {/* ── Planting beds from the AI Designer: the lot's own shape and displacement (so they follow
+          the ground), mulch-coloured, the lawn cut out by the mask. Clicks go to the lot below. ── */}
+      {bedMask && (
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]} receiveShadow raycast={() => null}>
+          <planeGeometry args={[lotWidth, lotLength, segW, segL]} />
+          <meshStandardMaterial
+            color="#5d4330"
+            alphaMap={bedMask}
+            alphaTest={0.5}
+            displacementMap={textures.depthMap}
+            displacementScale={displacementScale}
+            displacementBias={-displacementScale * 0.1}
+            normalMap={maps.lotNormal}
+            normalScale={[0.35, 0.35]}
+            roughness={1}
+            metalness={0}
+            polygonOffset
+            polygonOffsetFactor={-2}
+            polygonOffsetUnits={-4}
+          />
+        </mesh>
+      )}
 
       {/* ── Plain ground around the lot: duller, flat, not part of the design ── */}
       <mesh position={[0, -0.03, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>

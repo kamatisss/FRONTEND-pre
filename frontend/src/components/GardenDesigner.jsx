@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import LotSizePanel from './LotSizePanel';
 import { lotOf, itemsOutsideLot } from '../data/lot';
-import { GROWTH_STAGES, DEFAULT_GROWTH_STAGE } from '../data/modelSizing';
+import GrowthStagePicker from './GrowthStagePicker';
 
 import { useDesign } from '../context/DesignContext';
 import { generateDepthMap, getInventoryItems, loadDesign } from '../services/api';
@@ -360,15 +360,6 @@ const S = {
     position: 'absolute', top: 12, left: 12, right: 12, zIndex: 10, display: 'flex', flexWrap: 'wrap',
     alignItems: 'center', gap: 8, pointerEvents: 'none',
   },
-  growthGroup: {
-    display: 'flex', alignItems: 'center', gap: 2, padding: 3, borderRadius: 999, pointerEvents: 'auto',
-    border: '1px solid #A7F3D0', background: 'rgba(255,255,255,0.94)', boxShadow: '0 2px 10px rgba(0,0,0,0.1)',
-    backdropFilter: 'blur(6px)',
-  },
-  growthBtn: (on) => ({
-    minHeight: 30, padding: '0 10px', borderRadius: 999, border: 'none', cursor: 'pointer', whiteSpace: 'nowrap',
-    fontSize: 12, fontWeight: 800, background: on ? '#059669' : 'transparent', color: on ? '#fff' : '#065F46',
-  }),
   lotChip: {
     pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: 6,
     minHeight: 36, padding: '6px 12px', borderRadius: 999, border: '1px solid #A7F3D0',
@@ -890,6 +881,7 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
                   lotWidth={lot.width}
                   lotLength={lot.length}
                   showGrid={showGrid}
+                  gardenPlan={state.dimensions?.gardenPlan}
                 />
                 {state.placedItems.map(item => (
                   item.id === state.editingItemId ? null : (
@@ -949,20 +941,8 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
                 aria-label={`Lot ${lot.width} by ${lot.length} metres. Change lot size`}>
                 <Ruler size={14} /> Lot {lot.width} × {lot.length} m
               </button>
-              <div role="radiogroup" aria-label="Show plants" style={S.growthGroup}
-                title="See your plants when planted, after about 2 years, or fully grown">
-                <Sprout size={14} style={{ color: '#059669', margin: '0 2px 0 6px', flexShrink: 0 }} aria-hidden="true" />
-                {GROWTH_STAGES.map(g => {
-                  const on = (state.growthStage || DEFAULT_GROWTH_STAGE) === g.key;
-                  return (
-                    <button key={g.key} type="button" role="radio" aria-checked={on} aria-label={g.label}
-                      onClick={() => dispatch({ type: 'SET_GROWTH_STAGE', payload: g.key })}
-                      style={S.growthBtn(on)}>
-                      {phone ? g.short : g.label}
-                    </button>
-                  );
-                })}
-              </div>
+              <GrowthStagePicker value={state.growthStage} short={phone}
+                onChange={(key) => dispatch({ type: 'SET_GROWTH_STAGE', payload: key })} />
             </div>
           )}
 

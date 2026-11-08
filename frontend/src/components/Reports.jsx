@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { BarChart3, Download, Wallet, Receipt, HardHat, Table2, ChevronRight } from 'lucide-react';
+import { BarChart3, Download, Wallet, Receipt, HardHat, Table2, ChevronRight, MapPin } from 'lucide-react';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { downloadWithAuth } from './ui/download';
@@ -20,6 +20,7 @@ const REPORTS = [
   { key: 'money', label: 'Money in', Icon: Wallet },
   { key: 'balances', label: 'Balances', Icon: Receipt },
   { key: 'crew', label: 'Crew', Icon: HardHat },
+  { key: 'areas', label: 'Areas', Icon: MapPin },
 ];
 const BAR = '#059669';        // one series, one hue (emerald-600): magnitude only, the title names it
 const BAR_TRACK = '#d1fae5';
@@ -285,6 +286,72 @@ function CrewReport({ data }) {
   );
 }
 
+// Leaflet loads only when the Areas report is opened
+const PinMap = lazy(() => import('./PinMap'));
+
+/* Where customers are: orders and bookings per town, as circles sized by how many (area ∝ count). */
+function AreasReport({ data }) {
+  const rows = data.towns;
+  const circles = useMemo(() => {
+    const max = Math.max(1, ...rows.map(r => r.orders + r.bookings));
+    return rows.map(r => ({
+      lat: r.lat, lng: r.lng, color: BAR,
+      radius: 6 + 22 * Math.sqrt((r.orders + r.bookings) / max),   // area, not radius, follows the count
+      label: `${r.name}: ${r.orders} order${r.orders === 1 ? '' : 's'}, ${r.bookings} booking${r.bookings === 1 ? '' : 's'}`,
+    }));
+  }, [rows]);
+  const lost = data.not_mapped.orders + data.not_mapped.bookings;
+  if (!rows.length && !lost) {
+    return <p className="bg-white border border-slate-200 rounded-2xl p-6 text-slate-500 m-0">No orders or bookings in this period.</p>;
+  }
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <Tile label="Towns served" value={data.totals.towns_served} sub="With at least one order or booking" />
+        <Tile label="Shop orders" value={data.totals.orders} sub="Placed in the period (not cancelled)" />
+        <Tile label="Bookings" value={data.totals.bookings} sub="Scheduled in the period (not cancelled)" />
+      </div>
+      {rows.length > 0 && (
+        <section className="bg-white border border-slate-200 rounded-2xl p-4">
+          <h2 className="m-0 mb-3 text-[15px] font-extrabold text-slate-900">Orders and bookings by town</h2>
+          <Suspense fallback={<div className="h-[380px] rounded-xl bg-slate-100 animate-pulse" />}>
+            <PinMap circles={circles} readOnly height={380} ariaLabel="Map: circles sized by orders and bookings per town; the table below has the numbers" />
+          </Suspense>
+          <p className="m-0 mt-2 text-xs text-slate-500">Bigger circle, more orders and bookings. Hover or tap a circle for the numbers.</p>
+        </section>
+      )}
+      <section className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm min-w-[640px]">
+            <thead><tr className="text-left text-xs text-slate-500">
+              <th className="py-3 px-4 font-bold">Town / city</th>
+              <th className="py-3 px-3 font-bold text-right">Shop orders</th><th className="py-3 px-3 font-bold text-right">Order value</th>
+              <th className="py-3 px-3 font-bold text-right">Bookings</th><th className="py-3 px-3 font-bold text-right">Finished job value</th>
+              <th className="py-3 px-4 font-bold text-right">Customers</th>
+            </tr></thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.code} className="border-t border-slate-100">
+                  <td className="py-3 px-4 font-bold text-slate-900">{r.name}</td>
+                  <td className="py-3 px-3 text-right tabular-nums text-slate-900">{r.orders}</td>
+                  <td className="py-3 px-3 text-right tabular-nums text-slate-600">{peso(r.order_value)}</td>
+                  <td className="py-3 px-3 text-right tabular-nums text-slate-900">{r.bookings}</td>
+                  <td className="py-3 px-3 text-right tabular-nums text-slate-600">{peso(r.booking_value)}</td>
+                  <td className="py-3 px-4 text-right tabular-nums text-slate-600">{r.customers}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="m-0 px-4 py-3 text-xs text-slate-500 border-t border-slate-100">
+          Towns come from each address's map pin; older addresses are matched by the town written in them.
+          {lost > 0 && <> {data.not_mapped.orders} order{data.not_mapped.orders === 1 ? '' : 's'} and {data.not_mapped.bookings} booking{data.not_mapped.bookings === 1 ? '' : 's'} have no recognisable Quezon town and are not shown.</>}
+        </p>
+      </section>
+    </div>
+  );
+}
+
 export default function Reports() {
   const { authTokens } = useAuth();
   const [params, setParams] = useSearchParams();
@@ -325,7 +392,7 @@ export default function Reports() {
           <span className="w-11 h-11 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0"><BarChart3 size={22} /></span>
           <div>
             <h1 className="m-0 text-2xl font-extrabold text-slate-900 tracking-tight">Reports</h1>
-            <p className="m-0 mt-0.5 text-sm text-slate-500">Money actually received, who still owes you, and what each crew member did.</p>
+            <p className="m-0 mt-0.5 text-sm text-slate-500">Money actually received, who still owes you, what each crew member did, and where your customers are.</p>
           </div>
         </div>
         <button type="button" onClick={download}
@@ -369,7 +436,8 @@ export default function Reports() {
         : !ready ? <div className="h-96 bg-white border border-slate-200 rounded-2xl animate-pulse" />
           : report === 'money' ? <MoneyReport data={ready} />
             : report === 'balances' ? <BalancesReport data={ready} />
-              : <CrewReport data={ready} />}
+              : report === 'areas' ? <AreasReport data={ready} />
+                : <CrewReport data={ready} />}
     </div>
   );
 }

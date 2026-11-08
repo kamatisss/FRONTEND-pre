@@ -1,7 +1,9 @@
 import { useRef, useState, useEffect, useCallback, Suspense } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { TransformControls, Html, ContactShadows } from '@react-three/drei';
-import { placedScale, stageSize, GROWTH_STAGES } from '../data/modelSizing';
+import { placedScale, stageSize, stageSpread } from '../data/modelSizing';
+import PlantHeightCard from './PlantHeightCard';
+import { growthNote } from '../data/plantGrowth';
 import { ErrorBoundary } from 'react-error-boundary';
 import { useDesign } from '../context/DesignContext';
 import { lotOf, clampToLot } from '../data/lot';
@@ -283,7 +285,6 @@ export default function PlacedObject({ item, orbitControlsRef }) {
   }, [dispatch, item.id, item.rotation]);
 
   const showHeight = category === 'plant' && realH > 0 && !isPlacing && !isDragging && (hovered || isSelected);
-  const metres = (v) => `${Math.round(v * 10) / 10} m`;
   const tick = 0.32 / objScale;      // tick marks keep the same real size whatever the item's scale
   const lineW = 0.025 / objScale;
 
@@ -317,6 +318,9 @@ export default function PlacedObject({ item, orbitControlsRef }) {
               url={modelUrl}
               category={category}
               realWorldSize={realH || undefined}
+              targetWidth={stageSpread(productMatch || item, stage, category)}
+              stage={stage}
+              establishedSize={establishedH || undefined}
             />
           </Suspense>
         </ErrorBoundary>
@@ -361,34 +365,12 @@ export default function PlacedObject({ item, orbitControlsRef }) {
             </mesh>
           ))}
           <Html position={[0, realH, 0]} zIndexRange={[18, 10]} style={{ pointerEvents: 'none' }}>
-            <div role="tooltip" style={{
-              // Beside the top, hanging down into view: tall plants never push it off the top of the canvas
-              transform: 'translate(14px, -25%)', width: 'max-content', maxWidth: 270,
-              padding: '7px 10px', borderRadius: 10, background: 'rgba(15,23,42,0.88)', color: '#fff',
-              fontFamily: "'Inter', system-ui, sans-serif", fontSize: 11.5, lineHeight: 1.4,
-              boxShadow: '0 6px 18px rgba(0,0,0,0.25)', userSelect: 'none',
-            }}>
-              <div style={{ fontWeight: 800, fontSize: 12.5 }}>
-                {productMatch?.name || item.name} · <span style={{ color: '#6ee7b7' }}>{metres(realH * objScale)}</span>
-              </div>
-              <div style={{ color: '#cbd5e1' }}>
-                {stage === 'planting' ? 'when we plant it' : stage === 'mature' ? 'fully grown' : 'about 2 years after planting'}
-              </div>
-              {(plantingH > 0 || matureH > 0) && (
-                <div style={{ display: 'flex', gap: 8, marginTop: 4, color: '#94a3b8' }}>
-                  {GROWTH_STAGES.map(g => {
-                    const h = g.key === 'planting' ? plantingH : g.key === 'mature' ? matureH : establishedH;
-                    if (!h) return null;
-                    const on = g.key === stage;
-                    return (
-                      <span key={g.key} style={{ color: on ? '#6ee7b7' : '#cbd5e1', fontWeight: on ? 800 : 500 }}>
-                        {g.short} {metres(h)}
-                      </span>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+            {/* Beside the top, hanging down into view: tall plants never push it off the top of the canvas */}
+            <PlantHeightCard name={productMatch?.name || item.name} shown={realH * objScale} stage={stage}
+              heights={{ planting: plantingH, established: establishedH, mature: matureH }}
+              wide={stageSpread(productMatch, stage, category)}
+              growthNote={growthNote(modelUrl, stage)}
+              style={{ transform: 'translate(14px, -25%)' }} />
           </Html>
         </group>
       )}

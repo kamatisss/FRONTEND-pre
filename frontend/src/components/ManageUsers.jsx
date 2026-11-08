@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { listUsers, createUser, updateUser, getUserActivityLogs } from '../services/api';
+import { listUsersPage, createUser, updateUser, getUserActivityLogs } from '../services/api';
 import { Users, Plus, Shield, CheckCircle, XCircle, Search, Loader2, Clock, Calendar, ShoppingBag, X, Info, ChevronRight } from 'lucide-react';
 import { useIsPhone } from './ui/useMediaQuery';
 
@@ -24,7 +24,6 @@ const GROUPS = [
     ['customers', 'Customers', (u) => roleOf(u) === 'CUSTOMER'],
     ['all', 'All', () => true],
 ];
-const PAGE = 30;
 
 function RoleBadge({ role }) {
     const st = ROLE_STYLE[role] || { bg: '#F3F4F6', color: '#374151' };
@@ -43,7 +42,6 @@ const ManageUsers = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [params, setParams] = useSearchParams();
     const group = GROUPS.some(([k]) => k === params.get('group')) ? params.get('group') : 'staff';
-    const [limit, setLimit] = useState(PAGE);
     const isPhone = useIsPhone();
     
     // Modal states
@@ -76,22 +74,50 @@ const ManageUsers = () => {
         }, 4000);
     };
 
+    // The server pages the accounts (30 at a time) and counts each tab, so the owner's phone doesn't
+    // download every customer (UserViewSet.list ?page=&group=&q=)
+    const [counts, setCounts] = useState({ staff: 0, customers: 0, all: 0 });
+    const [page, setPage] = useState(1);
+    const [hasMore, setHasMore] = useState(false);
+    const [loadingMore, setLoadingMore] = useState(false);
+    const [query, setQuery] = useState('');
+    useEffect(() => {
+        const t = setTimeout(() => setQuery(searchTerm), 300);
+        return () => clearTimeout(t);
+    }, [searchTerm]);
+
     const fetchUsers = async () => {
         try {
             setLoading(true);
             setError(null);
-            const data = await listUsers();
-            setUsers(data);
+            const data = await listUsersPage({ group, q: query, page: 1 });
+            setUsers(data.results);
+            setCounts(data.counts);
+            setHasMore(data.has_more);
+            setPage(1);
         } catch (err) {
             setError(err.message);
         } finally {
             setLoading(false);
         }
     };
+    const loadMore = async () => {
+        setLoadingMore(true);
+        try {
+            const data = await listUsersPage({ group, q: query, page: page + 1 });
+            setUsers(prev => [...prev, ...data.results.filter(u => !prev.some(p => p.id === u.id))]);
+            setHasMore(data.has_more);
+            setPage(page + 1);
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setLoadingMore(false);
+        }
+    };
 
     useEffect(() => {
         fetchUsers();
-    }, []);
+    }, [group, query]); // eslint-disable-line react-hooks/exhaustive-deps -- a new tab or search starts from page 1
 
     const handleToggleStatus = async (userId, currentActive) => {
         if (String(userId) === String(currentUser?.user_id)) {
@@ -225,18 +251,10 @@ const ManageUsers = () => {
         }
     };
 
-    const matchesSearch = users.filter(u => {
-        const fullName = `${u.first_name || ''} ${u.last_name || ''}`.toLowerCase();
-        const email = (u.email || '').toLowerCase();
-        const username = (u.username || '').toLowerCase();
-        const query = searchTerm.toLowerCase();
-        return fullName.includes(query) || email.includes(query) || username.includes(query);
-    });
-    const counts = Object.fromEntries(GROUPS.map(([k, , test]) => [k, matchesSearch.filter(test).length]));
-    const filteredUsers = matchesSearch.filter(GROUPS.find(([k]) => k === group)[2]);
-    const shownUsers = filteredUsers.slice(0, limit);
+    // The server already searched and picked the tab's accounts; a role changed here may move out of it
+    const filteredUsers = users.filter(GROUPS.find(([k]) => k === group)[2]);
+    const shownUsers = filteredUsers;
     const setGroup = (k) => {
-        setLimit(PAGE);
         setParams(prev => {
             const next = new URLSearchParams(prev);
             if (k === 'staff') next.delete('group'); else next.set('group', k);
@@ -430,7 +448,7 @@ const ManageUsers = () => {
                         type="text"
                         placeholder="Search users by name, email, or username..."
                         value={searchTerm}
-                        onChange={e => { setSearchTerm(e.target.value); setLimit(PAGE); }}
+                        onChange={e => setSearchTerm(e.target.value)}
                         style={{
                             width: '100%',
                             padding: '12px 16px 12px 42px',
@@ -597,11 +615,11 @@ const ManageUsers = () => {
                         )}
                     </div>
                 )}
-                {!loading && !error && filteredUsers.length > limit && (
-                    <button onClick={() => setLimit(l => l + PAGE)}
+                {!loading && !error && hasMore && (
+                    <button onClick={loadMore} disabled={loadingMore}
                         style={{ display: 'block', width: '100%', minHeight: 48, marginTop: 12, borderRadius: 12, border: '1px solid #e2e8f0',
                             background: '#ffffff', color: '#334155', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
-                        Show more ({filteredUsers.length - limit} left)
+                        {loadingMore ? 'Loading…' : `Show more (${Math.max(0, (counts[group] || 0) - users.length)} left)`}
                     </button>
                 )}
             </div>

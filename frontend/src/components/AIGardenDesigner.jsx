@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { evaluatePlantCompatibility } from '../data/plantCompatibility';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { Sparkles, ArrowLeft, Check, Compass, ShieldAlert, Upload, X, CalendarPlus, Info, Cpu, Wrench, RefreshCw, Box, ChevronLeft, ChevronRight, Leaf, Sun, CloudSun, Cloud, Droplet } from 'lucide-react';
+import { Sparkles, ArrowLeft, Check, Compass, ShieldAlert, Upload, X, CalendarPlus, Info, Cpu, Wrench, RefreshCw, Box, ChevronLeft, ChevronRight, Leaf, Sun, CloudSun, Cloud, Droplet, Undo2, RotateCcw, Pencil, AlertTriangle, Wand2, Plus, FlipHorizontal2 } from 'lucide-react';
 import { productImage } from '../data/productImage';
 import ZonePicker from './ZonePicker';
 import BudgetPicker from './BudgetPicker';
@@ -11,17 +11,22 @@ import { color, cardStyle, inputStyle, labelStyle, radius } from './ui/tokens';
 import { useCart } from '../context/CartContext';
 import { lotPlantsToStudioItems } from '../data/sampleGarden';
 import { API_BASE_URL as API_ROOT } from '../config';
-import { plantBudgetFromAllIn } from '../data/pricing';
+import { plantBudgetFromAllIn, itemCostToCustomer } from '../data/pricing';
 import ThreeGardenCanvas from './ThreeGardenCanvas';
 import { useDesign } from '../context/DesignContext';
 import { getInventoryItems, getPricing } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-import { saveGuestDesign, loadGuestDesign, loadAiPrefill, clearAiPrefill } from '../services/guestSession';
+import { saveGuestDesign, loadGuestDesign, clearGuestDesign, saveAiSession, loadAiSession, clearAiSession, loadAiPrefill, clearAiPrefill } from '../services/guestSession';
 import GuestAuthModal from './GuestAuthModal';
 import { useIsPhone, useMediaQuery } from './ui/useMediaQuery';
 import { DEFAULT_TIME_OF_DAY } from '../data/studioLight';
-import { defaultCorners } from '../data/photoPose';
+import { defaultPins } from '../data/photoPose';
+import { readFocal35 } from '../data/photoExif';
 import { LOT_MAX } from '../data/lot';
+import { DEFAULT_GROWTH_STAGE } from '../data/modelSizing';
+import GrowthStagePicker from './GrowthStagePicker';
+import { editSummary } from '../data/designEdits';
+import { mirrorEdit } from '../data/mirrorEdit';
 
 const LOADING_PHASES = [
   'Analyzing your garden space…',
@@ -37,6 +42,150 @@ const FEATURE_KIND = { furniture: 'seat', hardscape: 'rock' };
 const MAX_SEATS = 2;
 const MAX_ROCKS = 9;
 const ROCK_GROUP = 3;
+
+// Where a plant goes in the design, by fully grown height — the same layers as the layout engine
+// (layout_engine.PlantSpec.layer): tall at the back, low along the borders
+const roleOf = (item) => {
+  if (!item) return null;
+  if (item.category === 'furniture') return 'Seating';
+  if (item.category === 'hardscape') return 'Accent';
+  const grown = Math.max(Number(item.real_world_size) || 1, Number(item.mature_height) || 0);
+  return grown >= 2.5 ? 'Tall · back' : grown >= 0.8 ? 'Medium' : 'Low · border';
+};
+
+// A design that spends well under its target budget (the beds are full, the picks are cheap, stock ran
+// out): the card says "Uses ₱X of ₱Y" and shows the reason prominently instead of "Designed for ₱Y"
+const UNDER_USED = 0.6;
+const EDIT_TIMEOUT = 15000;
+const timeAgo = (ms) => {
+  const min = Math.max(1, Math.round((Date.now() - ms) / 60000));
+  if (min < 60) return `${min} minute${min > 1 ? 's' : ''} ago`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `${h} hour${h > 1 ? 's' : ''} ago`;
+  const d = Math.round(h / 24);
+  return `${d} day${d > 1 ? 's' : ''} ago`;
+};   // ms: re-price / notes / tidy after an edit; a hung server must not leave the UI waiting
+
+// Each design and each of its plants gets a stable id, so the 3D view can edit it (move, turn,
+// remove) and Undo follows the right design. priceCtx = the terms it was priced on (install, scope,
+// lawn, lot), so an edited design is re-priced the same way. Older saved guest designs have none.
+const tagLayouts = (layouts, priceCtx) => layouts.map((d, i) => ({
+  ...d,
+  edit_id: d.edit_id || `${Date.now().toString(36)}-${i}`,
+  price_ctx: d.price_ctx || priceCtx,
+  plants: (d.plants || []).map((p, j) => (p.uid ? p : { ...p, uid: `p${j}` })),
+}));
+// What "Reset to AI design" brings back
+const ORIGINAL_FIELDS = ['plants', 'total_cost', 'plant_cost', 'plant_breakdown', 'cost_breakdown', 'cost_estimate', 'budget_use'];
+const snapshotOf = (l) => Object.fromEntries(ORIGINAL_FIELDS.map(k => [k, l[k]]));
+
+// Height layer by fully grown height: the same cut-offs as the engine (layout_engine.PlantSpec.layer),
+// so "Swap" offers plants that fill the same role (tall at the back, mid, low border)
+const grownOf = (p) => Math.max(Number(p.real_world_size) || 0, Number(p.mature_height) || 0);
+const layerOf = (p) => { const g = grownOf(p); return g >= 2.5 ? 'tall' : g >= 0.8 ? 'mid' : 'low'; };
+const sizeOf = (p) => {
+  const h = Number(p.real_world_size) || 0, g = Number(p.mature_height) || 0;
+  return (p.category || 'plant') === 'plant'
+    ? (h ? `${h} m${g > h ? `, ${g} m grown` : ''}` : '')
+    : (h ? `${h} m` : '');
+};
+// "+₱1,230" / "−₱200" / "same price": what choosing it does to the customer's total
+const peso = (n) => `₱${Math.abs(Math.round(n)).toLocaleString()}`;
+const deltaText = (d) => (Math.abs(d) < 1 ? 'same price' : `${d > 0 ? '+' : '−'}${peso(d)}`);
+
+// "Add" / "Swap for…" picker shown above the 3D view while editing a design
+function EditPicker({ title, hint, sections, onPick, onClose, busy, error, emptyText, touch, costOf }) {
+  const empty = !sections.some(sec => sec.options.length);
+  return (
+    <div role="region" aria-label={title}
+      style={{ margin: '0 0 10px', padding: 12, border: `1px solid ${color.border}`, borderRadius: 12, background: '#F8FAFC' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+        <div>
+          <div style={{ fontWeight: 800, fontSize: '0.85rem', color: '#0F172A' }}>{title}</div>
+          {hint && <div style={{ fontSize: '0.75rem', color: color.muted, marginTop: 2 }}>{hint}</div>}
+        </div>
+        <button type="button" onClick={onClose} aria-label="Close"
+          style={{ width: touch ? 44 : 32, height: touch ? 44 : 32, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            border: 'none', background: 'transparent', color: color.muted, cursor: 'pointer', borderRadius: 8 }}>
+          <X size={16} />
+        </button>
+      </div>
+      {error && <p role="alert" style={{ margin: '8px 0 0', fontSize: '0.8rem', fontWeight: 600, color: '#B91C1C' }}>{error}</p>}
+      {empty && <p style={{ margin: '8px 0 0', fontSize: '0.8rem', color: color.muted }}>{emptyText}</p>}
+      {sections.filter(sec => sec.options.length).map(sec => (
+        <div key={sec.label} style={{ marginTop: 10 }}>
+          <div style={{ fontSize: '0.68rem', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: color.muted, marginBottom: 6 }}>{sec.label}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8 }}>
+            {sec.options.map(item => {
+              const img = productImage(item);
+              return (
+                <button key={item.id} type="button" onClick={() => onPick(item)} disabled={busy}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 6, minHeight: 52, textAlign: 'left', borderRadius: 10,
+                    border: `1px solid ${color.border}`, background: color.white, cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.6 : 1 }}>
+                  {img
+                    ? <img src={img} alt="" style={{ width: 40, height: 40, borderRadius: 8, objectFit: 'cover', background: '#ECFDF5', flexShrink: 0 }} />
+                    : <span style={{ width: 40, height: 40, borderRadius: 8, background: '#ECFDF5', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Leaf size={16} color="#059669" /></span>}
+                  <span style={{ minWidth: 0 }}>
+                    <span style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#0F172A', lineHeight: 1.25 }}>{item.name}</span>
+                    {sizeOf(item) && <span style={{ display: 'block', fontSize: '0.68rem', color: color.muted, marginTop: 2 }}>{sizeOf(item)}</span>}
+                    <span style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, marginTop: 1,
+                      color: costOf(item) > 0 ? '#92400E' : costOf(item) < 0 ? '#047857' : color.muted }}>
+                      {deltaText(costOf(item))} <span style={{ fontWeight: 500, color: color.muted }}>to your total</span>
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+const underUsed = (d) => !!d.target_budget && Number(d.total_cost) < UNDER_USED * Number(d.target_budget);
+
+/** A labelled single choice as chips. options: [value, label, hint]. */
+function ChoiceChips({ label, value, onChange, options, touch }) {
+  const hint = options.find(([v]) => v === value)?.[2];
+  return (
+    <div role="radiogroup" aria-label={label}>
+      <div style={{ fontSize: '0.72rem', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#64748B', marginBottom: 6 }}>
+        {label}
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {options.map(([v, text, tip]) => {
+          const on = v === value;
+          return (
+            <button key={String(v)} type="button" role="radio" aria-checked={on} title={tip} onClick={() => onChange(v)}
+              style={{ minHeight: touch ? 44 : 34, padding: '6px 12px', borderRadius: 999, cursor: 'pointer', fontSize: '0.78rem',
+                fontWeight: 700, border: `1.5px solid ${on ? '#10b981' : '#E2E8F0'}`, background: on ? '#ECFDF5' : '#FFFFFF',
+                color: on ? '#047857' : '#475569' }}>
+              {text}
+            </button>
+          );
+        })}
+      </div>
+      {hint && <div style={{ marginTop: 4, fontSize: '0.72rem', color: '#94A3B8' }}>{hint}</div>}
+    </div>
+  );
+}
+
+/** One row per plant (name, quantity, role) for a design card, plants before garden features. */
+function plantingSchedule(design, catalog, featureItems) {
+  const find = (id) => catalog.find(i => String(i.id) === String(id)) || featureItems.find(i => String(i.id) === String(id));
+  let rows = design.plant_breakdown?.length
+    ? design.plant_breakdown.map(r => ({ id: String(r.plant_id), quantity: r.quantity, name: r.name }))
+    : null;
+  if (!rows) {
+    const counts = new Map();
+    (design.plants || []).filter(p => !p.is_existing).forEach(p => counts.set(String(p.plant_id), (counts.get(String(p.plant_id)) || 0) + 1));
+    rows = [...counts].map(([id, quantity]) => ({ id, quantity }));
+  }
+  return rows.map(r => {
+    const detail = find(r.id);
+    return { ...r, detail, name: r.name || detail?.name || `Plant #${r.id}`, role: roleOf(detail) };
+  });
+}
 
 // The product's real photo (uploaded, or rendered from its 3D model). No photo or a broken link →
 // a leaf tile: never an emoji, which Windows shows as an empty box for many plant emojis.
@@ -126,11 +275,19 @@ export default function AIGardenDesigner() {
   const navigate = useNavigate();
   const { dispatch } = useDesign();
   const { user } = useAuth();
+  const ownerId = user ? String(user.user_id ?? user.id ?? 'me') : null;
+  const [restored, setRestored] = useState(null);   // { at, hadPhoto, edited }: "We kept your designs" banner
 
   // Budget as a range; three designs spread across it. "install" = all-in with our crew,
   // otherwise plants only (the customer plants them).
   const [budgetRange, setBudgetRange] = useState({ min: 50000, max: 100000 });
   const [install, setInstall] = useState(true);
+  // The yard's conditions (garden_ai.SUN_LEVELS / MAINTENANCE_LEVELS); sun null = not sure
+  const [sun, setSun] = useState(null);
+  const [maintenance, setMaintenance] = useState('medium');
+  const [lawn, setLawn] = useState('new');
+  // Installed: a full garden makeover, or planting into the customer's existing garden (no ground work)
+  const [scope, setScope] = useState('makeover');
   const { addToCart } = useCart();
   const [rates, setRates] = useState(null);   // admin rate card
   useEffect(() => { getPricing().then(setRates).catch(() => {}); }, []);
@@ -214,7 +371,22 @@ export default function AIGardenDesigner() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [generatedLayouts, setGeneratedLayouts] = useState([]);
-  const [activeLayout, setActiveLayout] = useState(null);
+  // The design shown in 3D, by id: edits replace the design inside generatedLayouts, so the cards,
+  // the 3D view, booking and the cart all read the same (edited) version
+  const [activeId, setActiveId] = useState(null);
+  const activeLayout = generatedLayouts.find(l => l.edit_id === activeId) || null;
+  const setActiveLayout = (layout) => setActiveId(layout ? layout.edit_id : null);
+  const [editHistory, setEditHistory] = useState({});   // edit_id → earlier plant lists (Undo)
+  // Designer's notes by plant uid, for the amber rings and the height card in 3D
+  const activeNotes = activeLayout?.notes;
+  const notesByUid = useMemo(() => {
+    const out = {};
+    (activeNotes || []).forEach(n => (n.uids || []).forEach(u => { if (u) (out[u] = out[u] || []).push(n.message); }));
+    return out;
+  }, [activeNotes]);
+  const [growthStage, setGrowthStage] = useState(DEFAULT_GROWTH_STAGE);
+  const [mirrorOn, setMirrorOn] = useState(true);   // Symmetrical designs: "Mirror my changes"
+  const [mirrorNote, setMirrorNote] = useState('');
   const [activeView, setActiveView] = useState('3d');
   const phone = useIsPhone();
   const touch = useMediaQuery('(pointer: coarse)');
@@ -226,7 +398,13 @@ export default function AIGardenDesigner() {
   const [slide, setSlide] = useState(0);
   const [bookingLoading, setBookingLoading] = useState(false);
   // Photo overlay: four pins on the yard's corners in the photo (null = not placed yet, a guess is used)
-  const [photoCorners, setPhotoCorners] = useState(null);
+  const [photoCorners, setPhotoCorners] = useState(null);   // the 4 pins on the photo ({u, v} each)
+  // 'edges': back corners + a point on each side edge (the usual photo: the front corners are out of
+  // shot); 'corners': all four corners are visible. photoLens: 35 mm-equivalent focal length from EXIF.
+  const [pinMode, setPinMode] = useState('edges');
+  const [photoLens, setPhotoLens] = useState(null);
+  const photoSetup = useMemo(() => (photoCorners ? { pins: photoCorners, mode: pinMode, focal35: photoLens } : null),
+    [photoCorners, pinMode, photoLens]);
   const [editingCorners, setEditingCorners] = useState(false);
   const [poseStatus, setPoseStatus] = useState(null);
   const [photoTone, setPhotoTone] = useState(null);
@@ -248,21 +426,33 @@ export default function AIGardenDesigner() {
     return () => { document.body.style.overflowY = ''; };
   }, []);
 
-  // Restore guest session on mount (guests only)
+  // Restore the last session on this device: designs, edits, answers and the design that was open.
+  // Signed in: their own (saved per account); else, or when they have none yet, the guest one.
+  // A fresh hand-off from the Studio (prefill) keeps its own lot and plants.
   useEffect(() => {
-    if (!user) {
-      const saved = loadGuestDesign();
-      if (saved?.layouts?.length) {
-        setGeneratedLayouts(saved.layouts);
-        setActiveLayout(saved.layouts[0]);
-        if (saved.budgetRange) setBudgetRange(saved.budgetRange);
-        else if (saved.budget) setBudgetRange({ min: saved.budget, max: saved.budget });
-        if (saved.lotWidth) setLotWidth(saved.lotWidth);
-        if (saved.lotLength) setLotLength(saved.lotLength);
-        if (saved.featureQty && typeof saved.featureQty === 'object') setFeatureQty(saved.featureQty);
-      }
+    const saved = (ownerId && loadAiSession(ownerId)) || loadGuestDesign();
+    if (!saved?.layouts?.length) return;
+    const layouts = tagLayouts(saved.layouts, null);
+    setGeneratedLayouts(layouts);
+    setActiveLayout(layouts.find(l => l.edit_id === saved.activeId) || layouts[0]);
+    if (!prefill) {
+      if (saved.budgetRange) setBudgetRange(saved.budgetRange);
+      else if (saved.budget) setBudgetRange({ min: saved.budget, max: saved.budget });
+      if (saved.lotWidth) setLotWidth(saved.lotWidth);
+      if (saved.lotLength) setLotLength(saved.lotLength);
+      if (Array.isArray(saved.preferredPlants)) setPreferredPlants(saved.preferredPlants);
     }
-  }, []);
+    if (saved.featureQty && typeof saved.featureQty === 'object') setFeatureQty(saved.featureQty);
+    if (typeof saved.install === 'boolean') setInstall(saved.install);
+    if (saved.scope) setScope(saved.scope);
+    if (saved.lawn) setLawn(saved.lawn);
+    if (saved.sun !== undefined) setSun(saved.sun);
+    if (saved.maintenance) setMaintenance(saved.maintenance);
+    if (Array.isArray(saved.keepClear)) setKeepClear(saved.keepClear);
+    if (saved.savedAt) setRestored({ at: saved.savedAt, hadPhoto: !!saved.hadPhoto, edited: layouts.some(l => l.edited) });
+    // Left mid-update (closed while a price was on its way): price those designs again
+    layouts.filter(l => l.pricing === 'pending' || l.pricing === 'error').forEach(l => reprice(l.edit_id));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- once, on arrival
 
   const toggleBreakdown = (index) => {
     setExpandedBreakdowns(prev => ({
@@ -388,7 +578,9 @@ export default function AIGardenDesigner() {
       setSelectedImage(file);
       setImagePreview(URL.createObjectURL(file));
       setPhotoCorners(null);   // a new photo needs its own pins
-      scanZones(file);
+      setPhotoLens(null);
+      scanZones(file);   // sets scanFileRef: the photo now on screen
+      readFocal35(file).then(mm => { if (scanFileRef.current === file) setPhotoLens(mm); });
     }
   };
 
@@ -398,6 +590,7 @@ export default function AIGardenDesigner() {
     setSelectedImage(null);
     setImagePreview(null);
     setPhotoCorners(null);
+    setPhotoLens(null);
     setZoneScan({ status: 'idle', zones: [] });
     setKeepClear([]);
   };
@@ -427,24 +620,27 @@ export default function AIGardenDesigner() {
     // The photo stays in the browser for the AR view; only the confirmed zones are sent
     formData.append('keep_clear_zones', JSON.stringify(keepClear));
     formData.append('seed', variationSeed);
+    if (sun) formData.append('sun', sun);
+    formData.append('maintenance', maintenance);
+    formData.append('lawn', lawn);
+    formData.append('scope', scope);
     try {
       const response = await axios.post(`${API_BASE_URL}/generate-layouts/`, formData, { headers });
       if (response.data?.designs) {
         const inventoryIds = new Set(catalog.map(item => String(item.id)));
-        const validated = response.data.designs.map(design => ({
+        const validated = tagLayouts(response.data.designs.map(design => ({
           ...design,
           plants: (design.plants || []).filter(p =>
             p.is_existing || inventoryIds.has(String(p.plant_id))
           ),
-        }));
+        })), { install, scope: response.data.scope || scope, newLawn: lawn !== 'keep', lot: [Number(lotWidth), Number(lotLength)], keepClear });
+        setEditHistory({});
         setGeneratedLayouts(validated);
         setSlide(0);
         setActiveLayout(null);
         setNotice(response.data.notice || '');
         if (response.data.budget_warning) setBudgetWarning(response.data.budget_warning);
-        if (!user) {
-          saveGuestDesign({ layouts: validated, budgetRange, lotWidth, lotLength, featureQty });
-        }
+        setRestored(null);
       } else {
         throw new Error("Invalid response format");
       }
@@ -457,6 +653,9 @@ export default function AIGardenDesigner() {
 
   const handleSelectLayout = (layout) => {
     setActiveLayout(layout);
+    setEditPanel(null);
+    setTidyPreview(null);
+    setMirrorNote('');
     if (carousel) setTimeout(() => previewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
   };
 
@@ -492,7 +691,9 @@ export default function AIGardenDesigner() {
         designId: null,
         designName: `${design.design_name} (from AI Designer)`,
         placedItems: lotPlantsToStudioItems(design.plants || [], catalog, w, l),
-        dimensions: { width: w, length: l, terrainType: 'flat' },
+        // The beds and lawn come along, so the Studio shows the same garden (dropped if the lot is resized)
+        dimensions: { width: w, length: l, terrainType: 'flat',
+          ...(design.garden_plan?.lawn && { gardenPlan: { ...design.garden_plan, newLawn: lawn !== 'keep' } }) },
         depthData: null,
         originalImageUrl: null,
         terrainHeight: 1.5,
@@ -502,7 +703,211 @@ export default function AIGardenDesigner() {
     dispatch({ type: 'SET_DESIGN_META', payload: { isDirty: true } });
     navigate('/studio');
   };
-  const handleReset = () => { setGeneratedLayouts([]); setError(''); setActiveLayout(null); };
+  const handleReset = () => { setGeneratedLayouts([]); setError(''); setActiveLayout(null); setEditHistory({}); };
+
+  // ── Editing a design in the 3D view (move, turn, remove) ──────────────────────
+  // The price is re-done by the server's rate card (POST /pricing/estimate/) on the design's own
+  // terms; booking waits until the new price is in. The AI's version is kept for "Reset to AI design".
+  const layoutsRef = useRef(generatedLayouts);
+  useEffect(() => { layoutsRef.current = generatedLayouts; });
+  const priceTimers = useRef({});
+  const priceSeq = useRef({});
+  useEffect(() => {
+    const timers = priceTimers.current;
+    return () => Object.values(timers).forEach(clearTimeout);
+  }, []);
+  const patchLayout = (id, patch) => setGeneratedLayouts(ls => ls.map(l =>
+    (l.edit_id === id ? { ...l, ...(typeof patch === 'function' ? patch(l) : patch) } : l)));
+
+  const reprice = (id) => {
+    clearTimeout(priceTimers.current[id]);
+    priceTimers.current[id] = setTimeout(async () => {
+      const seq = (priceSeq.current[id] || 0) + 1;
+      priceSeq.current[id] = seq;
+      const layout = layoutsRef.current.find(l => l.edit_id === id);
+      if (!layout) return;
+      const ctx = layout.price_ctx || { install, scope, newLawn: lawn !== 'keep', lot: [Number(lotWidth), Number(lotLength)] };
+      const area = ctx.lot[0] * ctx.lot[1];
+      // Designer's notes (too close, on the lawn, tall at the front…): suggestions only, never blocking
+      axios.post(`${API_ROOT}/layout-review/`, layoutBody(layout, ctx), { timeout: EDIT_TIMEOUT })
+        .then(({ data }) => { if (priceSeq.current[id] === seq) patchLayout(id, { notes: data.notes || [] }); })
+        .catch(() => { if (priceSeq.current[id] === seq) patchLayout(id, { notes: null }); });
+      const counts = {};
+      layout.plants.forEach(p => { if (!p.is_existing) counts[p.plant_id] = (counts[p.plant_id] || 0) + 1; });
+      try {
+        const { data: est } = await axios.post(`${API_ROOT}/pricing/estimate/`, {
+          items: Object.entries(counts).map(([pid, quantity]) => ({ product_id: Number(pid), quantity })),
+          area_sqm: area,
+          lawn_sqm: ctx.install ? Math.min(area, Number(layout.garden_plan?.lawn_area) || 0) : 0,
+          new_lawn: ctx.newLawn, scope: ctx.scope || 'makeover', install: ctx.install,
+        }, { timeout: EDIT_TIMEOUT });
+        if (priceSeq.current[id] !== seq) return;   // a newer edit is being priced
+        patchLayout(id, l => ({
+          pricing: 'ok', total_cost: est.total, plant_cost: est.plant_cost, plant_breakdown: est.plant_breakdown, cost_estimate: est,
+          cost_breakdown: { lines: est.lines, total: est.total, low: est.low, high: est.high, is_sample_rates: est.is_sample_rates },
+          budget_use: l.target_budget ? Math.round((est.total / l.target_budget) * 100) / 100 : l.budget_use,
+        }));
+      } catch {
+        if (priceSeq.current[id] === seq) patchLayout(id, { pricing: 'error' });
+      }
+    }, 450);
+  };
+
+  const layoutBody = (layout, ctx) => ({
+    plants: layout.plants, lot_width: ctx.lot[0], lot_length: ctx.lot[1],
+    garden_plan: layout.garden_plan || null, keep_clear_zones: ctx.keepClear || [],
+  });
+
+  const handlePlantsEdit = (nextPlants, opts = {}) => {
+    const cur = activeLayout;
+    if (!cur) return;
+    setTidyNote('');
+    setTidyPreview(null);
+    setMirrorNote('');
+    // Symmetrical designs: the same change to the plant's partner on the other side (one Undo step)
+    if (mirrorOn && cur.design_name === 'Symmetrical' && !opts.noMirror) {
+      const width = cur.price_ctx?.lot?.[0] || Number(lotWidth);
+      const mirrored = mirrorEdit(cur.plants, nextPlants, width);
+      if (mirrored.partner) {
+        nextPlants = mirrored.plants;
+        setMirrorNote('Mirrored on the other side to keep the design symmetrical.');
+      }
+    }
+    setEditHistory(h => ({ ...h, [cur.edit_id]: [...(h[cur.edit_id] || []), cur.plants].slice(-50) }));
+    patchLayout(cur.edit_id, l => ({ plants: nextPlants, edited: true, original: l.original || snapshotOf(l), pricing: 'pending' }));
+    reprice(cur.edit_id);
+  };
+  const restoreOriginal = (id) => {
+    clearTimeout(priceTimers.current[id]);
+    priceSeq.current[id] = (priceSeq.current[id] || 0) + 1;   // drop any price still on its way
+    patchLayout(id, l => (l.original ? { ...l.original, edited: false, original: null, pricing: 'ok', notes: [] } : {}));
+    setTidyNote('');
+    setTidyPreview(null);
+    setMirrorNote('');
+  };
+
+  // "Tidy up for me": the engine moves only what breaks a rule, the shortest distance; it is one
+  // more edit, so Undo takes it back
+  const [tidying, setTidying] = useState(false);
+  const [tidyNote, setTidyNote] = useState('');
+  const [tidyPreview, setTidyPreview] = useState(null);   // { moves: [{ uid, x, z }], notes }: shown, not applied yet
+  const handleTidy = async () => {
+    const cur = activeLayout;
+    if (!cur || tidying) return;
+    const ctx = cur.price_ctx || { lot: [Number(lotWidth), Number(lotLength)], keepClear };
+    setTidying(true);
+    try {
+      const { data } = await axios.post(`${API_ROOT}/layout-review/`, { ...layoutBody(cur, ctx), tidy: true }, { timeout: EDIT_TIMEOUT });
+      const moves = (data.moves || []).filter(m => m.uid);
+      const note = (data.tidy_notes || []).join(' ');
+      // Shown first (blue rings + dashed lines in 3D): nothing changes until the customer applies it
+      if (moves.length) setTidyPreview({ moves, notes: data.tidy_notes || [], left: (data.notes || []).length });
+      else setTidyNote(note);
+    } catch {
+      setTidyNote("Couldn't tidy up just now. Please try again.");
+    } finally {
+      setTidying(false);
+    }
+  };
+  const applyTidy = () => {
+    const cur = activeLayout;
+    if (!cur || !tidyPreview) return;
+    const moves = new Map(tidyPreview.moves.map(m => [m.uid, m]));
+    const note = tidyPreview.notes.join(' ');
+    handlePlantsEdit(cur.plants.map(p => (moves.has(p.uid) ? { ...p, x: moves.get(p.uid).x, z: moves.get(p.uid).z } : p)), { noMirror: true });
+    setTidyNote(note);
+  };
+  const handleUndo = () => {
+    const cur = activeLayout;
+    const stack = (cur && editHistory[cur.edit_id]) || [];
+    if (!stack.length) return;
+    setEditHistory(h => ({ ...h, [cur.edit_id]: stack.slice(0, -1) }));
+    if (stack.length === 1) { restoreOriginal(cur.edit_id); return; }   // back to the AI's own design and price
+    patchLayout(cur.edit_id, { plants: stack[stack.length - 1], pricing: 'pending' });
+    reprice(cur.edit_id);
+  };
+  const handleResetEdits = () => {
+    if (!activeLayout) return;
+    restoreOriginal(activeLayout.edit_id);
+    setEditHistory(h => ({ ...h, [activeLayout.edit_id]: [] }));
+  };
+
+  // ── Add / Swap (phase C) ──────────────────────────────────────────────────────
+  // Swap: same kind of item and (plants) the same height layer, in stock, the customer's own picks
+  // first, then the closest price. Add: any in-stock catalog item; the engine puts it where a designer
+  // would (POST /layout-place/) and it is selected, ready to drag elsewhere.
+  const [editPanel, setEditPanel] = useState(null);   // null | { mode: 'add' } | { mode: 'swap', uid }
+  const [panelBusy, setPanelBusy] = useState(false);
+  const [panelError, setPanelError] = useState('');
+  const [focusReq, setFocusReq] = useState(null);     // { uid, n }: select this item in 3D
+  const activePlants = activeLayout?.plants;
+  const usedCount = useMemo(() => {
+    const m = {};
+    (activePlants || []).forEach(p => { if (!p.is_existing) m[String(p.plant_id)] = (m[String(p.plant_id)] || 0) + 1; });
+    return m;
+  }, [activePlants]);
+  const isPick = (item) => preferredPlants.some(id => String(id) === String(item.id));
+  const inStock = (item) => !!item.model_file && Number(item.stock_quantity) - (usedCount[String(item.id)] || 0) > 0;
+  const swapFor = editPanel?.mode === 'swap' ? (activePlants || []).find(p => p.uid === editPanel.uid) : null;
+  const swapItem = swapFor ? catalog.find(c => String(c.id) === String(swapFor.plant_id)) : null;
+  const swapOptions = swapItem ? catalog
+    .filter(c => String(c.id) !== String(swapItem.id) && (c.category || 'plant') === (swapItem.category || 'plant')
+      && ((c.category || 'plant') !== 'plant' || layerOf(c) === layerOf(swapItem)) && inStock(c))
+    .sort((a, b) => (isPick(b) - isPick(a)) || Math.abs(a.unit_price - swapItem.unit_price) - Math.abs(b.unit_price - swapItem.unit_price))
+    .slice(0, 8) : [];
+  const addSections = editPanel?.mode === 'add' ? [
+    { label: 'Your plants', options: catalog.filter(c => (c.category || 'plant') === 'plant' && isPick(c) && inStock(c)) },
+    { label: 'More plants', options: catalog.filter(c => (c.category || 'plant') === 'plant' && !isPick(c) && inStock(c)) },
+    { label: 'Seating & rocks', options: catalog.filter(c => (c.category || 'plant') !== 'plant' && inStock(c)) },
+  ] : [];
+  const openPanel = (panel) => { setEditPanel(panel); setPanelError(''); };
+  const costTerms = { install: activeLayout?.price_ctx?.install ?? install, scope: activeLayout?.price_ctx?.scope || scope };
+  const addCost = (item) => itemCostToCustomer(rates, item, costTerms);
+  const swapCost = (item) => (swapItem ? addCost(item) - addCost(swapItem) : 0);
+
+  const handleSwap = (item) => {
+    const uid = editPanel?.uid;
+    if (!activeLayout || !uid) return;
+    handlePlantsEdit(activeLayout.plants.map(p => (p.uid === uid ? { ...p, plant_id: String(item.id) } : p)));
+    setEditPanel(null);
+    setFocusReq({ uid, n: Date.now() });
+  };
+  const handleAdd = async (item) => {
+    const cur = activeLayout;
+    if (!cur || panelBusy) return;
+    const ctx = cur.price_ctx || { lot: [Number(lotWidth), Number(lotLength)], keepClear };
+    setPanelBusy(true);
+    setPanelError('');
+    try {
+      const { data } = await axios.post(`${API_ROOT}/layout-place/`, { ...layoutBody(cur, ctx), add: item.id }, { timeout: EDIT_TIMEOUT });
+      const uid = `n${Date.now().toString(36)}`;
+      handlePlantsEdit([...cur.plants, { plant_id: String(data.plant_id), x: data.x, z: data.z, rotation: data.rotation, uid }]);
+      setFocusReq({ uid, n: Date.now() });
+      setEditPanel(null);
+    } catch (err) {
+      setPanelError(err.response?.data?.error || "Couldn't add it just now. Please try again.");
+    } finally {
+      setPanelBusy(false);
+    }
+  };
+
+  // Keep the session on this device (signed in: per account; guests: the guest slot), so a refresh or a
+  // later visit doesn't lose designs or edits. No designs on screen ("Adjust parameters") = nothing kept.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (!generatedLayouts.length) {
+        if (ownerId) clearAiSession(ownerId); else clearGuestDesign();
+        return;
+      }
+      const data = {
+        layouts: generatedLayouts, activeId, budgetRange, lotWidth, lotLength, featureQty, preferredPlants,
+        install, scope, lawn, sun, maintenance, keepClear, hadPhoto: !!imagePreview,
+      };
+      if (ownerId) saveAiSession(ownerId, data); else saveGuestDesign(data);
+    }, 600);
+    return () => clearTimeout(t);
+  }, [generatedLayouts, activeId, ownerId, budgetRange, lotWidth, lotLength, featureQty, preferredPlants,
+    install, scope, lawn, sun, maintenance, keepClear, imagePreview]);
 
   // Analyse the uploaded photo's average colour to warm/cool the 3D lighting
   useEffect(() => {
@@ -531,7 +936,8 @@ export default function AIGardenDesigner() {
   };
 
   const handleBookDesign = async () => {
-    if (activeLayout && activeLayout.plants && !install) {
+    if (activeLayout?.pricing === 'pending' || activeLayout?.pricing === 'error') return;   // wait for the edited price
+    if (activeLayout && activeLayout.plants && !(activeLayout.price_ctx?.install ?? install)) {
       // Plants only: put this design's plant list in the shop cart
       (activeLayout.plant_breakdown || []).forEach(row => {
         const product = catalog.find(p => String(p.id) === String(row.plant_id));
@@ -571,8 +977,12 @@ export default function AIGardenDesigner() {
         name: activeLayout.design_name,
         placed_items: activeLayout.plants,
         plant_breakdown: activeLayout.plant_breakdown || [],
-        // The pins travel with the design so the office and crew see the same overlay
-        dimensions: { width: Number(lotWidth), length: Number(lotLength), ...(photoCorners && { photoCorners }) },
+        // The pins and the beds/lawn plan travel with the design so the office and crew see the same garden
+        dimensions: { width: Number(lotWidth), length: Number(lotLength), ...(photoSetup && { photoCorners: photoSetup }),
+          ...(activeLayout.garden_plan?.lawn && { gardenPlan: { ...activeLayout.garden_plan, newLawn: lawn !== 'keep' } }),
+          // The customer moved, turned or removed things after the AI designed it
+          ...(activeLayout.edited && { editedByCustomer: true, customerEdits: {
+            ...editSummary(activeLayout), notes: (activeLayout.notes || []).slice(0, 10).map(n => n.message) } }) },
         total_cost: activeLayout.total_cost,
         cost_estimate: activeLayout.cost_estimate || {},
         reference_image_url: referenceImageUrl,
@@ -603,6 +1013,11 @@ export default function AIGardenDesigner() {
   };
 
   const styles = {
+    editBtn: (off, big) => ({
+      display: 'inline-flex', alignItems: 'center', gap: 6, minHeight: big ? 44 : 34, padding: '6px 12px', borderRadius: 8,
+      border: `1.5px solid ${color.border}`, background: color.white, color: off ? '#94A3B8' : color.brandDeep,
+      fontSize: '0.75rem', fontWeight: 700, cursor: off ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap',
+    }),
     page: { minHeight: '100vh', background: color.bg, fontFamily: "'Inter', system-ui, sans-serif", padding: 'clamp(1rem, 4vw, 2rem) 1rem' },
     container: { maxWidth: '960px', margin: '0 auto' },
     card: { ...cardStyle, padding: 'clamp(1.25rem, 4vw, 2.25rem)', marginTop: '1.5rem', boxShadow: '0 4px 16px rgba(15,23,42,0.04)' },
@@ -1080,12 +1495,34 @@ export default function AIGardenDesigner() {
                   <label style={styles.sectionLabel}>Budget</label>
                   <BudgetPicker
                     areaSqm={lotAreaNow}
+                    lotWidth={lotWidth}
+                    lotLength={lotLength}
                     install={install}
                     onInstallChange={setInstall}
+                    scope={scope}
+                    onScopeChange={setScope}
+                    lawn={lawn}
                     range={budgetRange}
                     onRangeChange={setBudgetRange}
                     rates={rates}
                   />
+                </div>
+
+                {/* The yard's conditions: which plants will thrive, how much care, the lawn */}
+                <div style={{ marginTop: '1.25rem', display: 'grid', gap: '0.9rem' }}>
+                  <ChoiceChips label="Sun on the garden" value={sun} onChange={setSun} touch={touch} options={[
+                    ['full', 'Full sun', '6+ hours of direct sun'], ['part', 'Part sun', '3–6 hours'],
+                    ['shade', 'Mostly shade', 'under 3 hours'], [null, 'Not sure', 'we check at the site visit'],
+                  ]} />
+                  <ChoiceChips label="Upkeep you want" value={maintenance} onChange={setMaintenance} touch={touch} options={[
+                    ['low', 'Low', 'fewer, hardier plants'], ['medium', 'Medium', 'regular watering'],
+                    ['high', 'I love gardening', 'richer planting'],
+                  ]} />
+                  {install && scope === 'makeover' && (
+                    <ChoiceChips label="The open lawn" value={lawn} onChange={setLawn} touch={touch} options={[
+                      ['new', 'Lay new grass', 'turf supplied & laid'], ['keep', 'Keep my grass', 'we leave the lawn as it is'],
+                    ]} />
+                  )}
                 </div>
 
                 <hr style={styles.divider} />
@@ -1349,6 +1786,20 @@ export default function AIGardenDesigner() {
                   </div>
                 </div>
 
+                {restored && (
+                  <div role="status" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px 12px', flexWrap: 'wrap',
+                    padding: '10px 14px', background: '#ECFDF5', border: '1.5px solid #A7F3D0', borderRadius: '12px', marginBottom: '1.25rem' }}>
+                    <span style={{ fontSize: '0.8rem', color: '#065F46', lineHeight: 1.45 }}>
+                      <strong>Welcome back.</strong> We kept your designs{restored.edited ? ' and your changes' : ''} from {timeAgo(restored.at)}.
+                      {restored.hadPhoto && !imagePreview && ' Add your yard photo again to use the photo overlay.'}
+                    </span>
+                    <span style={{ display: 'inline-flex', gap: 8 }}>
+                      <button type="button" onClick={() => setRestored(null)} style={styles.editBtn(false, touch)}>OK</button>
+                      <button type="button" onClick={() => { setRestored(null); handleReset(); }} style={styles.editBtn(false, touch)}>Start over</button>
+                    </span>
+                  </div>
+                )}
+
                 {notice && (
                   <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '12px 16px', background: '#EFF6FF', border: '1.5px solid #BFDBFE', borderRadius: '12px', marginBottom: '1.25rem' }}>
                     <Cpu size={18} style={{ color: '#1D4ED8', flexShrink: 0, marginTop: 1 }} />
@@ -1395,6 +1846,13 @@ export default function AIGardenDesigner() {
                                        background: design.source === 'ai' ? '#ECFDF5' : '#F1F5F9', color: design.source === 'ai' ? '#047857' : '#475569', border: `1px solid ${design.source === 'ai' ? '#A7F3D0' : '#E2E8F0'}` }}>
                               {design.source === 'ai' ? <><Sparkles size={10} /> AI design</> : <><Cpu size={10} /> Smart layout</>}
                             </span>
+                            {design.edited && (
+                              <span title="You changed this design after it was made"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase', padding: '3px 8px', borderRadius: '99px',
+                                         background: '#FFFBEB', color: '#92400E', border: '1px solid #FDE68A' }}>
+                                <Pencil size={10} /> Edited
+                              </span>
+                            )}
                           </span>
                           {design.reasoning && (
                             <div className="tooltip-container">
@@ -1408,13 +1866,18 @@ export default function AIGardenDesigner() {
                         </div>
                         <h3 style={styles.layoutName}>{design.design_name}</h3>
                         <div style={styles.layoutCost}>≈ ₱{design.total_cost.toLocaleString()}</div>
-                        {design.target_budget && (
+                        {design.target_budget && (underUsed(design) ? (
+                          // Far under its target (beds full, cheap picks, little stock): say so plainly
+                          <div style={{ fontSize: '0.72rem', color: '#B45309', marginTop: '4px', fontWeight: 700 }}>
+                            Uses ₱{Number(design.total_cost).toLocaleString()} of ₱{Number(design.target_budget).toLocaleString()} · see why below
+                          </div>
+                        ) : (
                           <div style={{ fontSize: '0.7rem', color: '#64748B', marginTop: '4px', fontWeight: 600 }}>
                             Designed for ₱{Number(design.target_budget).toLocaleString()} · {
                               { Minimalist: 'low end', Symmetrical: 'middle', 'Lush / Organic': 'top' }[design.design_name] || 'within'
                             } of your range
                           </div>
-                        )}
+                        ))}
                       </div>
                       <div style={styles.layoutBody}>
                         {(() => {
@@ -1424,35 +1887,28 @@ export default function AIGardenDesigner() {
                           return <span style={styles.plantListLabel}>Flora Arrangement · {items.length - nFeatures} plants{nFeatures ? ` · ${nFeatures} garden feature${nFeatures > 1 ? 's' : ''}` : ''}</span>;
                         })()}
                         {(() => {
-                          // Plants first, then garden features (the engine places features first, so the raw
-                          // order led with rocks); the "more" line counts each kind separately
-                          const featureIds = new Set(featureItems.map(f => String(f.id)));
-                          const all = design.plants?.filter(p => !p.is_existing) || [];
-                          const isFeature = (p) => featureIds.has(String(p.plant_id));
-                          const ordered = [...all.filter(p => !isFeature(p)), ...all.filter(isFeature)];
-                          const shown = ordered.slice(0, 5);
-                          const rest = ordered.slice(5);
-                          const restFeatures = rest.filter(isFeature).length;
-                          const restPlants = rest.length - restFeatures;
-                          const parts = [
-                            restPlants && `${restPlants} more plant${restPlants > 1 ? 's' : ''}`,
-                            restFeatures && `${restFeatures} more garden feature${restFeatures > 1 ? 's' : ''}`,
-                          ].filter(Boolean);
+                          // A planting schedule: one row per plant with its quantity (the server's breakdown is
+                          // already ordered plants → rocks → seating), not one row per plant position
+                          const rows = plantingSchedule(design, catalog, featureItems);
+                          const shown = rows.slice(0, 6);
+                          const hidden = rows.length - shown.length;
                           return (
                             <div>
-                              {shown.map((plant, pIdx) => {
-                                const detail = catalog.find(item => String(item.id) === String(plant.plant_id));
-                                const displayName = detail ? detail.name : `Plant #${plant.plant_id}`;
-                                return (
-                                  <div key={pIdx} style={styles.plantItem}>
-                                    <span style={{ ...styles.plantItemName, display: 'flex', alignItems: 'center', gap: 8 }}><PlantThumb item={detail} size={24} rounded={6} /> {displayName}</span>
-                                    <span style={styles.plantItemCoord}>{Number(plant.x).toFixed(1)}, {Number(plant.z).toFixed(1)}</span>
-                                  </div>
-                                );
-                              })}
-                              {parts.length > 0 && (
+                              {shown.map(row => (
+                                <div key={row.id} style={styles.plantItem}>
+                                  <span style={{ ...styles.plantItemName, display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                                    <PlantThumb item={row.detail} size={24} rounded={6} />
+                                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.name}</span>
+                                  </span>
+                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                                    {row.role && <span style={{ fontSize: '0.66rem', fontWeight: 700, color: '#64748B' }}>{row.role}</span>}
+                                    <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#0f172a', minWidth: 30, textAlign: 'right' }}>× {row.quantity}</span>
+                                  </span>
+                                </div>
+                              ))}
+                              {hidden > 0 && (
                                 <div style={{ textAlign: 'center', padding: '10px 0 2px', fontSize: '0.78rem', color: '#64748B', fontWeight: 600 }}>
-                                  + {parts.join(' and ')}
+                                  + {hidden} more kind{hidden > 1 ? 's' : ''}
                                 </div>
                               )}
                             </div>
@@ -1466,11 +1922,16 @@ export default function AIGardenDesigner() {
                             {design.adjustments.map((note, ni) => <div key={ni}>• {note}</div>)}
                           </div>
                         )}
-                        {design.budget_note && (
+                        {design.budget_note && (underUsed(design) ? (
+                          <div role="note" style={{ marginTop: '0.6rem', padding: '8px 10px', borderRadius: '8px', background: '#FFFBEB',
+                            border: '1px solid #FDE68A', fontSize: '0.74rem', color: '#78350F', lineHeight: 1.45 }}>
+                            <Info size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} />{design.budget_note}
+                          </div>
+                        ) : (
                           <div style={{ marginTop: '0.5rem', fontSize: '0.72rem', color: '#64748B', lineHeight: 1.45 }}>
                             <Info size={11} style={{ verticalAlign: 'middle', marginRight: 4 }} />{design.budget_note}
                           </div>
-                        )}
+                        ))}
                         {/* Cost Breakdown — always visible */}
                         {design.cost_breakdown && (
                           <div style={{ marginTop: '1rem', borderTop: '1px solid #E2E8F0', paddingTop: '1rem' }}>
@@ -1636,12 +2097,15 @@ export default function AIGardenDesigner() {
                         </div>
                         <p style={styles.previewSub}>
                           {activeView === 'ar' && editingCorners
-                            ? 'Drag the 4 yellow pins onto the corners of your yard. The design moves with them.'
+                            ? (pinMode === 'corners'
+                              ? 'Drag the 4 yellow pins onto the corners of your yard. The design moves with them.'
+                              : 'Put the two "Back" pins on the far corners of your yard, and the "side" pins anywhere along the left and right edges (fence lines), as near you as you can see them.')
                             : activeView === 'ar'
-                              ? 'Seen from where you took the photo'
+                              ? (touch ? 'Seen from where you took the photo · tap a plant to move, turn or remove it'
+                                : 'Seen from where you took the photo · drag a plant to move it, click it to turn or remove it')
                               : touch
-                                ? 'Drag to rotate · Pinch to zoom · Two-finger drag to pan'
-                                : 'Left click + drag to rotate · Scroll to zoom · Right drag to pan'}
+                                ? 'Tap a plant to see its height, then drag it to move it · drag the ground to rotate · pinch to zoom'
+                                : 'Drag a plant to move it, click it to turn or remove it · drag the ground to rotate · scroll to zoom'}
                         </p>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
@@ -1649,7 +2113,7 @@ export default function AIGardenDesigner() {
                           <button
                             type="button"
                             onClick={() => {
-                              if (!editingCorners && !photoCorners) setPhotoCorners(defaultCorners());
+                              if (!editingCorners && !photoCorners) setPhotoCorners(defaultPins(pinMode));
                               setEditingCorners(v => !v);
                             }}
                             style={{
@@ -1669,25 +2133,118 @@ export default function AIGardenDesigner() {
                             {editingCorners ? '✓ Done' : '⊕ Line up with my yard'}
                           </button>
                         )}
-                        <div style={styles.previewCostBadge}>₱{activeLayout.total_cost.toLocaleString()}</div>
+                        <div style={{ ...styles.previewCostBadge, opacity: activeLayout.pricing === 'pending' ? 0.55 : 1 }}
+                          aria-live="polite" title={activeLayout.pricing === 'pending' ? 'Updating the price…' : undefined}>
+                          ₱{activeLayout.total_cost.toLocaleString()}
+                        </div>
                       </div>
                     </div>
+
+                    {/* Editing: this design is a starting point the customer can change */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px 12px', flexWrap: 'wrap', margin: '0 0 10px' }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.75rem', fontWeight: 700,
+                        color: activeLayout.edited ? '#92400E' : color.muted }}>
+                        {activeLayout.edited
+                          ? <><Pencil size={13} aria-hidden="true" /> Edited by you{activeLayout.pricing === 'pending' ? ' · updating the price…' : ''}</>
+                          : <><Sparkles size={13} aria-hidden="true" /> AI draft: make it yours by moving, turning or removing things</>}
+                      </span>
+                      {activeLayout.design_name === 'Symmetrical' && (
+                        <button type="button" aria-pressed={mirrorOn} onClick={() => { setMirrorOn(v => !v); setMirrorNote(''); }}
+                          title="Change one plant of a mirrored pair and its partner on the other side changes too"
+                          style={{ ...styles.editBtn(false, touch), background: mirrorOn ? '#ECFDF5' : color.white,
+                            borderColor: mirrorOn ? '#10B981' : color.border, color: mirrorOn ? '#065F46' : color.muted }}>
+                          <FlipHorizontal2 size={14} aria-hidden="true" /> Mirror my changes: {mirrorOn ? 'on' : 'off'}
+                        </button>
+                      )}
+                      <span style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap' }}>
+                        <button type="button" onClick={() => openPanel(editPanel?.mode === 'add' ? null : { mode: 'add' })}
+                          aria-expanded={editPanel?.mode === 'add'} style={styles.editBtn(false, touch)}>
+                          <Plus size={14} aria-hidden="true" /> Add
+                        </button>
+                        <button type="button" onClick={handleUndo} disabled={!(editHistory[activeLayout.edit_id] || []).length}
+                          style={styles.editBtn(!(editHistory[activeLayout.edit_id] || []).length, touch)}>
+                          <Undo2 size={14} aria-hidden="true" /> Undo
+                        </button>
+                        {activeLayout.edited && (
+                          <button type="button" onClick={handleResetEdits} style={styles.editBtn(false, touch)}>
+                            <RotateCcw size={14} aria-hidden="true" /> Reset to AI design
+                          </button>
+                        )}
+                      </span>
+                    </div>
+
+                    {mirrorNote && (
+                      <p role="status" style={{ margin: '-4px 0 8px', fontSize: '0.75rem', fontWeight: 600, color: '#065F46', display: 'flex', alignItems: 'center', gap: 5 }}>
+                        <FlipHorizontal2 size={13} aria-hidden="true" /> {mirrorNote}
+                      </p>
+                    )}
+
+                    {activeLayout.edited && budgetRange?.max > 0 && (() => {
+                      const total = Number(activeLayout.total_cost) || 0;
+                      const min = Number(budgetRange.min) || 0, max = Number(budgetRange.max);
+                      const over = total - max;
+                      const pct = Math.min(100, (total / max) * 100);
+                      return (
+                        <div style={{ margin: '0 0 10px' }} aria-live="polite">
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', fontSize: '0.75rem', fontWeight: 700,
+                            color: over > 0 ? '#B45309' : color.muted }}>
+                            <span>{activeLayout.pricing === 'pending' ? 'Updating…' : `₱${total.toLocaleString()}`} of your ₱{min.toLocaleString()}–₱{max.toLocaleString()} budget</span>
+                            {over > 0 && activeLayout.pricing !== 'pending' && <span>₱{Math.round(over).toLocaleString()} over: remove or swap something to bring it back</span>}
+                          </div>
+                          <div role="img" aria-label={`Total ${Math.round(pct)}% of your top budget`}
+                            style={{ position: 'relative', height: 6, borderRadius: 99, background: color.divider, marginTop: 5, overflow: 'hidden' }}>
+                            <div style={{ position: 'absolute', inset: 0, width: `${pct}%`, borderRadius: 99,
+                              background: over > 0 ? '#F59E0B' : color.brand, transition: 'width 0.3s' }} />
+                            {min > 0 && min < max && (
+                              <div style={{ position: 'absolute', top: 0, bottom: 0, left: `${(min / max) * 100}%`, width: 2, background: 'rgba(15,23,42,0.35)' }} />
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {editPanel?.mode === 'add' && (
+                      <EditPicker title="Add to this design" touch={touch} busy={panelBusy} error={panelError}
+                        hint={`We'll put it where it fits best (tall at the back, small at the front). Then drag it anywhere.${costTerms.install ? ' Prices include planting.' : ''}`}
+                        sections={addSections} onPick={handleAdd} onClose={() => setEditPanel(null)} costOf={addCost}
+                        emptyText="Everything in our catalog is already used up in this design." />
+                    )}
+                    {editPanel?.mode === 'swap' && swapItem && (
+                      <EditPicker title={`Swap ${swapItem.name} for…`} touch={touch} busy={panelBusy} error={panelError}
+                        hint={(swapItem.category || 'plant') === 'plant'
+                          ? `Similar plants that grow to a similar height (${layerOf(swapItem) === 'tall' ? 'tall, for the back' : layerOf(swapItem) === 'mid' ? 'medium height' : 'low, for the front'}), in stock.`
+                          : 'Similar items in stock.'}
+                        sections={[{ label: 'Similar', options: swapOptions }]} onPick={handleSwap} onClose={() => setEditPanel(null)} costOf={swapCost}
+                        emptyText={`No similar ${(swapItem.category || 'plant') === 'plant' ? 'plants' : 'items'} in stock right now. You can remove it or add something else.`} />
+                    )}
 
                     <div style={{ borderRadius: '12px', overflow: 'hidden', position: 'relative', height: phone ? 340 : 450 }}>
                       <ThreeGardenCanvas
                         height={phone ? 340 : 450}
                         plants={activeLayout.plants}
+                        gardenPlan={activeLayout.garden_plan}
                         lotWidth={Number(lotWidth)}
                         lotLength={Number(lotLength)}
                         backgroundImageUrl={imagePreview}
                         arMode={activeView === 'ar'}
                         arGrid={activeView === 'ar' && editingCorners}
-                        photoCorners={photoCorners}
+                        photoCorners={photoSetup}
                         editCorners={activeView === 'ar' && editingCorners}
                         onCornersChange={setPhotoCorners}
                         onPoseStatus={setPoseStatus}
                         photoTone={activeView === 'ar' ? photoTone : null}
+                        editable
+                        onPlantsChange={handlePlantsEdit}
+                        growthStage={growthStage}
+                        notesByUid={notesByUid}
+                        onSwapRequest={(uid) => openPanel({ mode: 'swap', uid })}
+                        previewMoves={tidyPreview?.moves || null}
+                        focus={focusReq}
                       />
+                      {!(activeView === 'ar' && editingCorners) && (
+                        <GrowthStagePicker value={growthStage} onChange={setGrowthStage} short={phone}
+                          style={{ position: 'absolute', top: 10, left: 10, zIndex: 5 }} />
+                      )}
 
                       {activeView === 'ar' && !imagePreview && (
                         <div style={{
@@ -1712,30 +2269,115 @@ export default function AIGardenDesigner() {
                       )}
                     </div>
 
+                    {activeView === 'ar' && imagePreview && editingCorners && (
+                      <div role="radiogroup" aria-label="Front corners of the yard"
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10, fontSize: '0.8rem', color: color.muted }}>
+                        <span style={{ fontWeight: 600 }}>The front corners of my yard are</span>
+                        {[['edges', 'out of the photo'], ['corners', 'in the photo']].map(([mode, label]) => (
+                          <button key={mode} type="button" role="radio" aria-checked={pinMode === mode}
+                            onClick={() => { if (pinMode !== mode) { setPinMode(mode); setPhotoCorners(defaultPins(mode)); } }}
+                            style={{ minHeight: touch ? 44 : 32, padding: '5px 12px', borderRadius: 8, cursor: 'pointer', fontWeight: 700,
+                              fontSize: '0.75rem', border: `1.5px solid ${pinMode === mode ? '#d97706' : '#CBD5E1'}`,
+                              background: pinMode === mode ? 'rgba(251,191,36,0.15)' : 'transparent',
+                              color: pinMode === mode ? '#b45309' : '#64748B' }}>
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
                     {activeView === 'ar' && imagePreview && poseStatus && (() => {
                       const note = !poseStatus.ok
                         ? (poseStatus.reason === 'upside_down'
-                          ? 'The "Back" pins go on the far side of the yard (higher in the photo), the "Front" pins on the near side.'
+                          ? (poseStatus.mode === 'corners'
+                            ? 'The "Back" pins go on the far side of the yard (higher in the photo), the "Front" pins on the near side.'
+                            : 'The "Back" pins go on the far corners of the yard (higher in the photo); the side pins nearer you, lower down.')
                           : 'Those pins don\'t outline the yard: check that no two sides cross.')
                         : poseStatus.fitWarn
                           ? (poseStatus.suggestedLength
                             ? `These pins fit a yard about ${lotWidth} × ${poseStatus.suggestedLength} m, but the size above is ${lotWidth} × ${lotLength} m. Fix the size (then generate again), or move a pin.`
                             : `The pins don't match a ${lotWidth} × ${lotLength} m yard. Check the yard size above, or move a pin.`)
-                          : poseStatus.guessed && !editingCorners
-                            ? 'This is a rough placement. Tap "Line up with my yard" and drag the pins onto its corners for an exact match.'
-                            : null;
+                          : poseStatus.heightWarn
+                            ? `These pins put the camera about ${poseStatus.cameraHeight.toFixed(1)} m above the ground. If you took the photo standing in the yard, check the yard width (${lotWidth} m) or move the "Back" pins onto the far corners.`
+                            : poseStatus.guessed && !editingCorners
+                              ? 'This is a rough placement. Tap "Line up with my yard" and drag the pins onto your yard for an exact match.'
+                              : null;
                       return note && (
                         <p role="status" style={{ margin: '10px 0 0', fontSize: '0.8rem', fontWeight: 600, lineHeight: 1.5,
                           color: poseStatus.ok && poseStatus.guessed ? color.muted : '#b45309' }}>{note}</p>
                       );
                     })()}
 
+                    {(activeLayout.notes?.length > 0 || tidyNote) && (
+                      <div style={{ marginTop: 12, padding: '12px 14px', borderRadius: 12, border: '1px solid #FDE68A', background: '#FFFBEB' }}>
+                        {activeLayout.notes?.length > 0 && (
+                          <>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                              <div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, fontSize: '0.85rem', color: '#92400E' }}>
+                                  <AlertTriangle size={15} aria-hidden="true" /> Designer's notes · {activeLayout.notes.length} {activeLayout.notes.length === 1 ? 'thing' : 'things'} to check
+                                </div>
+                                <div style={{ fontSize: '0.75rem', color: '#A16207', marginTop: 2 }}>
+                                  Suggestions only: the design is yours. The plants in question have an amber ring.
+                                </div>
+                              </div>
+                              {!tidyPreview && (
+                                <button type="button" onClick={handleTidy} disabled={tidying}
+                                  style={{ ...styles.editBtn(tidying, touch), borderColor: '#F59E0B', color: '#92400E' }}>
+                                  <Wand2 size={14} aria-hidden="true" /> {tidying ? 'Working it out…' : 'Tidy up for me'}
+                                </button>
+                              )}
+                            </div>
+                            {tidyPreview && (
+                              <div role="status" style={{ marginTop: 10, padding: '10px 12px', borderRadius: 10, background: '#EFF6FF', border: '1px solid #BFDBFE' }}>
+                                <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#1E3A8A' }}>
+                                  Tidy would move {tidyPreview.moves.length} {tidyPreview.moves.length === 1 ? 'item' : 'items'}: see the blue rings and dashed lines in 3D.
+                                </div>
+                                <div style={{ fontSize: '0.75rem', color: '#1E40AF', marginTop: 2 }}>
+                                  Nothing changes until you apply it{tidyPreview.left > 0 ? ` (${tidyPreview.left} ${tidyPreview.left === 1 ? 'note stays' : 'notes stay'}: not enough room)` : ''}.
+                                </div>
+                                <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                                  <button type="button" onClick={applyTidy}
+                                    style={{ ...styles.editBtn(false, touch), background: '#2563EB', borderColor: '#2563EB', color: '#fff' }}>
+                                    <Check size={14} aria-hidden="true" /> Apply these moves
+                                  </button>
+                                  <button type="button" onClick={() => setTidyPreview(null)} style={styles.editBtn(false, touch)}>Cancel</button>
+                                </div>
+                              </div>
+                            )}
+                            <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: '0.8rem', color: '#78350F', lineHeight: 1.5 }}>
+                              {activeLayout.notes.slice(0, 5).map((n, i) => <li key={i}>{n.message}</li>)}
+                            </ul>
+                            {activeLayout.notes.length > 5 && (
+                              <div style={{ fontSize: '0.75rem', color: '#A16207', marginTop: 4 }}>and {activeLayout.notes.length - 5} more: look for the amber rings.</div>
+                            )}
+                          </>
+                        )}
+                        {tidyNote && (
+                          <p role="status" style={{ margin: activeLayout.notes?.length ? '8px 0 0' : 0, fontSize: '0.8rem', fontWeight: 600, color: '#065F46' }}>
+                            <Wand2 size={13} aria-hidden="true" style={{ verticalAlign: -2, marginRight: 4 }} />{tidyNote}{' '}
+                            {(editHistory[activeLayout.edit_id] || []).length > 0 && 'Undo puts things back.'}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {activeLayout.pricing === 'error' && (
+                      <p role="alert" style={{ margin: '10px 0 0', fontSize: '0.8rem', fontWeight: 600, color: '#B91C1C', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        We couldn't update the price after your change.
+                        <button type="button" onClick={() => { patchLayout(activeLayout.edit_id, { pricing: 'pending' }); reprice(activeLayout.edit_id); }}
+                          style={styles.editBtn(false, touch)}>
+                          <RefreshCw size={14} aria-hidden="true" /> Try again
+                        </button>
+                      </p>
+                    )}
+
                     {/* Book This Design CTA */}
                     <div style={{ marginTop: '1.25rem', display: 'flex', justifyContent: phone ? 'stretch' : 'flex-end' }}>
                       <button
                         type="button"
                         onClick={handleBookDesign}
-                        disabled={bookingLoading}
+                        disabled={bookingLoading || activeLayout.pricing === 'pending' || activeLayout.pricing === 'error'}
                         style={{
                           display: 'inline-flex',
                           alignItems: 'center',
@@ -1760,7 +2402,8 @@ export default function AIGardenDesigner() {
                         onMouseLeave={e => { e.currentTarget.style.background = color.brand; }}
                       >
                          <CalendarPlus size={15} />
-                         {bookingLoading ? 'Saving Design…' : install ? 'Book Final Site Inspection & Consultation'
+                         {bookingLoading ? 'Saving Design…' : activeLayout.pricing === 'pending' ? 'Updating the price…'
+                           : (activeLayout.price_ctx?.install ?? install) ? 'Book Final Site Inspection & Consultation'
                            : (activeLayout?.plant_breakdown || []).some(r => (r.category || 'plant') !== 'plant') ? 'Add these items to my cart' : 'Add these plants to my cart'}
                        </button>
                     </div>

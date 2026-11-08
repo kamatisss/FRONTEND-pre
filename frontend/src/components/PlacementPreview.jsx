@@ -9,7 +9,7 @@ import NormalizedModel from './NormalizedModel';
 import ModelPlaceholder from './ModelPlaceholder';
 import { resolveModelUrl } from '../data/modelCatalog';
 import { lotOf, insideLot } from '../data/lot';
-import { stageSize } from '../data/modelSizing';
+import { stageSize, stageSpread } from '../data/modelSizing';
 
 const ALL_COMPONENTS = { ...PLANT_COMPONENTS, ...HARDSCAPE_COMPONENTS };
 
@@ -156,6 +156,9 @@ export default function PlacementPreview({ terrainRef }) {
               url={modelUrl}
               category={category}
               realWorldSize={stageSize(productMatch || previewObject, state.growthStage, category)}
+              targetWidth={stageSpread(productMatch || previewObject, state.growthStage, category)}
+              stage={state.growthStage}
+              establishedSize={Number((productMatch || previewObject)?.real_world_size) || undefined}
             />
           </Suspense>
         </ErrorBoundary>

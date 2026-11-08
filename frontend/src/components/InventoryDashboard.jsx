@@ -119,6 +119,8 @@ function ItemForm({ item, items, onClose, onSaved }) {
     model_file: item?.model_file || '', thumbnail: null, real_world_size: item?.real_world_size ?? 1,
     sunlight: item?.sunlight || 'full_sun', water_need: item?.water_need || 'moderate', is_invasive: !!item?.is_invasive,
     planting_height: item?.planting_height ?? '', mature_height: item?.mature_height ?? '',
+    planting_spread: item?.planting_spread ?? '', established_spread: item?.established_spread ?? '',
+    mature_spread: item?.mature_spread ?? '',
   }));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -139,6 +141,8 @@ function ItemForm({ item, items, onClose, onSaved }) {
       // Empty = unknown (the Studio label then shows just the height after ~2 years)
       data.append('planting_height', isPlant ? form.planting_height : '');
       data.append('mature_height', isPlant ? form.mature_height : '');
+      // Widths at the same stages: the 3D growth view widens plants at their own pace (empty = follows height)
+      ['planting_spread', 'established_spread', 'mature_spread'].forEach(k => data.append(k, isPlant ? form[k] : ''));
       if (!item) data.append('stock_quantity', form.stock_quantity || 0);   // opening stock, new items only
       if (form.thumbnail) data.append('thumbnail', form.thumbnail);
       // A model and no photo yet: photograph the model so the shop isn't left blank
@@ -221,6 +225,14 @@ function ItemForm({ item, items, onClose, onSaved }) {
                 <input id="inv-mature" className={input} type="number" step="0.05" min="0.05" max="40" value={form.mature_height}
                   onChange={set('mature_height')} placeholder="e.g. 4" />
               </div>
+              {[['planting_spread', 'Width at planting (m)', 'e.g. 0.6'], ['established_spread', 'Width after ~2 years (m)', 'e.g. 1.5'],
+                ['mature_spread', 'Width fully grown (m)', 'e.g. 3']].map(([k, text, hint]) => (
+                <div key={k}>
+                  <label className={label} htmlFor={`inv-${k}`}>{text}</label>
+                  <input id={`inv-${k}`} className={input} type="number" step="0.05" min="0.05" max="40" value={form[k]}
+                    onChange={set(k)} placeholder={hint} />
+                </div>
+              ))}
               <label htmlFor="inv-invasive" className="flex items-center gap-2 text-sm text-slate-700 sm:mt-6 min-h-[44px] cursor-pointer">
                 <input id="inv-invasive" type="checkbox" className="w-4 h-4 accent-emerald-600" checked={form.is_invasive}
                   onChange={e => setForm(f => ({ ...f, is_invasive: e.target.checked }))} />

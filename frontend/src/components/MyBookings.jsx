@@ -10,6 +10,8 @@ import { getMyPortfolio } from '../services/api';
 import SwipeCarousel from './ui/SwipeCarousel';
 import { useIsPhone } from './ui/useMediaQuery';
 import { API_BASE_URL as API_ROOT, MEDIA_BASE_URL as MEDIA_ROOT } from '../config';
+import AddressPicker from './AddressPicker';
+import { addressReady, toPayload, rememberAddress, firstError } from '../data/address';
 
 const getActiveStep = (status, hasDesign) => {
     switch (status) {
@@ -207,13 +209,11 @@ function NewBookingModal({ isOpen, onClose, onSuccess }) {
     const [selectedDate, setSelectedDate] = useState(null);
     const [serviceType, setServiceType] = useState('maintenance');
     const [contactNumber, setContactNumber] = useState('');
-    const [serviceAddress, setServiceAddress] = useState('');
+    const [siteAddress, setSiteAddress] = useState(null);   // AddressPicker value (pinned, Quezon)
     const [preferredTime, setPreferredTime] = useState('anytime');
     const [notes, setNotes] = useState('');
     const [loading, setLoading] = useState(false);
     const [message, setMessage] = useState('');
-    const [locating, setLocating] = useState(false);
-    const [locatingError, setLocatingError] = useState('');
     const [designs, setDesigns] = useState([]);
     const [selectedDesignId, setSelectedDesignId] = useState('');
     const location = useLocation();
@@ -260,70 +260,15 @@ function NewBookingModal({ isOpen, onClose, onSuccess }) {
         fetchDesigns();
     }, [isOpen, authTokens]);
 
-    const handleLocate = () => {
-        setLocating(true);
-        setLocatingError("");
-
-        if (!navigator.geolocation) {
-            setLocatingError("Could not get location. Geolocation is not supported by your device browser. Please type your address.");
-            setLocating(false);
-            return;
-        }
-
-        navigator.geolocation.getCurrentPosition(
-            async (pos) => {
-                const lat = pos.coords.latitude;
-                const lon = pos.coords.longitude;
-                try {
-                    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`, {
-                        headers: {
-                            'Accept': 'application/json',
-                            'User-Agent': 'GardenStudio-App/1.0'
-                        }
-                    });
-                    if (res.ok) {
-                        const data = await res.json();
-                        if (data && data.display_name) {
-                            setServiceAddress(data.display_name);
-                        } else {
-                            setLocatingError("Could not get location. Please type your address.");
-                        }
-                    } else {
-                        setLocatingError("Could not get location. Please type your address.");
-                    }
-                } catch (err) {
-                    console.error("Reverse geocoding failed:", err);
-                    setLocatingError("Could not get location. Please type your address.");
-                } finally {
-                    setLocating(false);
-                }
-            },
-            (err) => {
-                let errorDetails = "";
-                if (err.code === err.PERMISSION_DENIED) {
-                    errorDetails = "Location permission denied. Please allow GPS access.";
-                } else if (err.code === err.POSITION_UNAVAILABLE) {
-                    errorDetails = "Location unavailable. Ensure GPS/Wi-Fi is on.";
-                } else if (err.code === err.TIMEOUT) {
-                    errorDetails = "Location request timed out. Please try again.";
-                }
-                const finalMsg = errorDetails
-                    ? `Could not get location. ${errorDetails} Please type your address.`
-                    : "Could not get location. Please type your address.";
-                setLocatingError(finalMsg);
-                setLocating(false);
-                setTimeout(() => {
-                    setLocatingError("");
-                }, 5000);
-            },
-            { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
-        );
-    };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (!selectedDate) {
             setMessage('Please select a valid date.');
+            return;
+        }
+        if (!addressReady(siteAddress)) {
+            setMessage('Choose your town and barangay, enter your street, and pin your house on the map.');
             return;
         }
 
@@ -346,7 +291,7 @@ function NewBookingModal({ isOpen, onClose, onSuccess }) {
                     scheduled_date: formattedDate,
                     contact_number: contactNumber,
                     preferred_time: preferredTime,
-                    service_address: serviceAddress,
+                    address: toPayload(siteAddress),
                     notes: notes,
                     design: selectedDesignId ? parseInt(selectedDesignId, 10) : null
                 })
@@ -354,17 +299,18 @@ function NewBookingModal({ isOpen, onClose, onSuccess }) {
 
             if (res.ok) {
                 const newBooking = await res.json();
+                await rememberAddress(siteAddress);
                 onSuccess(newBooking);
                 // Reset form
                 setSelectedDate(null);
                 setContactNumber('');
-                setServiceAddress('');
+                setSiteAddress(null);
                 setPreferredTime('anytime');
                 setNotes('');
                 setSelectedDesignId('');
             } else {
                 const data = await res.json();
-                setMessage('Error: ' + JSON.stringify(data));
+                setMessage(firstError(data));
             }
         } catch (error) {
             setMessage('Error submitting booking.');
@@ -498,34 +444,11 @@ function NewBookingModal({ isOpen, onClose, onSuccess }) {
                             </div>
                         </div>
 
-                        {/* Service Address */}
+                        {/* Service address: town & barangay in Quezon, street, landmark, and the pin our crew
+                            navigates to and checks in at */}
                         <div className="flex flex-col gap-1.5">
-                            <div className="flex justify-between items-center">
-                                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">Service Address</label>
-                                <button
-                                    type="button"
-                                    onClick={handleLocate}
-                                    disabled={locating}
-                                    className="inline-flex items-center gap-1 text-[10px] font-extrabold text-emerald-600 bg-transparent hover:bg-emerald-50 px-2 py-0.5 rounded transition-all uppercase tracking-wider cursor-pointer border-none"
-                                >
-                                    <MapPin size={10} className={locating ? "animate-spin" : ""} />
-                                    {locating ? 'Locating...' : 'Use GPS'}
-                                </button>
-                            </div>
-                            <textarea
-                                value={serviceAddress}
-                                onChange={(e) => {
-                                    setServiceAddress(e.target.value);
-                                    setLocatingError("");
-                                }}
-                                rows={2}
-                                placeholder="Full address where the service will be performed"
-                                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-[12px] text-sm text-slate-800 font-medium focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/20 outline-none resize-none"
-                                required
-                            />
-                            {locatingError && (
-                                <p className="text-[10px] text-red-500 font-bold mt-0.5">{locatingError}</p>
-                            )}
+                            <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">Service Address</label>
+                            <AddressPicker value={siteAddress} onChange={setSiteAddress} signedIn mapHeight={200} />
                         </div>
 
                         {/* Notes */}

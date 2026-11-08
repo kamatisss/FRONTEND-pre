@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Clock, LogOut, ChevronRight, CalendarClock } from 'lucide-react';
+import { Clock, LogOut, ChevronRight, CalendarClock, Navigation } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import PushAlertsCard from './PushAlertsCard';
 import InstallAppCard from './InstallAppCard';
 import { clockTime } from '../data/crewJobs';
 import { sendAction } from '../crew/outbox';
+import { NAV_APPS, getNavApp, setNavApp } from '../data/navApps';
 
 /*
  * Crew "Me" tab: shift status and clock-out, hours this week, recent shifts, phone alerts, the
@@ -132,6 +133,8 @@ export default function CrewMe({ user, activeAttendance, api, headers, toast, re
 
       <PushAlertsCard />
 
+      <NavAppCard />
+
       <Link to="/staff-attendance"
         className="flex items-center gap-3 min-h-[56px] px-4 bg-white rounded-2xl border border-slate-200 no-underline text-slate-800 hover:bg-slate-50">
         <CalendarClock size={18} className="text-emerald-600 shrink-0" />
@@ -147,5 +150,26 @@ export default function CrewMe({ user, activeAttendance, api, headers, toast, re
         <LogOut size={16} /> Sign out
       </button>
     </div>
+  );
+}
+
+/* Which app the Navigate buttons open (saved on this phone). Waze is popular here; the whole-day
+   route always opens in Google Maps, which can take several stops in one link. */
+function NavAppCard() {
+  const [app, setApp] = useState(getNavApp);
+  const pick = (next) => { setNavApp(next); setApp(next); };
+  return (
+    <section className="bg-white rounded-2xl border border-slate-200 p-4">
+      <p className="m-0 text-sm font-bold text-slate-900 flex items-center gap-2"><Navigation size={16} className="text-emerald-600" /> Navigate with</p>
+      <div role="radiogroup" aria-label="Navigation app" className="grid grid-cols-2 gap-2 mt-3">
+        {Object.entries(NAV_APPS).map(([key, label]) => (
+          <button key={key} type="button" role="radio" aria-checked={app === key} onClick={() => pick(key)}
+            className={`min-h-[48px] rounded-xl text-sm font-bold cursor-pointer border ${app === key ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-slate-300 text-slate-700'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <p className="m-0 mt-2 text-xs text-slate-500">Used by every Navigate button. The whole-day route opens in Google Maps.</p>
+    </section>
   );
 }

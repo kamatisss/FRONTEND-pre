@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import CustomerEditsNote from './CustomerEditsNote';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useDesign } from '../context/DesignContext';
@@ -7,10 +8,12 @@ import CrewDashboardView from './CrewDashboardView';
 import {
   LayoutDashboard, Shield, Eye, CheckCircle2,
   Calendar, FileText, AlertTriangle,
-  X, Package, Star, ArrowRight, Clock,
+  X, Package, Star, Clock,
   CheckCircle, XCircle, Banknote,
 } from 'lucide-react';
 import ThreeGardenCanvas from './ThreeGardenCanvas';
+import OfficeWorkMap from './OfficeWorkMap';
+import TodayAttention from './TodayAttention';
 import ProjectBillingModal from './ProjectBillingModal';
 import OrderQueue from './OrderQueue';
 import BookingQueue from './BookingQueue';
@@ -111,21 +114,6 @@ function EmptyState({ icon: Icon, title, sub }) {
   );
 }
 
-/* ─── Stat card ──────────────────────────────────────────────────────────── */
-function StatCard({ icon: Icon, label, value, iconBg, iconColor, border }) {
-  return (
-    <div className={`bg-white rounded-2xl p-5 shadow-sm border flex items-center justify-between gap-4 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 ${border}`}>
-      <div>
-        <p className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">{label}</p>
-        <p className="text-3xl font-extrabold text-slate-800 leading-none">{value}</p>
-      </div>
-      <div className={`p-3 rounded-xl ${iconBg} shrink-0`}>
-        <Icon size={22} className={iconColor} />
-      </div>
-    </div>
-  );
-}
-
 /* ─── Main component ─────────────────────────────────────────────────────── */
 const StaffDashboard = () => {
   const { authTokens, user } = useAuth();
@@ -141,7 +129,6 @@ const StaffDashboard = () => {
   const [cashOrders,       setCashOrders]       = useState(0);    // office: COD deliveries whose cash isn't handed in
   const [bookingCounts,    setBookingCounts]    = useState(null); // office: queue badges (BookingQueue pages the list)
   const [bookingReload,    setBookingReload]    = useState(0);
-  const [inventoryItems,   setInventoryItems]   = useState([]);
   const [activeAttendance, setActiveAttendance] = useState(null);
   const [loading,          setLoading]          = useState(true);
   const isFieldCrew = user?.staff_role === 'FIELD_CREW';
@@ -203,7 +190,6 @@ const StaffDashboard = () => {
         get('/designs/submitted_designs/').then(setDesigns).catch(() => {}),
         get('/orders/counts/').then(setOrderCounts).catch(() => {}),
         get('/cash/').then(d => setCashOrders(d.crew.reduce((n, c) => n + c.orders.length, 0))).catch(() => {}),
-        get('/inventory/').then(setInventoryItems).catch(() => {}),
       );
     }
     Promise.all(fetches).finally(() => setLoading(false));
@@ -217,17 +203,10 @@ const StaffDashboard = () => {
     cachedGet('/bookings/', 'bookings').then(applyCrewBookings);
   }, [location.key]); // eslint-disable-line react-hooks/exhaustive-deps -- refetch per navigation only
 
-  /* ── Derived counts ── */
-  const today = (() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-  })();
+  /* ── Derived counts (tab badges; the Overview's numbers come from TodayAttention) ── */
   const pendingDesigns   = designs.length;
-  const todaysBookings   = isFieldCrew ? bookings.filter(b => b.scheduled_date === today).length : (bookingCounts?.today || 0);
   const ordersToPack     = orderCounts?.to_pack || 0;
   const refundsOwed      = orderCounts?.needs_refund || 0;
-  // Each item has its own low-stock level (Inventory → Low stock at)
-  const lowStock         = inventoryItems.filter(i => i.is_low_stock ?? Number(i.stock_quantity || 0) < 10).length;
 
   // Switching tabs starts from a clean URL so one tab's filters don't leak into the next
   const goTab = (key) => navigate(`${location.pathname}?tab=${key}`);
@@ -390,14 +369,6 @@ const StaffDashboard = () => {
 
         </div>
 
-        {/* ── Stat Cards (Overview only: on the work tabs the list itself comes first) ── */}
-        {activeTab === 'overview' && <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-          <StatCard icon={Calendar}      label="Today's Bookings"  value={todaysBookings}  iconBg="bg-emerald-50"  iconColor="text-emerald-600" border="border-slate-100" />
-          <StatCard icon={Package}       label="Orders to Pack"    value={ordersToPack}    iconBg="bg-blue-50"     iconColor="text-blue-600"    border="border-slate-100" />
-          <StatCard icon={FileText}      label="Pending Reviews"   value={pendingDesigns}  iconBg="bg-purple-50"   iconColor="text-purple-600"  border="border-slate-100" />
-          <StatCard icon={AlertTriangle} label="Low Stock Alerts"  value={lowStock}        iconBg="bg-red-50"      iconColor="text-red-500"     border="border-slate-100" />
-        </div>}
-
         {/* ── Tab Navigation Bar (desktop + OFFICE_ADMIN) ── */}
         <div className="flex items-center gap-1 mb-6 bg-white border border-slate-200 rounded-2xl p-1.5 shadow-sm w-fit max-w-full overflow-x-auto">
           {TABS.map(({ key, label, Icon, badge }) => (
@@ -430,69 +401,13 @@ const StaffDashboard = () => {
 
         {/* ── Overview Tab ── */}
         {!loading && activeTab === 'overview' && (
-          <div className="space-y-6">
-            {/* Welcome banner */}
-            <div className="bg-gradient-to-r from-emerald-600 to-teal-600 rounded-2xl p-6 text-white shadow-sm">
-              <h2 className="text-xl font-extrabold mb-1">Welcome back, {user?.first_name || user?.username || 'Staff Member'}!</h2>
-              <p className="text-emerald-100 text-sm">Here is your daily operational summary for {dateStr}.</p>
-            </div>
+          <div className="flex flex-col gap-6">
+            {/* Today + every queue with something waiting, each a link to it — the same panel and the
+                same numbers as the owner's Business overview (TodayAttention / overview.py) */}
+            <TodayAttention />
 
-            {/* Quick action cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-              {[
-                {
-                  icon: Star, iconBg: 'bg-purple-100', iconColor: 'text-purple-600',
-                  title: 'Designs', tab: 'designs',
-                  body: pendingDesigns
-                    ? `${pendingDesigns} layout${pendingDesigns > 1 ? 's' : ''} awaiting your review.`
-                    : 'All design reviews are up to date.',
-                  cta: 'Review Designs',
-                },
-                {
-                  icon: Calendar, iconBg: 'bg-emerald-100', iconColor: 'text-emerald-600',
-                  title: 'Bookings', tab: 'bookings',
-                  body: todaysBookings
-                    ? `${todaysBookings} consultation${todaysBookings > 1 ? 's' : ''} scheduled for today.`
-                    : 'No consultations scheduled for today.',
-                  cta: 'View Bookings',
-                },
-                {
-                  icon: Package, iconBg: 'bg-blue-100', iconColor: 'text-blue-600',
-                  title: 'Orders', tab: 'orders',
-                  body: (ordersToPack
-                    ? `${ordersToPack} order${ordersToPack > 1 ? 's' : ''} ready to pack and ship.`
-                    : 'No orders waiting to be packed.')
-                    + (refundsOwed ? ` ${refundsOwed} refund${refundsOwed > 1 ? 's' : ''} owed.` : ''),
-                  cta: 'Manage Orders',
-                },
-              ].map(({ icon: Icon, iconBg, iconColor, title, tab, body, cta }) => (
-                <div key={tab} className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm flex flex-col justify-between hover:-translate-y-0.5 hover:shadow-md transition-all duration-200">
-                  <div>
-                    <div className={`inline-flex p-2.5 rounded-xl ${iconBg} mb-3`}>
-                      <Icon size={18} className={iconColor} />
-                    </div>
-                    <h4 className="font-bold text-slate-800 mb-1">{title}</h4>
-                    <p className="text-slate-500 text-sm leading-relaxed mb-4">{body}</p>
-                  </div>
-                  <button
-                    onClick={() => goTab(tab)}
-                    className="flex items-center justify-center gap-2 w-full py-2.5 bg-slate-900 hover:bg-slate-700 text-white text-sm font-bold rounded-xl transition-colors cursor-pointer border-none"
-                  >
-                    {cta} <ArrowRight size={14} />
-                  </button>
-                </div>
-              ))}
-            </div>
-
-            {/* Low stock alert strip */}
-            {lowStock > 0 && (
-              <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-200 rounded-2xl">
-                <AlertTriangle size={18} className="text-red-500 shrink-0" />
-                <p className="text-sm text-red-700 font-medium">
-                  <span className="font-bold">{lowStock} inventory item{lowStock > 1 ? 's' : ''}</span> {lowStock > 1 ? 'are' : 'is'} at or below the low-stock level. Restock from the inventory page.
-                </p>
-              </div>
-            )}
+            {/* Today's job sites, deliveries and crew on one map (from the customers' pins) */}
+            <OfficeWorkMap api={API} headers={headers} />
           </div>
         )}
 
@@ -679,6 +594,9 @@ function DesignReviewModal({ design, arMode, setArMode, onClose, toCanvasPlants 
             </button>
           </div>
         </div>
+        {(design.dimensions?.customerEdits || design.dimensions?.editedByCustomer) && (
+          <div className="px-4 pt-3"><CustomerEditsNote dimensions={design.dimensions} /></div>
+        )}
         {/* Canvas */}
         <div style={{ height: '480px' }}>
           <ThreeGardenCanvas
@@ -689,6 +607,7 @@ function DesignReviewModal({ design, arMode, setArMode, onClose, toCanvasPlants 
             arMode={arMode}
             arGrid={arMode}
             photoCorners={design.dimensions?.photoCorners}
+            gardenPlan={design.dimensions?.gardenPlan}
             readOnly={true}
           />
         </div>

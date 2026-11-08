@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import CustomerEditsNote from './CustomerEditsNote';
 import { useSearchParams } from 'react-router-dom';
 import {
   Search, X, Inbox, RefreshCw, AlertTriangle, Phone, Mail, MapPin, Layers, FileDown, UserCheck,
@@ -586,6 +587,7 @@ function BookingDrawer({ api, authHeaders, toast, open, busy, stamp, onClose, on
                     <p className="font-semibold text-slate-800 truncate">{design.name || 'Garden design'}</p>
                     {design.dimensions?.width && <p className="text-xs text-slate-500">{design.dimensions.width}m × {design.dimensions.length}m lot ({design.dimensions.terrainType || 'flat'})</p>}
                     {design.total_cost > 0 && <p className="text-xs font-bold text-emerald-700">Estimate {peso(design.total_cost)}</p>}
+                    <CustomerEditsNote dimensions={design.dimensions} className="mt-1.5" />
                     <button onClick={() => onOpenDesign(design)} className="mt-1.5 inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white border-none cursor-pointer">
                       <Layers size={13} /> Preview 3D
                     </button>

@@ -103,7 +103,7 @@ const CHROME_CSS = `
   .sf-more { display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 14px; font-weight: 700; color: #059669; text-decoration: none; }
   .sf-more:hover { color: #047857; }
   .sf-bottom { padding: 24px 0; display: flex; justify-content: space-between; align-items: center; font-size: 13px; flex-wrap: wrap; gap: 12px; }
-  .sf-legal { display: flex; gap: 24px; }
+  .sf-legal { display: flex; flex-wrap: wrap; gap: 8px 24px; }
   .sf-legal a { color: #64748b; text-decoration: none; }
   .sf-legal a:hover { color: #059669; }
   @media (max-width: 1024px) { .sf-grid { grid-template-columns: 1fr 1fr; gap: 36px; } }
@@ -285,6 +285,7 @@ export function SiteFooter() {
           <p style={{ margin: 0 }}>© {new Date().getFullYear()} {BUSINESS.name}. All rights reserved.</p>
           <div className="sf-legal">
             <Link to="/privacy">Privacy Notice</Link>
+            <Link to="/credits">3D model credits</Link>
           </div>
         </div>
       </div>

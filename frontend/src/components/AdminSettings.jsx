@@ -3,6 +3,7 @@ import { Building2, Save, CheckCircle2, MapPin, Phone, Mail, Leaf } from 'lucide
 import { Link } from 'react-router-dom';
 import api from '../services/api';
 import { setBusiness } from '../services/business';
+import PinMap from './PinMap';
 
 /*
  * Owner: Business profile — the details customers see in the site header and footer, in emails
@@ -46,24 +47,30 @@ export default function AdminSettings() {
   const [errors, setErrors] = useState({});
   const [notice, setNotice] = useState(null);
   const [busy, setBusy] = useState(false);
+  // Where the crew set out from: the start of their suggested stop order (staff only, never public)
+  const [base, setBase] = useState(null);
+  const [savedBase, setSavedBase] = useState(null);
 
   useEffect(() => {
     api.get('/business/')
-      .then(r => { const f = toForm(r.data); setForm(f); setSaved(f); setMeta(r.data); })
+      .then(r => { const f = toForm(r.data); setForm(f); setSaved(f); setMeta(r.data); setBase(r.data.base || null); setSavedBase(r.data.base || null); })
       .catch(() => setNotice({ type: 'error', msg: 'Could not load the business profile. Refresh to try again.' }));
   }, []);
 
   const set = (k, v) => { setForm(f => ({ ...f, [k]: v })); setErrors(e => ({ ...e, [k]: undefined })); setNotice(null); };
-  const dirty = form && saved && Object.keys(form).some(k => form[k].trim() !== saved[k]);
+  const baseChanged = JSON.stringify(base) !== JSON.stringify(savedBase);
+  const dirty = form && saved && (Object.keys(form).some(k => form[k].trim() !== saved[k]) || baseChanged);
 
   const save = async (e) => {
     e.preventDefault();
     setBusy(true); setNotice(null);
     const body = Object.fromEntries(Object.entries(form).map(([k, v]) => [k, v.trim()]));
+    if (baseChanged) body.base = base;
     try {
       const r = await api.patch('/business/', body);
       const f = toForm(r.data);
       setForm(f); setSaved(f); setMeta(r.data); setErrors({});
+      setBase(r.data.base || null); setSavedBase(r.data.base || null);
       setBusiness(r.data);
       setNotice({ type: 'ok', msg: 'Saved. Your site, emails and payment pages now use these details.' });
     } catch (err) {
@@ -114,6 +121,28 @@ export default function AdminSettings() {
                 </div>
               </fieldset>
             ))}
+
+            {/* The crew's starting point: never shown on the public site */}
+            <fieldset className="m-0 bg-white border border-slate-200 rounded-2xl p-4 md:p-5">
+              <legend className="sr-only">Crew base</legend>
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div>
+                  <h2 className="m-0 text-[15px] font-extrabold text-slate-900">Crew base</h2>
+                  <p className="m-0 mt-0.5 text-sm text-slate-500">Tap your nursery or yard on the map. Crew routes start here. Only staff see it.</p>
+                </div>
+                {base && (
+                  <button type="button" onClick={() => setBase(null)}
+                    className="min-h-[36px] px-3 rounded-lg border border-slate-200 bg-white text-xs font-bold text-slate-600 cursor-pointer">Remove pin</button>
+                )}
+              </div>
+              <div className="mt-3">
+                <PinMap center={base ? { lat: base.lat, lng: base.lng, zoom: 16 } : { lat: 13.94, lng: 121.62, zoom: 11 }}
+                  value={base} onChange={(p) => { setBase({ lat: +p.lat.toFixed(6), lng: +p.lng.toFixed(6) }); setNotice(null); }}
+                  height={240} ariaLabel="Map: tap your crew base" />
+              </div>
+              {errors.base && <p className="m-0 mt-1 text-xs font-semibold text-red-700">{errors.base}</p>}
+              {!base && <p className="m-0 mt-2 text-xs text-slate-500">No base yet: crew routes start from where the crew member is.</p>}
+            </fieldset>
 
             <p className="m-0 text-xs text-slate-500">
               Prices and fees live in <Link to="/pricing-settings" className="text-emerald-700 font-semibold">Pricing</Link>.

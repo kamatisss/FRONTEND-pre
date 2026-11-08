@@ -27,6 +27,7 @@ const ManageAvailability = lazy(() => import("./components/ManageAvailability"))
 const BookService = lazy(() => import("./components/BookService"));
 const MyBookings = lazy(() => import("./components/MyBookings"));
 const UserOrders = lazy(() => import("./components/UserOrders"));
+const MyAddresses = lazy(() => import("./components/MyAddresses"));
 const OrderSuccess = lazy(() => import("./components/OrderSuccess"));
 const ProjectPayment = lazy(() => import("./components/ProjectPayment"));
 const StaffAttendance = lazy(() => import("./components/StaffAttendance"));
@@ -46,6 +47,7 @@ const ProjectGallery = lazy(() => import("./components/ProjectHub").then(m => ({
 const ProjectDetail = lazy(() => import("./components/ProjectHub").then(m => ({ default: m.ProjectDetail })));
 const NotFound = lazy(() => import("./components/NotFound"));
 const PrivacyPolicy = lazy(() => import("./components/PrivacyPolicy"));
+const ModelCredits = lazy(() => import("./components/ModelCredits"));
 
 function PageLoading() {
   return (
@@ -96,6 +98,7 @@ function App() {
               <Route path="/projects/:slug" element={<ProjectDetail />} />
               <Route path="/track-record" element={<TrackRecord />} />
               <Route path="/privacy" element={<PrivacyPolicy />} />
+              <Route path="/credits" element={<ModelCredits />} />
 
               {/* User Dashboard / Studio */}
               <Route
@@ -166,6 +169,18 @@ function App() {
                   <RoleProtectedRoute allowedRoles={['user']}>
                     <DashboardLayout>
                       <MyBookings />
+                    </DashboardLayout>
+                  </RoleProtectedRoute>
+                }
+              />
+
+              {/* My Addresses (User): the address book used by checkout and bookings */}
+              <Route
+                path="/my-addresses"
+                element={
+                  <RoleProtectedRoute allowedRoles={['user']}>
+                    <DashboardLayout>
+                      <MyAddresses />
                     </DashboardLayout>
                   </RoleProtectedRoute>
                 }

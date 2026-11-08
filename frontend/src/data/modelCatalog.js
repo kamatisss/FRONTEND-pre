@@ -27,8 +27,14 @@ export const MODEL_CATALOG = {
   'hibiscus.glb':            '/models/plants/hibiscus.glb',
   'livistona.glb':           '/models/plants/livistona.glb',
   'peace_lilies.glb':        '/models/plants/peace_lilies.glb',
-  'plumeria_flower.glb':     '/models/plants/plumeria_flower.glb',
+  'plumeria_tree.glb':       '/models/plants/plumeria_tree.glb',
   'strelitzia.glb':          '/models/plants/strelitzia.glb',
+};
+
+// Retired model names still held by saved designs and older data: they load the model that
+// replaced them. Not offered in the Inventory picker. (Plumeria: the old file was a flower, not a tree.)
+const MODEL_ALIASES = {
+  'plumeria_flower.glb': 'plumeria_tree.glb',
 };
 
 // The bundled models as picker options (Inventory page), grouped by their folder. To add a model:
@@ -58,7 +64,8 @@ export function resolveModelUrl(rawUrl) {
   const fileName = rawUrl.split(/[?#]/)[0].split('/').pop().toLowerCase();
   // Django appends "_<7 random chars>" when an upload name already exists
   const baseName = fileName.replace(/_[a-z0-9]{7}(\.gl(b|tf))$/, '$1');
-  const publicPath = MODEL_CATALOG[fileName] || MODEL_CATALOG[baseName];
+  const publicPath = MODEL_CATALOG[fileName] || MODEL_CATALOG[baseName]
+    || MODEL_CATALOG[MODEL_ALIASES[fileName]] || MODEL_CATALOG[MODEL_ALIASES[baseName]];
   if (publicPath) return publicPath;
 
   if (rawUrl.startsWith('/models/') || /^https?:\/\//.test(rawUrl)) return rawUrl;

@@ -166,6 +166,118 @@ export function solvePhotoCamera(corners, lotWidth, lotLength, photoWidth, photo
   return { ok: true, ...pose, estimatedFocal: best.estimated, fitError: best.err };
 }
 
+/* ── Side-edge pins: the usual photo, where the front corners are out of the frame ───────────────
+ *
+ * Standing at the house, the yard's front corners are beside or behind you, so they're not in the
+ * photo (clamping them to the photo edge gave a camera tens of metres up). The pins are instead:
+ * the two BACK corners, and one point anywhere along each SIDE edge (fence line), nearer you.
+ *
+ * The side edges are parallel on the ground, so on the photo they meet at a vanishing point: the
+ * direction of the yard's depth. The back edge is square to them: the remaining tilt. The two back
+ * corners W metres apart: position and scale. That fixes the camera for a known lens, so the lens
+ * comes from the photo (EXIF 35 mm-equivalent focal length) or a typical phone (26 mm). A wrong lens
+ * can't move the yard's outline off the pins; it only changes how depth is foreshortened.
+ */
+export const EDGE_LABELS = ['Back left', 'Back right', 'Right side', 'Left side'];
+export const DEFAULT_FOCAL_35 = 26;   // mm, 35 mm-equivalent: most phones' main camera (24–28)
+
+// A first guess: back corners across the middle, side edges heading out of the bottom corners
+export const defaultEdgePins = () => [
+  { u: 0.27, v: 0.45 }, { u: 0.73, v: 0.45 }, { u: 0.93, v: 0.88 }, { u: 0.07, v: 0.88 },
+];
+
+/** 35 mm-equivalent focal length (mm) → focal length in pixels for this photo (by the diagonal). */
+export const focalPixels = (focal35, photoWidth, photoHeight) =>
+  ((Number(focal35) > 0 ? Number(focal35) : DEFAULT_FOCAL_35) / 43.27) * Math.hypot(photoWidth, photoHeight);
+
+const unit = (a) => scale(a, 1 / len(a));
+
+/** The camera from back-corner + side-edge pins (EDGE_LABELS order), for a focal length in pixels. */
+export function solveFromEdges(pins, lotWidth, photoWidth, photoHeight, focal) {
+  const W = Number(lotWidth), iw = Number(photoWidth), ih = Number(photoHeight), f = Number(focal);
+  if (!validCorners(pins) || !(W > 0 && iw > 0 && ih > 0 && f > 0)) return { ok: false, reason: 'missing' };
+  if (!isConvex(pins.map(p => [p.u * iw, p.v * ih]))) return { ok: false, reason: 'shape' };
+  // Rays through the pins in camera coordinates (x right, y down, z forward)
+  const [bl, br, rs, ls] = pins.map(p => [(p.u * iw - iw / 2) / f, (p.v * ih - ih / 2) / f, 1]);
+  const depthDir = cross(cross(bl, ls), cross(br, rs));      // where the two side edges meet
+  const backLine = cross(bl, br);
+  if (len(depthDir) < 1e-12 || len(backLine) < 1e-12) return { ok: false, reason: 'shape' };
+  let rz = unit(depthDir);
+  let rx = cross(backLine, rz);                                // on the back edge, square to the depth
+  if (len(rx) < 1e-12) return { ok: false, reason: 'shape' };
+  rx = unit(rx);
+  // Distances along the two back-corner rays: W·rx = λr·br − λl·bl (least squares, 3 equations, 2 unknowns)
+  const solve2 = (target) => {
+    const a = scale(bl, -1), b = br;
+    const aa = dot(a, a), ab = dot(a, b), bb = dot(b, b), at = dot(a, target), bt = dot(b, target);
+    const det = aa * bb - ab * ab;
+    return Math.abs(det) < 1e-15 ? null : [(at * bb - bt * ab) / det, (bt * aa - at * ab) / det];
+  };
+  let lam = solve2(scale(rx, W));
+  if (!lam) return { ok: false, reason: 'shape' };
+  if (lam[0] < 0 && lam[1] < 0) { rx = scale(rx, -1); lam = [-lam[0], -lam[1]]; }   // x runs left → right
+  if (!(lam[0] > 0 && lam[1] > 0)) return { ok: false, reason: 'shape' };
+  const t = scale(bl, lam[0]);                                 // the back-left corner is the origin
+  let ry = cross(rz, rx);
+  if (ry[1] > 0) { rz = scale(rz, -1); ry = cross(rz, rx); }   // world up points up in the photo
+  // The side pins must be in FRONT of the back edge (z > 0), else back and front are swapped
+  const along = (pin, x0) => {
+    // ground point (x0, 0, z) seen along this pin's ray: t + x0·rx + z·rz = μ·pin → z by least squares
+    // Closest approach of o + z·rz and μ·pin: z = ((0 − o) × pin)·(rz × pin) / |rz × pin|²
+    const o = add(t, scale(rx, x0));
+    const n = cross(rz, pin);
+    return -dot(cross(o, pin), n) / dot(n, n);
+  };
+  if (!(along(ls, 0) > 0 && along(rs, W) > 0)) return { ok: false, reason: 'upside_down' };
+  const pose = poseFromAxes(rx, ry, rz, t, f, ih);
+  if (pose.position[1] <= 0.05) return { ok: false, reason: 'upside_down' };
+  if (pose.position[1] > 80) return { ok: false, reason: 'shape' };
+  return { ok: true, ...pose, estimatedFocal: true, fitError: 0 };
+}
+
+const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+
+function poseFromAxes(rx, ry, rz, t, focal, ih) {
+  const position = [-dot(rx, t), -dot(ry, t), -dot(rz, t)];
+  const row = (i) => [rx[i], ry[i], rz[i]];
+  const right = row(0), down = row(1), forward = row(2);
+  return {
+    position, focal,
+    axes: { right, up: scale(down, -1), back: scale(forward, -1) },
+    fovY: (2 * Math.atan(ih / 2 / focal) * 180) / Math.PI,
+  };
+}
+
+/* ── Pins as saved with a design ────────────────────────────────────────────────────────────────── */
+
+/**
+ * Pins in any saved form → { pins, mode, focal35 }, or null. Older designs saved a bare array of the
+ * four yard corners; newer ones { pins, mode: 'edges' | 'corners', focal35 }.
+ */
+export function normalizePins(value) {
+  if (validCorners(value)) return { pins: value, mode: 'corners', focal35: null };
+  if (value && validCorners(value.pins)) {
+    return { pins: value.pins, mode: value.mode === 'corners' ? 'corners' : 'edges',
+      focal35: Number(value.focal35) > 0 ? Number(value.focal35) : null };
+  }
+  return null;
+}
+
+export const pinLabels = (mode) => (mode === 'corners' ? CORNER_LABELS : EDGE_LABELS);
+export const defaultPins = (mode) => (mode === 'corners' ? defaultCorners() : defaultEdgePins());
+
+/**
+ * The camera for saved pins ({ pins, mode, focal35 }) on a W × L lot and a photo of iw × ih pixels.
+ * Adds cameraHeight (m) to the result, to sanity-check the pins and the yard size.
+ */
+export function solvePhotoPose(setup, lotWidth, lotLength, photoWidth, photoHeight) {
+  const s = normalizePins(setup) || { pins: defaultEdgePins(), mode: 'edges', focal35: null };
+  const pose = s.mode === 'corners'
+    ? solvePhotoCamera(s.pins, lotWidth, lotLength, photoWidth, photoHeight)
+    : solveFromEdges(s.pins, lotWidth, photoWidth, photoHeight, focalPixels(s.focal35, photoWidth, photoHeight));
+  return pose.ok ? { ...pose, mode: s.mode, cameraHeight: pose.position[1] } : { ...pose, mode: s.mode };
+}
+
 /** Where a ground point (x, z) lands on the photo for a solved camera (for checks and tests). */
 export function projectGroundPoint(pose, x, z, photoWidth, photoHeight) {
   const rel = sub([x, 0, z], pose.position);

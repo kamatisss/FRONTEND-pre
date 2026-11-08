@@ -52,3 +52,26 @@ export function stageSize(product, stage, category = product?.category) {
   return established;
 }
 
+// ─── Width at a growth stage ──────────────────────────────────────────────────
+// planting_spread / established_spread / mature_spread (metres wide). Plants don't widen at the rate they
+// grow taller, so the 3D views scale width and height separately. Missing data → width follows height.
+
+/** Metres wide at a growth stage, or 0 when unknown. */
+export function stageSpread(product, stage, category = product?.category) {
+  if ((category || 'plant') !== 'plant') return 0;
+  const v = stage === 'planting' ? product?.planting_spread : stage === 'mature' ? product?.mature_spread : product?.established_spread;
+  return Number(v) || 0;
+}
+
+// How far a model may be stretched or squeezed sideways to show its real width: beyond this it stops
+// looking like the plant (a 3D model has its own shape), so it gets as close as it can.
+export const WIDTH_FIT = [0.6, 1.4];
+
+/**
+ * Sideways multiplier that draws a model `target` metres wide when, at its height scale, it is
+ * naturally `natural` metres wide (its widest side). 1 when either is unknown.
+ */
+export function widthFit(target, natural) {
+  if (!(target > 0) || !(natural > 0)) return 1;
+  return Math.min(WIDTH_FIT[1], Math.max(WIDTH_FIT[0], target / natural));
+}

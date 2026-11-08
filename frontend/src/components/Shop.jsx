@@ -11,6 +11,8 @@ import {
     Trash2, CreditCard, DollarSign, Sparkles, Star, Shield, HelpCircle, MapPin, Info, ChevronDown
 } from 'lucide-react';
 import { API_BASE_URL as API_ROOT } from '../config';
+import AddressPicker from './AddressPicker';
+import { addressReady, toPayload, rememberAddress } from '../data/address';
 
 /* ─── Static Metadata Mappings for Inventory Items ─── */
 const PRODUCT_METADATA = {
@@ -189,8 +191,8 @@ export default function Shop() {
         name: user?.first_name ? `${user.first_name} ${user.last_name || ''}`.trim() : '',
         email: user?.email || '',
         phone: '',
-        address: ''
     });
+    const [deliveryAddress, setDeliveryAddress] = useState(null);   // AddressPicker value
     const [paymentMethod, setPaymentMethod] = useState('online'); // 'online' (PayMongo) or 'cod'
     const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
     const [checkoutError, setCheckoutError] = useState('');
@@ -288,8 +290,12 @@ export default function Shop() {
     const handleCheckoutSubmit = async (e) => {
         e.preventDefault();
         if (cart.length === 0) return;
-        if (!checkoutForm.address || !checkoutForm.phone) {
-            setCheckoutError('Please provide both delivery address and contact number.');
+        if (!checkoutForm.phone) {
+            setCheckoutError('Please enter a contact number for the rider.');
+            return;
+        }
+        if (!addressReady(deliveryAddress)) {
+            setCheckoutError('Choose your town and barangay, enter your street, and pin your house on the map.');
             return;
         }
         const phone = normalizePhMobile(checkoutForm.phone);
@@ -318,7 +324,7 @@ export default function Shop() {
                     customer_name: checkoutForm.name,
                     customer_email: checkoutForm.email,
                     customer_phone: phone,
-                    customer_address: checkoutForm.address,
+                    address: toPayload(deliveryAddress),
                     payment_method: paymentMethod,
                     items: orderItems,
                 })
@@ -327,6 +333,7 @@ export default function Shop() {
             if (res.ok) {
                 const data = await res.json();
                 const orderId = data.order_id;
+                await rememberAddress(deliveryAddress);
                 
                 // Clear cart locally
                 clearCart();
@@ -1135,17 +1142,10 @@ export default function Shop() {
                                     )}
                                 </div>
 
-                                {/* Address */}
+                                {/* Address: town & barangay in Quezon, street, landmark, and a pin for the rider */}
                                 <div className="flex flex-col gap-1.5">
                                     <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Delivery Address</label>
-                                    <textarea
-                                        value={checkoutForm.address}
-                                        onChange={(e) => setCheckoutForm({...checkoutForm, address: e.target.value})}
-                                        rows={2.5}
-                                        placeholder="Full address where items will be delivered"
-                                        className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:border-emerald-500 outline-none resize-none"
-                                        required
-                                    />
+                                    <AddressPicker value={deliveryAddress} onChange={setDeliveryAddress} signedIn={!!user} mapHeight={220} />
                                 </div>
 
                                 {/* Payment Method Options */}

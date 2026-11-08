@@ -28,6 +28,17 @@ export function lotOf(dimensions) {
   };
 }
 
+/**
+ * New dimensions. A garden plan (beds + lawn from the AI Designer, dimensions.gardenPlan) was made for
+ * one exact lot size, so it is dropped when the size changes; the plants stay where they are.
+ */
+export function resizeDimensions(dimensions, changes) {
+  const next = { ...(dimensions || {}), ...changes };
+  const resized = Number(next.width) !== Number(dimensions?.width) || Number(next.length) !== Number(dimensions?.length);
+  if (resized && next.gardenPlan) delete next.gardenPlan;
+  return next;
+}
+
 /** Is a ground point inside the lot? */
 export function insideLot(x, z, lot, pad = 0) {
   return Math.abs(x) <= lot.width / 2 - pad + 1e-6 && Math.abs(z) <= lot.length / 2 - pad + 1e-6;
@@ -59,7 +70,7 @@ export function fitLotToItems(dimensions, items) {
       && Number(dimensions?.width) === lot.width && Number(dimensions?.length) === lot.length) {
     return dimensions;
   }
-  return { ...(dimensions || {}), width, length };
+  return resizeDimensions(dimensions, { width, length });
 }
 
 /** Items whose base is outside the lot (e.g. after the lot was made smaller). */

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Navigation, Phone, StickyNote, Play, LogOut, Camera, Check, Lock, Layers, Eye, FileText, Loader2, AlertTriangle,
-  Car, PackageCheck, ChevronDown, ChevronUp, RotateCcw, Flag,
+  Car, PackageCheck, ChevronDown, ChevronUp, RotateCcw, Flag, Crosshair,
 } from 'lucide-react';
 import ProgressPhotos from './ProgressPhotos';
 import ProblemSheet from './ui/ProblemSheet';
@@ -370,7 +370,7 @@ const SECONDARY = 'flex-1 min-h-[44px] rounded-xl bg-white border border-slate-2
 /* ── The card ────────────────────────────────────────────────────────────── */
 export default function CrewJobCard({
   booking, todayIso, activeAttendance, refreshActiveAttendance, api, headers, toast, user,
-  submitting, onSubmit, onOpenDesign, onWorkOrder, onChanged,
+  submitting, onSubmit, onOpenDesign, onWorkOrder, onChanged, onFindIt,
 }) {
   const bar = statusOf(booking.status);
   const active = ['Preparing', 'Installing'].includes(booking.status);
@@ -403,13 +403,20 @@ export default function CrewJobCard({
         {/* Where: one tap to directions or a call */}
         <div className="flex flex-col gap-2">
           <p className="m-0 text-[15px] text-slate-800 leading-snug">{booking.service_address || 'No address on file. Call the customer.'}</p>
-          <div className="grid grid-cols-2 gap-2">
+          <div className={`grid gap-2 ${onFindIt ? 'grid-cols-3' : 'grid-cols-2'}`}>
             {navUrl ? (
               <a href={navUrl} target="_blank" rel="noopener noreferrer"
                 className="min-h-[48px] rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold no-underline inline-flex items-center justify-center gap-2">
                 <Navigation size={16} /> Navigate
               </a>
             ) : <span />}
+            {/* The last stretch, in our own map: the pin, the landmark, you, how far, "I've arrived" */}
+            {onFindIt && (
+              <button type="button" onClick={() => onFindIt(booking)}
+                className="min-h-[48px] rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-slate-900 text-sm font-bold cursor-pointer inline-flex items-center justify-center gap-2">
+                <Crosshair size={16} /> Find it
+              </button>
+            )}
             {phone ? (
               <a href={`tel:${phone}`}
                 className="min-h-[48px] rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-slate-900 text-sm font-bold no-underline inline-flex items-center justify-center gap-2">
@@ -417,6 +424,9 @@ export default function CrewJobCard({
               </a>
             ) : <span />}
           </div>
+          {booking.crew_arrived_at && (
+            <p className="m-0 text-xs font-semibold text-emerald-700">Arrived at {clockTime(booking.crew_arrived_at)}</p>
+          )}
         </div>
 
         {!onTheJob && <OnMyWay booking={booking} todayIso={todayIso} api={api} headers={headers} toast={toast} onChanged={onChanged} />}

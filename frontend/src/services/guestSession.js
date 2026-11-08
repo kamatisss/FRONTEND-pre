@@ -2,7 +2,7 @@ import { API_BASE_URL as API_ROOT } from '../config';
 const KEY = 'gs_guest_design';
 
 export const saveGuestDesign = (data) => {
-  try { localStorage.setItem(KEY, JSON.stringify(data)); } catch { /* storage blocked or full */ }
+  try { localStorage.setItem(KEY, JSON.stringify({ ...data, savedAt: Date.now() })); } catch { /* storage blocked or full */ }
 };
 
 export const loadGuestDesign = () => {
@@ -13,7 +13,28 @@ export const loadGuestDesign = () => {
 };
 
 export const clearGuestDesign = () => {
-  localStorage.removeItem(KEY);
+  try { localStorage.removeItem(KEY); } catch { /* storage blocked */ }
+};
+
+// ─── AI Designer session of a signed-in customer ──────────────────
+// Their designs, edits and answers, kept on this device per account, so a refresh or a later visit
+// doesn't lose them (generating again would use up their daily AI designs). Kept for 14 days.
+const AI_SESSION_KEY = (owner) => `gs_ai_session_${owner}`;
+const AI_SESSION_DAYS = 14;
+
+export const saveAiSession = (owner, data) => {
+  try { localStorage.setItem(AI_SESSION_KEY(owner), JSON.stringify({ ...data, savedAt: Date.now() })); } catch { /* storage blocked or full */ }
+};
+
+export const loadAiSession = (owner) => {
+  try {
+    const data = JSON.parse(localStorage.getItem(AI_SESSION_KEY(owner)) || 'null');
+    return data && Date.now() - (data.savedAt || 0) < AI_SESSION_DAYS * 24 * 3600 * 1000 ? data : null;
+  } catch { return null; }
+};
+
+export const clearAiSession = (owner) => {
+  try { localStorage.removeItem(AI_SESSION_KEY(owner)); } catch { /* storage blocked or full */ }
 };
 
 // ─── Free 3D Studio draft ─────────────────────────────────────────

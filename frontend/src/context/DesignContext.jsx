@@ -1,6 +1,6 @@
 import { createContext, useContext, useReducer, useCallback } from 'react';
 import { DEFAULT_TIME_OF_DAY } from '../data/studioLight';
-import { fitLotToItems, lotOf, insideLot, moveInsideLot } from '../data/lot';
+import { fitLotToItems, lotOf, insideLot, moveInsideLot, resizeDimensions } from '../data/lot';
 
 const DesignContext = createContext(null);
 
@@ -213,7 +213,7 @@ function reducer(state, action) {
       return { ...state, timeOfDay: action.payload, isDirty: true };
 
     case 'SET_DIMENSIONS':
-      return { ...state, dimensions: { ...state.dimensions, ...action.payload }, isDirty: true };
+      return { ...state, dimensions: resizeDimensions(state.dimensions, action.payload), isDirty: true };
 
     // Items left outside after the lot was made smaller: bring them just inside the edge…
     case 'MOVE_ITEMS_INTO_LOT': {

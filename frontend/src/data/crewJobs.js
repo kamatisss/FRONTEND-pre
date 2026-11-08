@@ -1,3 +1,4 @@
+import { navLink } from './navApps';
 // Crew job helpers shared by the crew screens (Today, Jobs, job page). Rules mirror
 // BACKEND apps/library/field_work.py.
 
@@ -57,8 +58,6 @@ export function groupJobs(bookings, today, clockedJobId) {
   };
 }
 
-export const navUrl = (b) => {
-  const where = b.site_lat != null ? `${b.site_lat},${b.site_lng}` : b.service_address;
-  return where ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(where)}` : null;
-};
+// Navigate to a job: its site pin when known, else the written address; Google Maps or Waze (data/navApps.js)
+export const navUrl = (b) => navLink({ lat: b.site_lat ?? NaN, lng: b.site_lng ?? NaN, address: b.service_address });
 export const telOf = (b) => (b.contact_number || '').replace(/[^\d+]/g, '');
