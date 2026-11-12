@@ -1,19 +1,25 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { productImage } from '../data/productImage';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { motion } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
+import { stockLimit, describeCartChange } from '../data/cartHelpers';
+import { useToast } from './ui/Toast';
+import { suggestForCart } from '../data/cartSuggestions';
 import { getPricing } from '../services/api';
 import { normalizePhMobile, codBlockReason, PHONE_HINT } from '../services/checkout';
 import { useIsPhone } from './ui/useMediaQuery';
 import { 
     Search, Filter, ShoppingBag, ShoppingCart, Plus, Minus, X, Check, ArrowRight, Leaf, 
-    Trash2, CreditCard, DollarSign, Sparkles, Star, Shield, HelpCircle, MapPin, Info, ChevronDown
+    Trash2, CreditCard, DollarSign, Sparkles, Star, Shield, MapPin, Info, ChevronDown, AlertTriangle
 } from 'lucide-react';
 import { API_BASE_URL as API_ROOT } from '../config';
 import AddressPicker from './AddressPicker';
 import { addressReady, toPayload, rememberAddress } from '../data/address';
 
+import { useMe, phoneDiffers, saveMyPhone } from '../services/me';
+import SavePhoneToggle from './ui/SavePhoneToggle';
 /* ─── Static Metadata Mappings for Inventory Items ─── */
 const PRODUCT_METADATA = {
     "Coconut Palm": {
@@ -138,15 +144,20 @@ const PRODUCT_METADATA = {
     }
 };
 
-const DEFAULT_LIFESTYLE_IMAGE = "https://images.unsplash.com/photo-1466692476868-aef1dfb1e735?q=80&w=800&auto=format&fit=crop";
 
 // Uploaded photo (or one rendered from the 3D model in Inventory), else the image link
 const getProductImage = productImage;
 
 export default function Shop() {
-    const { authTokens, user } = useAuth();
-    const { addToCart, cart, removeFromCart, updateQuantity, cartSubtotal, clearCart } = useCart();
+    const { authTokens, user, applyTokens } = useAuth();
+    const me = useMe();   // My account: the saved mobile number fills the phone field
+    const {
+        addToCart, cart, removeFromCart, restoreItem, updateQuantity, cartSubtotal, cartCount, clearCart,
+        syncCart, quantityInCart, cartNotices, dismissCartNotices,
+    } = useCart();
+    const toast = useToast();
     const navigate = useNavigate();
+    const [searchParams, setSearchParams] = useSearchParams();
 
     const [products, setProducts] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -182,16 +193,89 @@ export default function Shop() {
     }, [selectedProduct]);
 
     // Drawer state
-    // /shop?cart=open (e.g. after "Add these plants to my cart" in the AI Designer) opens the cart
-    const [isCartOpen, setIsCartOpen] = useState(() => new URLSearchParams(window.location.search).get('cart') === 'open');
+    const [isCartOpen, setIsCartOpen] = useState(false);
     const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
+
+    // /shop?cart=open opens the cart: the top bar's cart button (from any page, this one too)
+    // and "Add these plants to my cart" in the AI Designer. The flag is then dropped from the
+    // URL, so a refresh or the next tap behaves normally.
+    useEffect(() => {
+        if (searchParams.get('cart') !== 'open') return;
+        setIsCartOpen(true);
+        const next = new URLSearchParams(searchParams);
+        next.delete('cart');
+        setSearchParams(next, { replace: true });
+    }, [searchParams, setSearchParams]);
+
+    // Product pop-up: how many to add (reset for each product)
+    const [modalQty, setModalQty] = useState(1);
+    useEffect(() => { setModalQty(1); }, [selectedProduct]);
+
+    // Escape closes whatever is on top
+    useEffect(() => {
+        if (!selectedProduct && !isCartOpen && !isCheckoutOpen) return undefined;
+        const onKey = (e) => {
+            if (e.key !== 'Escape') return;
+            if (isCheckoutOpen) setIsCheckoutOpen(false);
+            else if (isCartOpen) setIsCartOpen(false);
+            else setSelectedProduct(null);
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [selectedProduct, isCartOpen, isCheckoutOpen]);
+
+    // Adding: a toast with the photo, how many are now in the cart, and "View cart".
+    // Tapping again updates the same toast instead of stacking new ones.
+    const handleAdd = (product, quantity = 1) => {
+        const r = addToCart(product, quantity);
+        const toastId = `cart-${product.id}`;
+        if (r.added <= 0) {
+            toast({
+                id: toastId, type: 'warning',
+                title: r.available <= 0 ? `${product.name} is out of stock` : `All ${r.available} are in your cart`,
+                message: r.available <= 0 ? 'Check back soon.' : `That's every ${product.name} we have right now.`,
+            });
+            return false;
+        }
+        toast({
+            id: toastId,
+            type: r.limited ? 'warning' : 'success',
+            image: getProductImage(product),
+            title: r.limited ? `Only ${r.available} left, all in your cart` : 'Added to cart',
+            message: `${product.name} · ${r.quantity} in your cart`,
+            action: { label: 'View cart', onClick: () => setIsCartOpen(true) },
+        });
+        return true;
+    };
+
+    const handleRemove = (line) => {
+        const removed = removeFromCart(line.product.id);
+        if (!removed) return;
+        toast({
+            id: `cart-${line.product.id}`, type: 'info',
+            title: 'Removed from cart',
+            message: `${line.product.name} ×${line.quantity}`,
+            action: { label: 'Undo', onClick: () => restoreItem(removed) },
+        });
+    };
+
+    const handleQuantity = (line, quantity) => {
+        if (quantity <= 0) { handleRemove(line); return; }
+        const r = updateQuantity(line.product.id, quantity);
+        if (r.limited) {
+            toast({ id: `cart-${line.product.id}`, type: 'warning', title: `Only ${r.available} left`, message: `You have every ${line.product.name} we have.` });
+        }
+    };
 
     // Checkout form state
     const [checkoutForm, setCheckoutForm] = useState({
         name: user?.first_name ? `${user.first_name} ${user.last_name || ''}`.trim() : '',
         email: user?.email || '',
-        phone: '',
+        phone: null,   // null = not typed yet: show the account's mobile number
     });
+    const phoneValue = checkoutForm.phone ?? me?.phone ?? '';
+    const [savePhone, setSavePhone] = useState(null);   // null = default: save only if the account has no number yet
+    const savePhoneOn = savePhone ?? !me?.phone;
     const [deliveryAddress, setDeliveryAddress] = useState(null);   // AddressPicker value
     const [paymentMethod, setPaymentMethod] = useState('online'); // 'online' (PayMongo) or 'cod'
     const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
@@ -212,7 +296,36 @@ export default function Shop() {
     useEffect(() => {
         if (codBlocked && paymentMethod === 'cod') setPaymentMethod('online');
     }, [codBlocked, paymentMethod]);
-    const phoneInvalid = checkoutForm.phone.trim() !== '' && !normalizePhMobile(checkoutForm.phone);
+    const phoneInvalid = phoneValue.trim() !== '' && !normalizePhMobile(phoneValue);
+
+    // The cart keeps copies of products from when they were added; refresh them from the live
+    // catalog (prices, stock, items no longer sold) and tell the shopper what changed.
+    const cartOpenRef = useRef(false);
+    useEffect(() => { cartOpenRef.current = isCartOpen; }, [isCartOpen]);
+    const announceChanges = useCallback((changes) => {
+        if (!changes.length || cartOpenRef.current) return;   // the open drawer shows them itself
+        toast({
+            id: 'cart-sync', type: 'warning',
+            title: 'Your cart was updated',
+            message: describeCartChange(changes[0]) + (changes.length > 1 ? ` (+${changes.length - 1} more)` : ''),
+            action: { label: 'View cart', onClick: () => setIsCartOpen(true) },
+            duration: 7000,
+        });
+    }, [toast]);
+
+    const refreshCart = useCallback(async () => {
+        try {
+            const res = await fetch(`${API_ROOT}/inventory/`);
+            if (!res.ok) return;
+            const data = await res.json();
+            setProducts(data);
+            syncCart(data);
+        } catch { /* offline: the server still checks prices and stock at checkout */ }
+    }, [syncCart]);
+
+    useEffect(() => {
+        if (isCartOpen) refreshCart();
+    }, [isCartOpen, refreshCart]);
 
     // Fetch Products on Mount
     useEffect(() => {
@@ -223,6 +336,7 @@ export default function Shop() {
                 if (res.ok) {
                     const data = await res.json();
                     setProducts(data);
+                    announceChanges(syncCart(data));
                     // "Shop the look" links from the Project Hub open a product directly: /shop?product=<id>
                     const linked = new URLSearchParams(window.location.search).get('product');
                     const match = linked && data.find(p => String(p.id) === linked);
@@ -238,7 +352,7 @@ export default function Shop() {
             }
         };
         fetchProducts();
-    }, []);
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps -- once, on opening the shop
 
     // Filter Logic
     const filteredProducts = products.filter(product => {
@@ -277,6 +391,9 @@ export default function Shop() {
         return true;
     });
 
+    // Re-ranked only when the cart or the catalog changes
+    const suggestions = useMemo(() => suggestForCart(cart, products), [cart, products]);
+
     const toggleFilter = (set, setter, val) => {
         const copy = new Set(set);
         if (copy.has(val)) {
@@ -290,7 +407,7 @@ export default function Shop() {
     const handleCheckoutSubmit = async (e) => {
         e.preventDefault();
         if (cart.length === 0) return;
-        if (!checkoutForm.phone) {
+        if (!phoneValue.trim()) {
             setCheckoutError('Please enter a contact number for the rider.');
             return;
         }
@@ -298,7 +415,7 @@ export default function Shop() {
             setCheckoutError('Choose your town and barangay, enter your street, and pin your house on the map.');
             return;
         }
-        const phone = normalizePhMobile(checkoutForm.phone);
+        const phone = normalizePhMobile(phoneValue);
         if (!phone) {
             setCheckoutError(PHONE_HINT);
             return;
@@ -334,6 +451,7 @@ export default function Shop() {
                 const data = await res.json();
                 const orderId = data.order_id;
                 await rememberAddress(deliveryAddress);
+                if (savePhoneOn && phoneDiffers(me, phone)) await saveMyPhone(phone, applyTokens);
                 
                 // Clear cart locally
                 clearCart();
@@ -363,8 +481,10 @@ export default function Shop() {
                     navigate(receiptUrl);
                 }
             } else {
-                const errData = await res.json();
+                const errData = await res.json().catch(() => ({}));
                 setCheckoutError(errData.error || 'Failed to place the order.');
+                // Stock or prices moved since the cart was filled: bring the cart up to date
+                if (/stock|price|available/i.test(errData.error || '')) refreshCart();
             }
         } catch (err) {
             console.error("Checkout error:", err);
@@ -377,8 +497,9 @@ export default function Shop() {
     // One product card, shared by the grid and the phone category rows
     const renderProductCard = (product, { className = '', showCategory = true } = {}) => {
         const isOutOfStock = product.stock_quantity <= 0;
+        const inCart = quantityInCart(product.id);
         return (
-            <div 
+            <div
                 key={product.id}
                 onClick={() => setSelectedProduct(product)}
                 className={`group bg-white rounded-2xl sm:rounded-3xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md hover:-translate-y-1 transition-all duration-300 cursor-pointer flex flex-col ${className}`}
@@ -441,18 +562,28 @@ export default function Shop() {
                             </span>
                         </div>
 
-                        {/* Add to Cart Action */}
+                        {/* Add to Cart Action: once some are in the cart it shows how many */}
                         <button
+                            type="button"
                             onClick={(e) => {
                                 e.stopPropagation(); // Avoid opening product modal
-                                if (!isOutOfStock) {
-                                    addToCart(product, 1);
-                                }
+                                if (!isOutOfStock) handleAdd(product, 1);
                             }}
                             disabled={isOutOfStock}
-                            className="w-9 h-9 rounded-xl bg-emerald-50 hover:bg-emerald-600 hover:text-white text-emerald-700 flex items-center justify-center border-none cursor-pointer disabled:opacity-50 disabled:hover:bg-emerald-50 disabled:hover:text-emerald-700 transition-colors"
+                            aria-label={inCart ? `Add one more ${product.name} (${inCart} in cart)` : `Add ${product.name} to cart`}
+                            className={`h-9 min-w-9 px-2 rounded-xl flex items-center justify-center gap-0.5 border-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${
+                                inCart
+                                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                    : 'bg-emerald-50 hover:bg-emerald-600 hover:text-white text-emerald-700 disabled:hover:bg-emerald-50 disabled:hover:text-emerald-700'
+                            }`}
                         >
-                            <Plus size={16} />
+                            {inCart ? (
+                                <motion.span key={inCart} initial={{ scale: 1.5 }} animate={{ scale: 1 }}
+                                    transition={{ type: 'spring', stiffness: 500, damping: 15 }}
+                                    className="flex items-center gap-0.5 text-xs font-black">
+                                    <Check size={13} strokeWidth={3} />{inCart}
+                                </motion.span>
+                            ) : <Plus size={16} />}
                         </button>
                     </div>
                 </div>
@@ -480,42 +611,13 @@ export default function Shop() {
 
     return (
         <div className="min-h-screen bg-[#FFFFFF]" style={{ fontFamily: "'Inter', sans-serif" }}>
-            
-            {/* Header Banner */}
-            <div className="relative bg-gradient-to-r from-[#064E3B] to-[#047857] text-white py-16 px-6 md:px-12 overflow-hidden shadow-sm">
-                <div className="absolute inset-0 opacity-10 bg-[radial-gradient(#FDFAF6_1px,transparent_1px)] [background-size:16px_16px]"></div>
-                <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-8 relative z-10">
-                    <div>
-                        <span className="inline-flex items-center gap-1 bg-emerald-500/20 text-emerald-300 text-[11px] font-black tracking-widest uppercase px-3 py-1 rounded-full mb-3">
-                            <Sparkles size={11} /> Premium Landscaping Inventory
-                        </span>
-                        <h1 className="text-3xl md:text-5xl font-extrabold tracking-tight mb-3">
-                            The Garden Studio Shop
-                        </h1>
-                        <p className="text-slate-300 max-w-lg text-sm md:text-base font-medium leading-relaxed">
-                            Curated high-quality tropical plants, sturdy outdoor teak furniture, and natural stone pathways to elevate your spatial layouts.
-                        </p>
-                    </div>
-                    {/* View Cart Floating Trigger */}
-                    <button 
-                        onClick={() => setIsCartOpen(true)}
-                        className="bg-white text-emerald-950 font-bold px-6 py-4 rounded-2xl flex items-center gap-3 shadow-lg hover:shadow-xl hover:bg-slate-50 transition-all border-none cursor-pointer"
-                    >
-                        <ShoppingCart size={20} className="text-emerald-700" />
-                        <span>View Cart ({cart.reduce((s, i) => s + i.quantity, 0)})</span>
-                        {cartSubtotal > 0 && (
-                            <span className="bg-emerald-50 text-emerald-800 text-xs font-black px-2 py-0.5 rounded border border-emerald-200">
-                                ₱{cartSubtotal.toLocaleString()}
-                            </span>
-                        )}
-                    </button>
-                </div>
-            </div>
 
-            {/* Shop Category Navigation Tabs */}
+            {/* Shop Category Navigation Tabs. No banner above: the cart lives in the top bar
+                (CartButton → /shop?cart=open), so the products start right under it. */}
             <div className="border-b border-slate-200 bg-white sticky top-[60px] md:top-0 z-40 shadow-sm">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 flex items-center justify-between overflow-x-auto gap-8">
-                    <div className="flex gap-2 py-3.5 shrink-0">
+                    <div className="flex items-center gap-2 py-3.5 shrink-0">
+                        <h1 className="m-0 mr-2 text-lg font-extrabold text-slate-900 tracking-tight">Shop</h1>
                         {['All', 'plant', 'furniture', 'hardscape'].map((tab) => (
                             <button
                                 key={tab}
@@ -756,8 +858,11 @@ export default function Shop() {
             {/* 3. PRODUCT SPECIFICATIONS DETAIL MODAL */}
             {selectedProduct && (() => {
                 const meta = PRODUCT_METADATA[selectedProduct.name] || {};
-                const imgUrl = meta.unsplashUrl || DEFAULT_LIFESTYLE_IMAGE;
                 const isOutOfStock = selectedProduct.stock_quantity <= 0;
+                const stock = stockLimit(selectedProduct);
+                const inCartHere = quantityInCart(selectedProduct.id);
+                const canAddMore = Math.max(0, stock - inCartHere);
+                const qty = Math.min(modalQty, Math.max(1, canAddMore));
 
                 return (
                     <div 
@@ -915,22 +1020,46 @@ export default function Shop() {
                                     </div>
                                 </div>
 
-                                {/* Actions */}
-                                <div className="mt-6 pt-4 border-t border-slate-100 flex gap-4">
-                                    <button
-                                        onClick={() => {
-                                            if (!isOutOfStock) {
-                                                addToCart(selectedProduct, 1);
-                                                setSelectedProduct(null);
-                                                setIsCartOpen(true);
-                                            }
-                                        }}
-                                        disabled={isOutOfStock}
-                                        className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-300 text-white text-xs font-bold rounded-xl border-none cursor-pointer transition-colors shadow-sm flex items-center justify-center gap-2"
-                                    >
-                                        <ShoppingCart size={14} />
-                                        {isOutOfStock ? 'Out of Stock' : 'Add to Cart'}
-                                    </button>
+                                {/* Actions: pick how many (up to what's left after the cart), then add */}
+                                <div className="mt-6 pt-4 border-t border-slate-100 space-y-2.5">
+                                    {!isOutOfStock && Number.isFinite(stock) && (
+                                        <div className="flex items-center justify-between text-[11px] font-semibold">
+                                            <span className={stock < 10 ? 'text-amber-700' : 'text-slate-500'}>
+                                                {stock < 10 ? `Only ${stock} left` : `${stock} in stock`}
+                                                {inCartHere > 0 && <span className="text-emerald-700"> · {inCartHere} in your cart</span>}
+                                            </span>
+                                        </div>
+                                    )}
+                                    <div className="flex gap-3">
+                                        {canAddMore > 0 && (
+                                            <div className="flex items-center rounded-xl border border-slate-200 bg-white shrink-0" role="group" aria-label="Quantity">
+                                                <button type="button" onClick={() => setModalQty(q => Math.max(1, q - 1))} disabled={qty <= 1}
+                                                    aria-label="One fewer"
+                                                    className="w-10 h-full flex items-center justify-center text-slate-600 bg-transparent border-none cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed">
+                                                    <Minus size={14} />
+                                                </button>
+                                                <span className="w-7 text-center text-sm font-extrabold text-slate-800" aria-live="polite">{qty}</span>
+                                                <button type="button" onClick={() => setModalQty(q => Math.min(canAddMore, q + 1))} disabled={qty >= canAddMore}
+                                                    aria-label="One more"
+                                                    className="w-10 h-full flex items-center justify-center text-slate-600 bg-transparent border-none cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed">
+                                                    <Plus size={14} />
+                                                </button>
+                                            </div>
+                                        )}
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                if (canAddMore > 0 && handleAdd(selectedProduct, qty)) setSelectedProduct(null);
+                                            }}
+                                            disabled={canAddMore <= 0}
+                                            className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-300 disabled:cursor-not-allowed text-white text-xs font-bold rounded-xl border-none cursor-pointer transition-colors shadow-sm flex items-center justify-center gap-2"
+                                        >
+                                            <ShoppingCart size={14} />
+                                            {isOutOfStock ? 'Out of Stock'
+                                                : canAddMore <= 0 ? `All ${stock} are in your cart`
+                                                : `Add ${qty > 1 ? qty + ' ' : ''}to Cart · ₱${(parseFloat(selectedProduct.unit_price) * qty).toLocaleString()}`}
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -954,11 +1083,12 @@ export default function Shop() {
                                 <ShoppingCart size={20} className="text-emerald-700" />
                                 <h3 className="font-extrabold text-slate-800 text-base">Shopping Cart</h3>
                                 <span className="bg-emerald-100 text-emerald-800 text-xs font-black px-2 py-0.5 rounded-full">
-                                    {cart.reduce((s, i) => s + i.quantity, 0)}
+                                    {cartCount}
                                 </span>
                             </div>
-                            <button 
+                            <button
                                 onClick={() => setIsCartOpen(false)}
+                                aria-label="Close cart"
                                 className="p-1 hover:bg-slate-200 rounded-lg text-slate-400 hover:text-slate-700 transition-colors bg-transparent border-none cursor-pointer"
                             >
                                 <X size={20} />
@@ -967,6 +1097,26 @@ export default function Shop() {
 
                         {/* Drawer Body (Items list) */}
                         <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                            {/* What changed since things were added (prices, stock, items no longer sold) */}
+                            {cartNotices.length > 0 && (
+                                <div role="status" className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200">
+                                    <div className="flex items-start gap-2.5">
+                                        <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                                        <div className="flex-1 min-w-0">
+                                            <p className="m-0 text-xs font-extrabold text-amber-900">Your cart was updated</p>
+                                            <ul className="m-0 mt-1 pl-4 space-y-0.5 text-[11px] font-medium text-amber-900/90 leading-relaxed">
+                                                {cartNotices.map((c, i) => <li key={i}>{describeCartChange(c)}</li>)}
+                                            </ul>
+                                        </div>
+                                    </div>
+                                    <div className="flex justify-end mt-2">
+                                        <button type="button" onClick={dismissCartNotices}
+                                            className="px-3 py-1.5 rounded-lg bg-white border border-amber-200 text-[11px] font-bold text-amber-900 cursor-pointer hover:bg-amber-100">
+                                            Got it
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
                             {cart.length === 0 ? (
                                 <div className="h-full flex flex-col items-center justify-center text-center text-slate-400 py-10">
                                     <ShoppingBag size={48} className="text-slate-300 mb-3" />
@@ -975,6 +1125,8 @@ export default function Shop() {
                                 </div>
                             ) : (
                                 cart.map(c => {
+                                    const limit = stockLimit(c.product);
+                                    const atLimit = c.quantity >= limit;
                                     return (
                                         <div key={c.product.id} className="flex gap-4 p-3 bg-slate-50 border border-slate-200 rounded-2xl relative group">
                                             {/* Thumbnail */}
@@ -1002,24 +1154,34 @@ export default function Shop() {
                                                 </div>
                                                 {/* Quantity Controls */}
                                                 <div className="flex items-center gap-2 mt-1">
-                                                    <button 
-                                                        onClick={() => updateQuantity(c.product.id, c.quantity - 1)}
-                                                        className="w-6 h-6 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 flex items-center justify-center text-slate-500 cursor-pointer"
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleQuantity(c, c.quantity - 1)}
+                                                        aria-label={c.quantity <= 1 ? `Remove ${c.product.name}` : `One fewer ${c.product.name}`}
+                                                        className="w-7 h-7 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 flex items-center justify-center text-slate-500 cursor-pointer"
                                                     >
-                                                        <Minus size={10} />
+                                                        <Minus size={11} />
                                                     </button>
-                                                    <span className="text-xs font-bold text-slate-800 w-4 text-center">{c.quantity}</span>
-                                                    <button 
-                                                        onClick={() => updateQuantity(c.product.id, c.quantity + 1)}
-                                                        className="w-6 h-6 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 flex items-center justify-center text-slate-500 cursor-pointer"
+                                                    <span className="text-xs font-bold text-slate-800 min-w-4 text-center">{c.quantity}</span>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleQuantity(c, c.quantity + 1)}
+                                                        disabled={atLimit}
+                                                        aria-label={`One more ${c.product.name}`}
+                                                        className="w-7 h-7 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 flex items-center justify-center text-slate-500 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                                                     >
-                                                        <Plus size={10} />
+                                                        <Plus size={11} />
                                                     </button>
+                                                    {atLimit && Number.isFinite(limit) && (
+                                                        <span className="text-[10px] font-bold text-amber-700">Only {limit} left</span>
+                                                    )}
                                                 </div>
                                             </div>
                                             {/* Delete */}
-                                            <button 
-                                                onClick={() => removeFromCart(c.product.id)}
+                                            <button
+                                                type="button"
+                                                onClick={() => handleRemove(c)}
+                                                aria-label={`Remove ${c.product.name}`}
                                                 className="absolute top-3 right-3 p-1 hover:bg-red-50 text-slate-300 hover:text-red-500 rounded-lg transition-colors bg-transparent border-none cursor-pointer"
                                             >
                                                 <Trash2 size={13} />
@@ -1027,6 +1189,38 @@ export default function Shop() {
                                         </div>
                                     );
                                 })
+                            )}
+
+                            {/* Goes well with: in-stock items that suit the plants in the cart (data/cartSuggestions.js) */}
+                            {suggestions.length > 0 && (
+                                <section aria-labelledby="cart-suggestions" className="pt-2">
+                                    <h4 id="cart-suggestions" className="m-0 mb-2.5 text-[11px] font-extrabold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
+                                        <Sparkles size={12} className="text-emerald-600" /> Goes well with your plants
+                                    </h4>
+                                    <div className="space-y-2">
+                                        {suggestions.map(({ product, reason }) => (
+                                            <div key={product.id} className="flex items-center gap-3 p-2.5 rounded-2xl border border-slate-200 bg-white">
+                                                <button type="button" onClick={() => { setIsCartOpen(false); setSelectedProduct(product); }}
+                                                    aria-label={`About ${product.name}`}
+                                                    className="w-12 h-12 rounded-xl overflow-hidden bg-slate-100 shrink-0 flex items-center justify-center border-none p-0 cursor-pointer">
+                                                    {getProductImage(product)
+                                                        ? <img src={getProductImage(product)} alt="" loading="lazy" className="w-full h-full object-cover" />
+                                                        : <Leaf size={16} className="text-slate-400" />}
+                                                </button>
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="m-0 text-xs font-bold text-slate-800 truncate">{product.name}</p>
+                                                    <p className="m-0 text-[11px] text-slate-500 font-medium leading-snug line-clamp-2">{reason}</p>
+                                                    <p className="m-0 text-[11px] font-black text-[#059669]">₱{parseFloat(product.unit_price).toLocaleString()}</p>
+                                                </div>
+                                                <button type="button" onClick={() => handleAdd(product, 1)}
+                                                    aria-label={`Add ${product.name} to cart`}
+                                                    className="shrink-0 h-8 px-3 rounded-xl bg-emerald-50 hover:bg-emerald-600 hover:text-white text-emerald-700 text-[11px] font-bold border-none cursor-pointer flex items-center gap-1 transition-colors">
+                                                    <Plus size={12} /> Add
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </section>
                             )}
                         </div>
 
@@ -1128,7 +1322,7 @@ export default function Shop() {
                                     <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Contact Number</label>
                                     <input
                                         type="tel"
-                                        value={checkoutForm.phone}
+                                        value={phoneValue}
                                         onChange={(e) => setCheckoutForm({...checkoutForm, phone: e.target.value})}
                                         placeholder="e.g. 09171234567"
                                         inputMode="tel"
@@ -1140,6 +1334,7 @@ export default function Shop() {
                                     {phoneInvalid && (
                                         <span className="text-[10px] font-medium text-red-600">{PHONE_HINT}</span>
                                     )}
+                                    <SavePhoneToggle me={me} phone={phoneValue} checked={savePhoneOn} onChange={setSavePhone} id="shop-save-phone" />
                                 </div>
 
                                 {/* Address: town & barangay in Quezon, street, landmark, and a pin for the rider */}

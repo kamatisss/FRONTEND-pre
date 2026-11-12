@@ -1,6 +1,8 @@
-import { createContext, useContext, useReducer, useCallback } from 'react';
+import { createContext, useContext, useMemo, useReducer } from 'react';
 import { DEFAULT_TIME_OF_DAY } from '../data/studioLight';
-import { fitLotToItems, lotOf, insideLot, moveInsideLot, resizeDimensions } from '../data/lot';
+import { fitLotToItems, lotOf, lotArea, insideLot, moveInsideLot, resizeDimensions } from '../data/lot';
+import { plantBeds, bedSpread, groundcoverFor } from '../data/plantBeds';
+import { layoutSpacing, grownHeight } from '../data/pricing';
 
 const DesignContext = createContext(null);
 
@@ -22,6 +24,7 @@ const initialState = {
   previewObject: null,     // { id, productId, name, model_file, thumbnail, unit_price, position, rotation, scale }
   editingItemId: null,     // id of existing item being re-positioned
   previewValid: true,      // whether current preview position is valid
+  groupSize: 1,            // plants: place a drift of this many (1, 3, 5 or 7) with one tap ("Plant a group")
 
   // Design settings
   terrainHeight: 1.5,
@@ -32,6 +35,8 @@ const initialState = {
   // Save/load
   designId: null,
   designName: 'Untitled Design',
+  designLocked: false,
+  carriedItems: [],             // saved items the Studio can't show (e.g. AI 'already on site' markers): saved back as they were          // a booking uses this design: saving offers a new design (design_lock.py)
   savedDesigns: [],
   isDirty: false,
 
@@ -94,6 +99,9 @@ function reducer(state, action) {
       };
     }
 
+    case 'SET_GROUP_SIZE':
+      return { ...state, groupSize: [1, 3, 5, 7].includes(action.payload) ? action.payload : 1 };
+
     case 'CONFIRM_PLACEMENT': {
       if (!state.previewObject) return state;
       const newItem = {
@@ -119,10 +127,14 @@ function reducer(state, action) {
         };
       }
 
-      // New placement
+      // New placement: one, or a natural drift of the same plant ("Plant a group": odd numbers, spaced to grow)
+      const product = state.products.find(p => p.id === newItem.productId);
+      const group = product?.category === 'plant' && state.groupSize > 1
+        ? driftAround(newItem, product, state.groupSize, state.placedItems, state.products, state.dimensions)
+        : [newItem];
       return {
         ...state,
-        placedItems: [...state.placedItems, newItem],
+        placedItems: [...state.placedItems, ...group],
         placementMode: 'idle',
         previewObject: null,
         selectedProduct: null,
@@ -240,7 +252,7 @@ function reducer(state, action) {
 
     case 'LOAD_DESIGN': {
       // Older designs (made on the fixed 24 m ground) get a lot that fits their items
-      const next = { ...state, ...action.payload, isDirty: false };
+      const next = { ...state, designLocked: false, carriedItems: [], ...action.payload, isDirty: false };
       return { ...next, dimensions: fitLotToItems(next.dimensions, next.placedItems) };
     }
 
@@ -270,6 +282,28 @@ function reducer(state, action) {
   }
 }
 
+// A drift of n of one plant round the tapped spot (Studio coordinates: centred on the lot): a sunflower spiral at the
+// plant's planting distance, skipping spots outside the lot or too close to plants already there. The first is the spot.
+function driftAround(first, product, n, placed, products, dimensions) {
+  const spacing = layoutSpacing(product);
+  const lot = lotOf(dimensions);
+  const byId = new Map(products.map(p => [p.id, p]));
+  const taken = placed.map(i => ({ x: Number(i.position?.x) || 0, z: Number(i.position?.z) || 0, s: byId.get(i.productId) ? layoutSpacing(byId.get(i.productId)) : 0.5 }));
+  const out = [first];
+  const cx = Number(first.position.x) || 0, cz = Number(first.position.z) || 0;
+  for (let k = 1, tries = 0; out.length < n && tries < n * 12; k++, tries++) {
+    const r = spacing * 0.95 * Math.sqrt(k), a = k * 2.39996;
+    const x = cx + r * Math.cos(a), z = cz + r * Math.sin(a);
+    const fits = insideLot(x, z, lot, Math.min(0.3, spacing / 4))
+      && out.every(o => Math.hypot(o.position.x - x, o.position.z - z) >= spacing * 0.9)
+      && taken.every(t => Math.hypot(t.x - x, t.z - z) >= (spacing + t.s) / 2 * 0.9);
+    if (!fits) continue;
+    out.push({ ...first, id: Date.now() + Math.random(), position: { ...first.position, x: Math.round(x * 100) / 100, z: Math.round(z * 100) / 100 },
+      rotation: { ...first.rotation, y: (first.rotation?.y || 0) + k * 1.3 } });
+  }
+  return out;
+}
+
 export function DesignProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialState);
 
@@ -279,7 +313,33 @@ export function DesignProvider({ children }) {
     return catalogItem ? Number(catalogItem.unit_price) : Number(item.unit_price || item.price || 0);
   };
 
-  const totalCost = state.placedItems.reduce((sum, item) => sum + getLivePrice(item), 0);
+  // The beds round the placed plants (data/plantBeds.js) and their groundcover: a hand-made design gets planting beds
+  // where its plants are, mulched or carpeted (switch: dimensions.groundcoverOff). A design from the AI Designer keeps
+  // its own beds (gardenPlan): its groundcover covers the yard less its lawn.
+  const ground = useMemo(() => {
+    const lot = lotOf(state.dimensions);
+    const W = lot.width, L = lot.length;
+    const byId = new Map(state.products.map(p => [p.id, p]));
+    const plants = state.placedItems.map(i => ({ item: i, product: byId.get(i.productId) }))
+      .filter(({ product }) => product && product.category === 'plant' && !product.is_groundcover);
+    const plan = state.dimensions?.gardenPlan;
+    const beds = plan?.lawn ? null : plantBeds(plants.map(({ item, product }) => ({
+      x: (Number(item.position?.x) || 0) + W / 2, z: (Number(item.position?.z) || 0) + L / 2,
+      spread: bedSpread(product, layoutSpacing),
+    })), W, L, { outline: lot.outline });
+    const bedArea = plan?.lawn ? Math.max(0, lotArea(lot) - (Number(plan.lawn_area) || 0)) : (beds?.area || 0);
+    const crowns = plants.reduce((sum, { product }) => (grownHeight(product) >= 2.4
+      ? sum + Math.PI * (bedSpread(product, layoutSpacing) / 2) ** 2 : sum), 0);
+    const on = !state.dimensions?.groundcoverOff;
+    const entries = on ? groundcoverFor(bedArea, state.products, crowns) : [];
+    return { beds, bedArea, entries, on, available: state.products.some(p => p.is_groundcover && Number(p.stock_quantity) > 0) };
+  }, [state.placedItems, state.products, state.dimensions]);
+
+  const groundcoverCost = ground.entries.reduce((sum, e) => {
+    const product = state.products.find(p => String(p.id) === String(e.plant_id));
+    return sum + (product ? Number(product.unit_price) * e.area_sqm : 0);
+  }, 0);
+  const totalCost = state.placedItems.reduce((sum, item) => sum + getLivePrice(item), 0) + groundcoverCost;
 
   const costBreakdown = state.placedItems.reduce((acc, item) => {
     const key = item.name || item.model_file || item.modelType;
@@ -292,11 +352,20 @@ export function DesignProvider({ children }) {
     return acc;
   }, {});
 
+  // Groundcover lines: per m² (checkout orders that many units of the product)
+  ground.entries.forEach(e => {
+    const product = state.products.find(p => String(p.id) === String(e.plant_id));
+    if (!product) return;
+    costBreakdown[product.name] = { name: product.name, unitPrice: Number(product.unit_price), quantity: e.area_sqm,
+      subtotal: Number(product.unit_price) * e.area_sqm, unit: 'm²', groundcover: true };
+  });
+
   const value = {
     state,
     dispatch,
     totalCost,
     costBreakdown: Object.values(costBreakdown),
+    ground,   // { beds, bedArea, entries, on, available }
   };
 
   return (

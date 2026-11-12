@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { MapPin, LocateFixed, Loader2, Check, Plus, AlertTriangle } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { MapPin, LocateFixed, Loader2, Check, Plus, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import PinMap from './PinMap';
-import { getAddressAreas, listAddresses } from '../services/api';
-import { emptyAddress, fromSaved, insideTown, metres } from '../data/address';
+import { getAddressAreas, listAddresses, locateAddress } from '../services/api';
+import { emptyAddress, fromSaved, insideTown } from '../data/address';
 
 /*
  * The one address form for checkout and bookings (backend: addresses.py — Quezon Province only, always
@@ -11,7 +11,14 @@ import { emptyAddress, fromSaved, insideTown, metres } from '../data/address';
  *   { city_code, barangay_code, street, landmark, lat, lng, source: 'pin' | 'gps',
  *     savedId?  (picked from the address book), save?, label? (remember it after the order / booking) }
  * Send toPayload(value) as `address` with the order or booking, then rememberAddress(value).
+ *
+ * The pin tells us the town and barangay (backend geo_lookup.py, official boundaries, looked up on our
+ * server): "Use my location" fills them in (the person asked); tapping or dragging the pin fills them when
+ * they're empty, and otherwise only suggests ("This pin is in Brgy. X. Use these?"), never overwriting a choice.
  */
+const ROUGH_GPS_M = 150;   // phone location worse than this: ask the person to check the pin and barangay
+const pinKey = (lat, lng) => `${Number(lat).toFixed(5)},${Number(lng).toFixed(5)}`;
+const placeName = (r) => `${/^barangay\b/i.test(r.barangay_name) ? '' : 'Brgy. '}${r.barangay_name}, ${r.city_name}`;
 const field = 'w-full min-h-[44px] px-3 rounded-xl border border-slate-200 bg-white text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500';
 const lbl = 'block text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-1';
 
@@ -22,7 +29,30 @@ export default function AddressPicker({ value, onChange, signedIn = false, allow
   const [locating, setLocating] = useState(false);
   const [gpsNote, setGpsNote] = useState('');
   const a = value || emptyAddress();
-  const set = (patch) => onChange({ ...a, ...patch });
+  const set = (patch) => send({ ...a, ...patch });   // send(): defined below, called only from events
+  // Lookups answer after the person may have typed more: apply them to the latest value, not this render's
+  const latest = useRef(a);
+  useEffect(() => { latest.current = a; });
+  // Record what we sent at once: a cached lookup can answer before the parent re-renders with it
+  const send = (next) => { latest.current = next; onChange(next); };
+  const patchLatest = (patch) => send({ ...latest.current, ...patch });
+  const [found, setFound] = useState(null);         // { key, status: 'ok' | 'error', result } for one pin
+  const [dismissed, setDismissed] = useState('');   // the pin whose suggestion the person turned down
+  const seq = useRef(0);
+  // → the place, null (outside Quezon), or undefined (couldn't ask: offline…)
+  const lookup = async (lat, lng) => {
+    const n = ++seq.current;
+    const key = pinKey(lat, lng);
+    try {
+      const r = await locateAddress(lat, lng);
+      const result = r?.match ? r : null;
+      if (n === seq.current) setFound({ key, status: 'ok', result });
+      return n === seq.current ? result : undefined;
+    } catch {
+      if (n === seq.current) setFound({ key, status: 'error', result: null });
+      return undefined;
+    }
+  };
 
   const loadAreas = () => getAddressAreas().then((d) => { setAreasError(''); setAreas(d); }).catch(e => setAreasError(e.message));
   useEffect(() => { loadAreas(); }, []);
@@ -60,30 +90,34 @@ export default function AddressPicker({ value, onChange, signedIn = false, allow
     set({ city_code: code, barangay_code: '', savedId: undefined, ...(keepPin ? {} : { lat: null, lng: null }) });
   };
 
-  const useMyLocation = () => {
+  // fresh: called from a saved address ("Not at this address?"): the new address starts clean (no street,
+  // landmark or label from the saved one), and only once the phone has answered, so a refused or failed
+  // location leaves the saved address picked
+  const locateMe = (fresh = false) => {
     if (!navigator.geolocation) { setGpsNote("This browser can't share your location. Tap your house on the map instead."); return; }
     setLocating(true);
     setGpsNote('');
-    navigator.geolocation.getCurrentPosition((pos) => {
+    navigator.geolocation.getCurrentPosition(async (pos) => {
       setLocating(false);
       const lat = pos.coords.latitude, lng = pos.coords.longitude;
-      const patch = { lat, lng, source: 'gps', savedId: undefined };
-      if (!a.city_code) {
-        // Fill in the town when the spot is inside exactly one town's box, and the nearest known barangay
-        const hits = towns.filter(t => insideTown(t, lat, lng) && t.bbox);
-        const strict = hits.filter(t => lat >= t.bbox[0] && lat <= t.bbox[2] && lng >= t.bbox[1] && lng <= t.bbox[3]);
-        const only = strict.length === 1 ? strict[0] : null;
-        if (only) {
-          patch.city_code = only.code;
-          const near = only.barangays.filter(b => b.lat).map(b => ({ b, d: metres({ lat, lng }, b) })).sort((x, y) => x.d - y.d)[0];
-          if (near && near.d < 1500) patch.barangay_code = near.b.code;
-        }
-      }
       const acc = Math.round(pos.coords.accuracy || 0);
-      setGpsNote(towns.length && !towns.some(t => insideTown(t, lat, lng))
-        ? "You seem to be outside Quezon Province. We deliver and build within Quezon; place the pin on the address you're ordering for."
-        : `Pinned from your phone's location${acc ? ` (accurate to about ${acc} m)` : ''}. Drag the pin if it's not exactly on your house.`);
-      set(patch);
+      const rough = acc > ROUGH_GPS_M
+        ? ` Your phone's location is rough (about ${acc} m): check that the pin is on your house and the barangay is right.` : '';
+      setDismissed('');
+      const pin = { lat, lng, source: 'gps', savedId: undefined };
+      if (fresh) send({ ...emptyAddress(), ...pin }); else patchLatest(pin);
+      setGpsNote('Pinned. Finding your town and barangay…');
+      const next = fresh ? ' Now add your street and a landmark.' : '';
+      const place = await lookup(lat, lng);
+      if (place) {
+        // The person asked for their location: fill both in, even over an earlier choice, and say so
+        patchLatest({ lat, lng, source: 'gps', savedId: undefined, city_code: place.city_code, barangay_code: place.barangay_code });
+        setGpsNote(`Filled in from your location: ${placeName(place)}. Change them if this isn't right.${next}${rough || ' Drag the pin if it isn\'t exactly on your house.'}`);
+      } else if (place === null) {
+        setGpsNote("You seem to be outside Quezon Province. We deliver and build within Quezon; place the pin on the address you're ordering for.");
+      } else {
+        setGpsNote(`Pinned from your phone's location${acc ? ` (accurate to about ${acc} m)` : ''}. Choose your town and barangay above.${next}${rough}`);
+      }
     }, (err) => {
       setLocating(false);
       setGpsNote(err.code === err.PERMISSION_DENIED
@@ -91,6 +125,27 @@ export default function AddressPicker({ value, onChange, signedIn = false, allow
         : "Couldn't get your location. Tap your house on the map instead.");
     }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
   };
+
+  const movePin = async (p) => {
+    patchLatest({ ...p, source: a.source === 'gps' && hasPin ? 'gps' : 'pin', savedId: undefined });
+    setGpsNote('');
+    setDismissed('');
+    const place = await lookup(p.lat, p.lng);
+    if (!place) return;
+    const cur = latest.current;
+    if (!cur.city_code || (cur.city_code === place.city_code && !cur.barangay_code)) {
+      patchLatest({ city_code: place.city_code, barangay_code: place.barangay_code });
+      setGpsNote(`Town and barangay filled in from the pin: ${placeName(place)}.`);
+    }
+  };
+
+  // What the boundaries say about the pin as it is now (only the answer for this exact pin counts)
+  const here = hasPin && found?.key === pinKey(a.lat, a.lng) ? found : null;
+  const place = here?.status === 'ok' ? here.result : undefined;          // undefined: not asked / failed
+  const outsideQuezon = here?.status === 'ok' && here.result === null;
+  const disagrees = place && a.city_code && (place.city_code !== a.city_code || place.barangay_code !== a.barangay_code);
+  const suggest = disagrees && dismissed !== pinKey(a.lat, a.lng);
+  const agrees = place && place.city_code === a.city_code && place.barangay_code === a.barangay_code;
 
   if (areasError) {
     return (
@@ -131,8 +186,17 @@ export default function AddressPicker({ value, onChange, signedIn = false, allow
       )}
 
       {chosenSaved ? (
-        <PinMap center={{ lat: chosenSaved.lat, lng: chosenSaved.lng, zoom: 16 }} value={{ lat: chosenSaved.lat, lng: chosenSaved.lng }}
-          readOnly height={160} ariaLabel={`Map of ${chosenSaved.label}`} />
+        <div>
+          <PinMap center={{ lat: chosenSaved.lat, lng: chosenSaved.lng, zoom: 16 }} value={{ lat: chosenSaved.lat, lng: chosenSaved.lng }}
+            readOnly height={160} ariaLabel={`Map of ${chosenSaved.label}`} />
+          {/* Ordering for where you are right now, not this saved place: start a new address from the phone's location */}
+          <button type="button" onClick={() => locateMe(true)} disabled={locating || !areas}
+            className="mt-2 inline-flex items-center gap-1.5 min-h-[36px] px-1 bg-transparent border-none text-xs font-bold text-emerald-700 cursor-pointer disabled:opacity-60 hover:underline">
+            {locating ? <Loader2 size={14} className="animate-spin" /> : <LocateFixed size={14} />}
+            {locating ? 'Finding where you are…' : `Not at ${chosenSaved.label}? Use my location instead`}
+          </button>
+          {gpsNote && <p className="m-0 mt-1 text-xs text-slate-500" role="status">{gpsNote}</p>}
+        </div>
       ) : (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -167,14 +231,14 @@ export default function AddressPicker({ value, onChange, signedIn = false, allow
           <div>
             <div className="flex items-center justify-between gap-2 mb-1.5 flex-wrap">
               <span className={lbl + ' mb-0'}><MapPin size={11} className="inline -mt-0.5" /> Pin your exact location</span>
-              <button type="button" onClick={useMyLocation} disabled={locating || !areas}
+              <button type="button" onClick={() => locateMe()} disabled={locating || !areas}
                 className="inline-flex items-center gap-1.5 min-h-[36px] px-3 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-800 text-xs font-bold cursor-pointer disabled:opacity-60">
                 {locating ? <Loader2 size={14} className="animate-spin" /> : <LocateFixed size={14} />} Use my location
               </button>
             </div>
             <div className="relative">
               <PinMap center={center} value={hasPin ? { lat: a.lat, lng: a.lng } : null} height={mapHeight}
-                onChange={(p) => set({ ...p, source: a.source === 'gps' && hasPin ? 'gps' : 'pin', savedId: undefined })}
+                onChange={movePin}
                 ariaLabel="Map: tap your house to pin it" />
               {!hasPin && (
                 <div className="pointer-events-none absolute left-1/2 -translate-x-1/2 bottom-3 z-[500] px-3 py-1.5 rounded-full bg-slate-900/85 text-white text-xs font-bold whitespace-nowrap">
@@ -183,7 +247,32 @@ export default function AddressPicker({ value, onChange, signedIn = false, allow
               )}
             </div>
             {gpsNote && <p className="m-0 mt-1.5 text-xs text-slate-500" role="status">{gpsNote}</p>}
-            {pinOutside && (
+            {suggest && (
+              <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900" role="status">
+                <p className="m-0">This pin is in <b>{placeName(place)}</b>{place.match === 'near' ? ' (just at its edge)' : ''}, not the {place.city_code !== a.city_code ? 'town' : 'barangay'} you chose.</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button type="button" onClick={() => { set({ city_code: place.city_code, barangay_code: place.barangay_code, savedId: undefined }); setGpsNote(''); }}
+                    className="min-h-[36px] px-3 rounded-lg border-none bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold cursor-pointer">
+                    Use {/^barangay\b/i.test(place.barangay_name) ? place.barangay_name : `Brgy. ${place.barangay_name}`}
+                  </button>
+                  <button type="button" onClick={() => setDismissed(pinKey(a.lat, a.lng))}
+                    className="min-h-[36px] px-3 rounded-lg border border-amber-300 bg-white text-amber-900 text-xs font-bold cursor-pointer">
+                    Keep my choice
+                  </button>
+                </div>
+              </div>
+            )}
+            {agrees && !gpsNote && (
+              <p className="m-0 mt-1.5 text-xs text-emerald-700 flex items-center gap-1" role="status">
+                <CheckCircle2 size={13} className="shrink-0" /> The pin is in {placeName(place)}.
+              </p>
+            )}
+            {outsideQuezon && !gpsNote && (
+              <p className="m-0 mt-1.5 text-xs font-semibold text-amber-700 flex items-start gap-1" role="alert">
+                <AlertTriangle size={13} className="shrink-0 mt-0.5" /> This pin is outside Quezon Province. We deliver and build within Quezon: move it onto the address.
+              </p>
+            )}
+            {pinOutside && !here && (
               <p className="m-0 mt-1.5 text-xs font-semibold text-amber-700 flex items-start gap-1" role="alert">
                 <AlertTriangle size={13} className="shrink-0 mt-0.5" /> The pin is outside {town.name}. Move it onto your house, or check the town.
               </p>

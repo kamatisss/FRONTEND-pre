@@ -20,10 +20,76 @@ const nameOf = (u) => (u.first_name || u.last_name ? `${u.first_name || ''} ${u.
 
 // Staff first: they are the accounts the owner actually manages; customers are many
 const GROUPS = [
-    ['staff', 'Staff', (u) => roleOf(u) !== 'CUSTOMER'],
-    ['customers', 'Customers', (u) => roleOf(u) === 'CUSTOMER'],
-    ['all', 'All', () => true],
+    ['staff', 'Staff', (u) => !u.closed && roleOf(u) !== 'CUSTOMER'],
+    ['customers', 'Customers', (u) => !u.closed && roleOf(u) === 'CUSTOMER'],
+    ['all', 'All', (u) => !u.closed],
+    // Customers who closed their account (My account → Privacy): only what the business kept
+    ['closed', 'Closed', (u) => !!u.closed],
 ];
+
+const fmtDay = (iso) => (iso ? new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '—');
+const pesoAmount = (n) => `₱${Number(n || 0).toLocaleString('en-PH', { maximumFractionDigits: 0 })}`;
+const keptText = (r) => [[r.orders, 'order'], [r.bookings, 'booking'], [r.reviews, 'review']]
+    .filter(([n]) => n > 0).map(([n, w]) => `${n} ${w}${n === 1 ? '' : 's'}`).join(' · ') || 'Nothing kept';
+
+/* Closed accounts: who it was is gone (erased at the customer's request); the records the business must keep
+   remain, so the owner can still answer "what happened to order #…" and the totals stay right. Read-only. */
+function ClosedAccounts({ rows, isPhone }) {
+    const note = (
+        <p style={{ margin: '0 0 12px', padding: '10px 14px', borderRadius: 12, background: '#f8fafc', border: '1px solid #e2e8f0',
+            color: '#475569', fontSize: 13.5, lineHeight: 1.5 }}>
+            These customers closed their account. Their name, email, mobile number and addresses were erased; their orders,
+            bookings, payments and reviews stay as business records. A closed account can't be re-activated, edited or deleted.
+        </p>
+    );
+    if (!rows.length) {
+        return <>{note}<p style={{ padding: 24, color: '#64748b', textAlign: 'center', margin: 0, border: '1px solid #e2e8f0', borderRadius: 12 }}>No closed accounts.</p></>;
+    }
+    if (isPhone) {
+        return (
+            <>
+                {note}
+                <ul style={{ listStyle: 'none', margin: 0, padding: 0, border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden', background: '#ffffff' }}>
+                    {rows.map((r, i) => (
+                        <li key={r.id} style={{ borderTop: i ? '1px solid #f1f5f9' : 'none', padding: '12px 14px' }}>
+                            <span style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                                <b style={{ color: '#1e293b', fontSize: 15 }}>Closed account #{r.id}</b>
+                                <span style={{ color: '#0f766e', fontWeight: 700, fontSize: 14 }}>{pesoAmount(r.paid_total)}</span>
+                            </span>
+                            <span style={{ display: 'block', marginTop: 2, fontSize: 13, color: '#64748b' }}>Closed {fmtDay(r.closed_at)} · joined {fmtDay(r.date_joined)}</span>
+                            <span style={{ display: 'block', marginTop: 2, fontSize: 13, color: '#475569' }}>{keptText(r)}</span>
+                        </li>
+                    ))}
+                </ul>
+            </>
+        );
+    }
+    const th = { padding: '14px 16px', color: '#475569', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #e2e8f0', fontWeight: 700 };
+    const td = { padding: '14px 16px', borderBottom: '1px solid #f1f5f9', color: '#334155', fontSize: 14 };
+    return (
+        <>
+            {note}
+            <div className="rs-scroll-x" style={{ borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+                <table style={{ width: '100%', minWidth: 640, borderCollapse: 'collapse', textAlign: 'left' }}>
+                    <thead style={{ background: '#f8fafc' }}>
+                        <tr><th style={th}>Account</th><th style={th}>Closed</th><th style={th}>Joined</th><th style={th}>Records kept</th><th style={{ ...th, textAlign: 'right' }}>Paid in total</th></tr>
+                    </thead>
+                    <tbody>
+                        {rows.map(r => (
+                            <tr key={r.id}>
+                                <td style={{ ...td, fontWeight: 700, color: '#1e293b' }}>Closed account #{r.id}</td>
+                                <td style={{ ...td, whiteSpace: 'nowrap' }}>{fmtDay(r.closed_at)}</td>
+                                <td style={{ ...td, whiteSpace: 'nowrap', color: '#64748b' }}>{fmtDay(r.date_joined)}</td>
+                                <td style={td}>{keptText(r)}</td>
+                                <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: '#0f766e' }}>{pesoAmount(r.paid_total)}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </>
+    );
+}
 
 function RoleBadge({ role }) {
     const st = ROLE_STYLE[role] || { bg: '#F3F4F6', color: '#374151' };
@@ -76,7 +142,7 @@ const ManageUsers = () => {
 
     // The server pages the accounts (30 at a time) and counts each tab, so the owner's phone doesn't
     // download every customer (UserViewSet.list ?page=&group=&q=)
-    const [counts, setCounts] = useState({ staff: 0, customers: 0, all: 0 });
+    const [counts, setCounts] = useState({ staff: 0, customers: 0, all: 0, closed: 0 });
     const [page, setPage] = useState(1);
     const [hasMore, setHasMore] = useState(false);
     const [loadingMore, setLoadingMore] = useState(false);
@@ -470,6 +536,8 @@ const ManageUsers = () => {
                         const on = group === k;
                         return (
                             <button key={k} role="tab" aria-selected={on} onClick={() => setGroup(k)}
+                                // Phones: the tab row scrolls sideways; keep the chosen tab (e.g. Closed) in view
+                                ref={on ? (el) => el?.scrollIntoView({ block: 'nearest', inline: 'nearest' }) : undefined}
                                 style={{ flexShrink: 0, minHeight: 44, padding: '0 16px', borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit',
                                     fontSize: 14, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 8,
                                     border: `1px solid ${on ? '#0f172a' : '#e2e8f0'}`, background: on ? '#0f172a' : '#ffffff', color: on ? '#ffffff' : '#475569' }}>
@@ -497,6 +565,8 @@ const ManageUsers = () => {
                         <p style={{ margin: '0 0 12px 0', fontWeight: '700' }}>Failed to load users</p>
                         <p style={{ margin: 0, fontSize: '14px' }}>{error}</p>
                     </div>
+                ) : group === 'closed' ? (
+                    <ClosedAccounts rows={shownUsers} isPhone={isPhone} />
                 ) : isPhone ? (
                     filteredUsers.length === 0 ? (
                         <p style={{ padding: 24, color: '#64748b', textAlign: 'center', margin: 0, border: '1px solid #e2e8f0', borderRadius: 12 }}>No matching accounts found.</p>

@@ -155,7 +155,8 @@ export default function BudgetPicker({ areaSqm, lotWidth, lotLength, install, on
         </div>
       )}
       <p className="text-xs text-slate-400 mt-1 mb-0">
-        You'll get three designs across your range: Minimalist near the low end, Symmetrical in the middle, Lush at the top.
+        You'll get three styles for your budget (up to the top of your range). Each spends it its own way, and every
+        plant and feature you pick is in all three.
       </p>
     </div>
   );

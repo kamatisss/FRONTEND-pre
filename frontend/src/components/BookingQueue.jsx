@@ -13,6 +13,7 @@ import { downloadWithAuth } from './ui/download';
 import { esc, openPrintWindow, printedAt } from './ui/printWindow';
 import ProgressPhotos from './ProgressPhotos';
 
+import { OfficeDesignApproval } from './DesignApproval';
 /* Staff bookings, organised as work queues plus a weekly dispatch calendar.
    Lists are paged by the server (BACKEND work_queues.py), so this stays fast at any volume.
    Flow: Pending → (office confirms) Preparing → (crew checks in on site) Installing
@@ -594,6 +595,8 @@ function BookingDrawer({ api, authHeaders, toast, open, busy, stamp, onClose, on
                   </div>
                 </div>
                 <PlantBOM breakdown={design.plant_breakdown} />
+                {/* Final design: adjust after the site visit, send, customer approves (design_review.py) */}
+                <OfficeDesignApproval booking={b} onChanged={(nb) => { setBooking(nb); onChanged(); }} />
               </section>
             )}
 

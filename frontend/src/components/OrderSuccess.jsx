@@ -24,7 +24,8 @@ export default function OrderSuccess() {
   const cancelled = searchParams.get('cancelled') === '1';
 
   const [order, setOrder]     = useState(null);
-  const [error, setError]     = useState('');
+  const [loadError, setError] = useState('');
+  const error = orderId ? loadError : 'No order to show.';
   const [polls, setPolls]     = useState(0);
   const [paying, setPaying]   = useState(false);
   const [payError, setPayError] = useState('');
@@ -35,7 +36,7 @@ export default function OrderSuccess() {
   }, []);
 
   useEffect(() => {
-    if (!orderId) { setError('No order to show.'); return; }
+    if (!orderId) return;
     getOrderReceipt(orderId, token).then(setOrder).catch(e => setError(e.message));
   }, [orderId, token]);
 

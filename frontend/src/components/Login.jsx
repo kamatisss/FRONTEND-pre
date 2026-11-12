@@ -26,7 +26,15 @@ export default function Login() {
   const [error,        setError]        = useState('');
   const [loading,      setLoading]      = useState(false);
 
-  const successMessage = location.state?.message || '';
+  // A notice left by AuthContext (e.g. "you were signed out on all devices"): shown once, then cleared
+  const [notice] = useState(() => {
+    try {
+      const text = sessionStorage.getItem('sign_in_notice') || '';
+      sessionStorage.removeItem('sign_in_notice');
+      return text;
+    } catch { return ''; }
+  });
+  const successMessage = location.state?.message || notice;
   const from           = location.state?.from?.pathname || null;
 
   const handleSubmit = async (e) => {

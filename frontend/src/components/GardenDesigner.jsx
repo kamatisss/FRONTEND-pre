@@ -1,4 +1,5 @@
 import { useRef, useMemo, useEffect, Suspense, useCallback, useState } from 'react';
+import { useLawnLook } from '../data/lawnLook';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls, ContactShadows, Environment, Html, Preload } from '@react-three/drei';
 import { EffectComposer, N8AO, Bloom, Vignette, ToneMapping } from '@react-three/postprocessing';
@@ -8,12 +9,15 @@ import {
   Upload, AlertTriangle, Mountain, Sun, X, Pencil, Lock, CloudOff, Save, Sprout, BrickWall, Armchair, Ruler
 } from 'lucide-react';
 import LotSizePanel from './LotSizePanel';
-import { lotOf, itemsOutsideLot } from '../data/lot';
+import { lotOf, itemsOutsideLot, insideLot } from '../data/lot';
 import GrowthStagePicker from './GrowthStagePicker';
 
 import { useDesign } from '../context/DesignContext';
-import { generateDepthMap, getInventoryItems, loadDesign } from '../services/api';
+import { generateDepthMap, getInventoryItems } from '../services/api';
 import GardenBackground from './GardenBackground';
+import { bedSpread } from '../data/plantBeds';
+import { grownHeight, layoutSpacing } from '../data/pricing';
+import { setSway } from '../data/plantSway';
 import PlacedObject from './PlacedObject';
 import AssetLibrarySidebar from './AssetLibrarySidebar';
 import StudioItemTray from './StudioItemTray';
@@ -29,6 +33,7 @@ import { saveStudioDraft, loadStudioDraft, clearStudioDraft, trackFunnel } from 
 import { DEFAULT_TIME_OF_DAY, TIME_PRESETS } from '../data/studioLight';
 import { MEDIA_BASE_URL as MEDIA_ROOT } from '../config';
 
+import { loadDesignForStudio } from '../data/studioDesign';
 // ─────────────────────────────────────────────────────────────────────────────
 // SKY COLOR LOOKUP TABLE
 // ─────────────────────────────────────────────────────────────────────────────
@@ -51,10 +56,6 @@ const SKY_KEYFRAMES = [
   [ 20,   '#0d1030', '#1a1a44', '#121430', '#2a2e52', '#080a14', 0.2  ],
   [ 24,   '#050b1f', '#0c1430', '#0a1226', '#1a2040', '#050810', 0.12 ],
 ];
-
-function hexToColor(hex) {
-  return new THREE.Color(hex);
-}
 
 function lerpColor(hexA, hexB, t) {
   const cA = new THREE.Color(hexA);
@@ -227,7 +228,8 @@ function DynamicAmbience({ timeOfDay }) {
       hemiRef.current.groundColor.copy(hemiGnd);
     }
   });
-  const init = useMemo(() => getSkyColors(timeOfDay), []);
+  // Starting colours only (first render); useFrame above keeps them in step with timeOfDay
+  const [init] = useState(() => getSkyColors(timeOfDay));
   return (
     <>
       <ambientLight ref={ambientRef} intensity={0.45} color={`#${init.ambient.getHexString()}`} />
@@ -396,8 +398,14 @@ const LIBRARY_TOOLS = [
 // guest: the free Studio on /try-studio. Everything that needs an account
 // (photo terrain, saving, checkout, AI) calls onGate(intent) instead, and the
 // work-in-progress is kept on this device until the visitor signs in.
+// The wind for the Studio's plants (data/plantSway.js): set every frame, before this canvas draws
+function SwayClock() {
+  useFrame(({ clock }) => setSway(true, clock.elapsedTime));
+  return null;
+}
+
 export default function GardenDesigner({ guest = false, onGate = () => {} }) {
-  const { state, dispatch } = useDesign();
+  const { state, dispatch, ground } = useDesign();
   const [openDrawer, setOpenDrawer] = useState(null);
   // Phones: catalogs open as a one-row tray over the garden; "See all" opens the full library sheet
   const [fullLibrary, setFullLibrary] = useState(false);
@@ -494,29 +502,10 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
         const autoLoadDesign = async () => {
           try {
             dispatch({ type: 'SET_LOADING', payload: true });
-            const design = await loadDesign(designId);
-            dispatch({
-              type: 'LOAD_DESIGN',
-              payload: {
-                designId: design.id,
-                designName: design.name,
-                depthData: design.depth_data,
-                originalImageUrl: design.original_image_url || '',
-                placedItems: (design.placed_items || []).map((item, idx) => ({
-                  id: Date.now() + idx,
-                  productId: item.product_id,
-                  name: item.name,
-                  modelType: item.model_type || item.modelType,
-                  price: item.price,
-                  position: item.position || { x: 0, y: 0, z: 0 },
-                  rotation: item.rotation || { x: 0, y: 0, z: 0 },
-                  scale: item.scale || { x: 1, y: 1, z: 1 }
-                })),
-                dimensions: design.dimensions || { width: 10, length: 15, terrainType: 'flat' },
-                terrainHeight: design.terrain_height || 1.5,
-                timeOfDay: design.time_of_day ?? DEFAULT_TIME_OF_DAY
-              }
-            });
+            // Both design formats (AI Designer and Studio), extra items kept (data/studioDesign.js)
+            const { payload, products } = await loadDesignForStudio(designId, []);   // fetches the catalog only if an AI design needs it
+            if (products) dispatch({ type: 'SET_PRODUCTS', payload: products });
+            dispatch({ type: 'LOAD_DESIGN', payload });
           } catch (err) {
             console.error('Auto-load design failed:', err);
             dispatch({ type: 'SET_ERROR', payload: 'Failed to auto-load design: ' + err.message });
@@ -546,9 +535,20 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
 
   // The customer's lot: drawn in 3D, enforced for placement, used by the estimate (data/lot.js)
   const lot = lotOf(state.dimensions);
+  // The placed plants for the groundcover's shade (lot metres from the back-left corner; grown height and spread)
+  const groundPlants = useMemo(() => {
+    const W = lot.width, L = lot.length;
+    const byId = new Map(state.products.map(p => [p.id, p]));
+    return state.placedItems.map(i => ({ i, p: byId.get(i.productId) })).filter(({ p }) => p?.category === 'plant' && !p.is_groundcover)
+      .map(({ i, p }) => ({ x: (Number(i.position?.x) || 0) + W / 2, z: (Number(i.position?.z) || 0) + L / 2,
+        h: grownHeight(p), s: bedSpread(p, layoutSpacing) }));
+  }, [state.placedItems, state.products, lot.width, lot.length]);
   const [fogRange, setFogRange] = useState([18, 55]);   // follows the lot framing (LotFraming)
   const [showGrid, setShowGrid] = useState(false);
+  const [lawnLook, setLawnLook] = useLawnLook();   // how long the grass looks (remembered in this browser)
   const outside = itemsOutsideLot(state.placedItems, lot);
+  // A shaped yard: only items beyond the whole lot can be fixed by enlarging it
+  const outsideBox = outside.some(it => !insideLot(Number(it.position.x), Number(it.position.z), { ...lot, outline: null }));
 
   const getMediaUrl = (path) => path ? `${MEDIA_ROOT}${path}` : null;
 
@@ -633,7 +633,7 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
     }
   };
 
-  const handleTerrainClick = useCallback((e) => {
+  const handleTerrainClick = useCallback(() => {
     if (isPlacing && state.previewValid) {
       dispatch({ type: 'CONFIRM_PLACEMENT' });
     }
@@ -706,7 +706,7 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
 
           <div style={S.drawerContent}>
             {openDrawer === 'lot' ? (
-              <LotSizePanel showGrid={showGrid} onToggleGrid={() => setShowGrid(g => !g)} />
+              <LotSizePanel showGrid={showGrid} onToggleGrid={() => setShowGrid(g => !g)} lawnLook={lawnLook} onLawnLook={setLawnLook} />
             ) : openDrawer === 'environment' ? (
               <div>
                 {/* Reference image previews */}
@@ -867,6 +867,7 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
               <SunLight timeOfDay={state.timeOfDay} />
               {/* Removed the secondary static directionalLight to let SunLight and Environment control lighting */}
               {/* Reflections only: at full strength the "park" map washed the whole garden out */}
+              <SwayClock />
               <Environment preset="park" background={false}
                 environmentIntensity={0.12 + 0.33 * Math.min(1, getSkyColors(state.timeOfDay).sunIntensity / 2)} />
 
@@ -876,14 +877,18 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
                   originalImageUrl={state.originalImageUrl}
                   depthMapUrl={state.depthData ? getMediaUrl(state.depthData.depth_map_url) : null}
                   normalMapUrl={state.depthData ? getMediaUrl(state.depthData.normal_map_url) : null}
-                  rockMaskUrl={state.depthData ? getMediaUrl(state.depthData.rock_mask_url) : null}
-                  grassMaskUrl={state.depthData ? getMediaUrl(state.depthData.grass_mask_url) : null}
                   displacementScale={terrainDepth}
                   onTerrainClick={handleTerrainClick}
                   lotWidth={lot.width}
                   lotLength={lot.length}
+                  outline={lot.outline}
                   showGrid={showGrid}
                   gardenPlan={state.dimensions?.gardenPlan}
+                  ground={ground}
+                  groundPlants={groundPlants}
+                  growthStage={state.growthStage}
+                  lite={phone}
+                  lawnLook={lawnLook}
                 />
                 {state.placedItems.map(item => (
                   item.id === state.editingItemId ? null : (
@@ -921,17 +926,19 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
               background: '#FFFBEB', border: '1px solid #FCD34D', boxShadow: '0 6px 20px rgba(0,0,0,0.12)' }}>
               <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 700, color: '#92400E', flex: '1 1 200px', minWidth: 0 }}>
                 <AlertTriangle size={16} style={{ flexShrink: 0 }} />
-                {outside.length} item{outside.length > 1 ? 's are' : ' is'} outside your {lot.width} × {lot.length} m lot
+                {outside.length} item{outside.length > 1 ? 's are' : ' is'} outside your {lot.outline ? "yard's shape" : `${lot.width} × ${lot.length} m lot`}
               </span>
               <span style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                 <button type="button" onClick={() => dispatch({ type: 'MOVE_ITEMS_INTO_LOT' })}
                   style={{ minHeight: 36, padding: '0 12px', borderRadius: 10, border: 'none', background: '#059669', color: '#fff', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
                   Move inside
                 </button>
-                <button type="button" onClick={() => dispatch({ type: 'FIT_LOT_TO_ITEMS' })}
-                  style={{ minHeight: 36, padding: '0 12px', borderRadius: 10, border: '1px solid #FCD34D', background: '#fff', color: '#92400E', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
-                  Enlarge lot
-                </button>
+                {(!lot.outline || outsideBox) && (
+                  <button type="button" onClick={() => dispatch({ type: 'FIT_LOT_TO_ITEMS' })}
+                    style={{ minHeight: 36, padding: '0 12px', borderRadius: 10, border: '1px solid #FCD34D', background: '#fff', color: '#92400E', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
+                    Enlarge lot
+                  </button>
+                )}
               </span>
             </div>
           )}

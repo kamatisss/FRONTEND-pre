@@ -321,6 +321,7 @@ export default function PlacedObject({ item, orbitControlsRef }) {
               targetWidth={stageSpread(productMatch || item, stage, category)}
               stage={stage}
               establishedSize={establishedH || undefined}
+              sway={category === 'plant'}
             />
           </Suspense>
         </ErrorBoundary>

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useEffectEvent, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Link, useLocation } from 'react-router-dom';
 import { Calendar, Check, Clock, MapPin, AlertTriangle, Star, CalendarPlus, CheckCircle2, CalendarCheck, Sparkles, X, AlertCircle, CreditCard } from 'lucide-react';
@@ -13,6 +13,10 @@ import { API_BASE_URL as API_ROOT, MEDIA_BASE_URL as MEDIA_ROOT } from '../confi
 import AddressPicker from './AddressPicker';
 import { addressReady, toPayload, rememberAddress, firstError } from '../data/address';
 
+import { CustomerDesignApproval } from './DesignApproval';
+import { useMe, phoneDiffers, saveMyPhone } from '../services/me';
+import SavePhoneToggle from './ui/SavePhoneToggle';
+import { normalizePhMobile } from '../services/checkout';
 const getActiveStep = (status, hasDesign) => {
     switch (status) {
         case 'Pending':
@@ -204,11 +208,16 @@ const BookingMilestoneTracker = ({ status, hasDesign }) => {
 
 /* ─── NewBookingModal Component ─── */
 function NewBookingModal({ isOpen, onClose, onSuccess }) {
-    const { authTokens } = useAuth();
+    const { authTokens, applyTokens } = useAuth();
+    const me = useMe();   // My account: the saved mobile number fills the contact number
     const [blackoutDates, setBlackoutDates] = useState([]);
     const [selectedDate, setSelectedDate] = useState(null);
     const [serviceType, setServiceType] = useState('maintenance');
-    const [contactNumber, setContactNumber] = useState('');
+    const [contactNumber, setContactNumber] = useState(null);   // null = not typed: show the account's number
+    const contactValue = contactNumber ?? me?.phone ?? '';
+    const contactInvalid = contactValue.trim() !== '' && !normalizePhMobile(contactValue);
+    const [savePhone, setSavePhone] = useState(null);   // null = default: save only if the account has no number yet
+    const savePhoneOn = savePhone ?? !me?.phone;
     const [siteAddress, setSiteAddress] = useState(null);   // AddressPicker value (pinned, Quezon)
     const [preferredTime, setPreferredTime] = useState('anytime');
     const [notes, setNotes] = useState('');
@@ -272,6 +281,10 @@ function NewBookingModal({ isOpen, onClose, onSuccess }) {
             return;
         }
 
+        if (contactInvalid) {
+            setMessage('Enter a PH mobile number for the crew, e.g. 09171234567.');
+            return;
+        }
         setLoading(true);
         setMessage('');
 
@@ -289,7 +302,7 @@ function NewBookingModal({ isOpen, onClose, onSuccess }) {
                 body: JSON.stringify({
                     service_type: serviceType,
                     scheduled_date: formattedDate,
-                    contact_number: contactNumber,
+                    contact_number: normalizePhMobile(contactValue) || contactValue.trim(),
                     preferred_time: preferredTime,
                     address: toPayload(siteAddress),
                     notes: notes,
@@ -300,10 +313,11 @@ function NewBookingModal({ isOpen, onClose, onSuccess }) {
             if (res.ok) {
                 const newBooking = await res.json();
                 await rememberAddress(siteAddress);
+                if (savePhoneOn && phoneDiffers(me, contactValue)) await saveMyPhone(contactValue, applyTokens);
                 onSuccess(newBooking);
                 // Reset form
                 setSelectedDate(null);
-                setContactNumber('');
+                setContactNumber(null);
                 setSiteAddress(null);
                 setPreferredTime('anytime');
                 setNotes('');
@@ -312,7 +326,7 @@ function NewBookingModal({ isOpen, onClose, onSuccess }) {
                 const data = await res.json();
                 setMessage(firstError(data));
             }
-        } catch (error) {
+        } catch {
             setMessage('Error submitting booking.');
         } finally {
             setLoading(false);
@@ -398,12 +412,14 @@ function NewBookingModal({ isOpen, onClose, onSuccess }) {
                             <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">Contact Number</label>
                             <input
                                 type="tel"
-                                value={contactNumber}
+                                value={contactValue}
                                 onChange={(e) => setContactNumber(e.target.value)}
                                 placeholder="e.g. 09171234567"
                                 className="w-full p-3 bg-slate-50 border border-slate-200 rounded-[12px] text-sm text-slate-800 font-medium focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/20 outline-none"
                                 required
                             />
+                            {contactInvalid && <span style={{ fontSize: 11, color: '#dc2626', fontWeight: 600 }}>Enter a PH mobile number, e.g. 09171234567.</span>}
+                            <SavePhoneToggle me={me} phone={contactValue} checked={savePhoneOn} onChange={setSavePhone} id="mybookings-save-phone" />
                         </div>
 
                         {/* Scheduled Date + Preferred Time */}
@@ -559,6 +575,8 @@ const MyBookings = () => {
     const [portfolioByBooking,  setPortfolioByBooking]  = useState({}); // bookingId → portfolio entry
     const isPhone = useIsPhone();
     const location = useLocation();
+    // The "final design is ready" notification links here with ?review=<booking id>
+    const reviewParam = new URLSearchParams(location.search).get('review');
 
     // Automatically open the booking modal if user is redirected from AI Designer page
     useEffect(() => {
@@ -607,11 +625,12 @@ const MyBookings = () => {
         } catch { /* non-critical */ }
     };
 
-    useEffect(() => {
+    const loadAll = useEffectEvent(() => {
         fetchMyBookings();
         fetchMyReviews();
         fetchMyPortfolio();
-    }, []);
+    });
+    useEffect(() => { loadAll(); }, []);
 
     const handleCancelBooking = async (bookingId) => {
         if (window.confirm("Are you sure you want to cancel this booking?")) {
@@ -779,6 +798,10 @@ const MyBookings = () => {
 
                 {/* Milestone Tracker */}
                 <BookingMilestoneTracker status={b.status} hasDesign={!!(b.design || b.design_details)} />
+
+                {/* Final design to approve (design_review.py) */}
+                <CustomerDesignApproval booking={b} initiallyOpen={reviewParam === String(b.id)}
+                    onChanged={(nb) => setBookings(prev => prev.map(x => (x.id === nb.id ? nb : x)))} />
 
                 {/* Project stage & billing (from the project tracker) */}
                 {b.tracker && b.status !== 'Cancelled' && b.tracker.total_price > 0 && (

@@ -111,7 +111,7 @@ export default function NotificationBell() {
           display: flex; align-items: center; justify-content: center; cursor: pointer; color: #475569; transition: background .18s, border-color .18s; }
         .nb-btn:hover, .nb-btn[aria-expanded="true"] { background: #ecfdf5; border-color: #a7f3d0; color: #047857; }
         .nb-badge { position: absolute; top: -5px; right: -5px; min-width: 19px; height: 19px; padding: 0 5px; border-radius: 99px;
-          background: #ef4444; color: #fff; font-size: 11px; font-weight: 800; display: flex; align-items: center; justify-content: center;
+          background: #dc2626; color: #fff; font-size: 11px; font-weight: 800; display: flex; align-items: center; justify-content: center;
           border: 2px solid #fff; line-height: 1; }
         .nb-panel { position: absolute; right: 0; top: calc(100% + 8px); width: 380px; max-height: min(560px, calc(100vh - 90px));
           background: #fff; border: 1px solid #e2e8f0; border-radius: 18px; box-shadow: 0 18px 50px rgba(15,23,42,0.18);

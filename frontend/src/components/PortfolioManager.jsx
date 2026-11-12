@@ -59,7 +59,7 @@ export default function PortfolioManager() {
 
   useEffect(() => {
     listPortfolio().then(setProjects).catch(e => flash(e.message, 'error')).finally(() => setLoading(false));
-  }, []);
+  }, [flash]); // flash never changes (useCallback with no deps), so this still runs once
 
   if (user?.staff_role === 'FIELD_CREW') {
     return <div className="p-10 text-center text-slate-500">The project portfolio is managed by office admins.</div>;
@@ -614,10 +614,11 @@ function RenderCapture({ design, onClose, onCaptured, busy }) {
         </div>
         <div ref={holder} style={{ height: 450 }}>
           <ThreeGardenCanvas
-            plants={toCanvasPlants(design.placed_items)}
+            plants={toCanvasPlants(design.placed_items, design.width || 10, design.length || 15)}
             lotWidth={design.width || 10}
             lotLength={design.length || 15}
             preserveDrawingBuffer
+            lotLabels={false}
           />
         </div>
         <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-slate-100">

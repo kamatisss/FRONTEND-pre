@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Navigation, Phone, StickyNote, Play, LogOut, Camera, Check, Lock, Layers, Eye, FileText, Loader2, AlertTriangle,
-  Car, PackageCheck, ChevronDown, ChevronUp, RotateCcw, Flag, Crosshair,
+  Car, PackageCheck, ChevronDown, ChevronUp, RotateCcw, Flag, Crosshair, Ruler,
 } from 'lucide-react';
 import ProgressPhotos from './ProgressPhotos';
 import ProblemSheet from './ui/ProblemSheet';
@@ -10,6 +10,7 @@ import { productImage } from '../data/productImage';
 import { sendAction, sendPhoto, pendingPhotos } from '../crew/outbox';
 import { useOutbox } from '../crew/useOutbox';
 
+import { CrewDesignStatus } from './DesignApproval';
 /*
  * One crew job, phone-first. Top to bottom: who and when → where (Navigate / Call) → the customer's
  * notes → start or end the shift on this job → the crew's three stages (one photo each) → photos →
@@ -477,15 +478,22 @@ export default function CrewJobCard({
         )}
 
         {/* Secondary: the plan and the paperwork (only what this job has, sharing the row evenly) */}
+        {design && <CrewDesignStatus review={booking.design_review} />}
         <div className="flex gap-2 pt-3 border-t border-slate-100">
           {design && (
             <button type="button" onClick={() => onOpenDesign(design, false)} className={SECONDARY}>
-              <Layers size={15} /> 3D plan
+              <Layers size={15} /> 3D
+            </button>
+          )}
+          {design?.setting_out?.items?.length > 0 && (
+            <button type="button" onClick={() => onOpenDesign(design, 'plan')} className={SECONDARY}
+              title="Where each item goes, measured from the house and the side">
+              <Ruler size={15} /> Plan
             </button>
           )}
           {design && hasAr && (
             <button type="button" onClick={() => onOpenDesign(design, true)} className={SECONDARY}>
-              <Eye size={15} /> AR view
+              <Eye size={15} /> AR
             </button>
           )}
           <button type="button" onClick={() => onWorkOrder(booking.id)} className={SECONDARY}>

@@ -88,7 +88,7 @@ export default function LandingStudioTeaser() {
           <div className="gs-st-frame">
             {preview === 'live' ? (
               <Suspense fallback={<div style={{ padding: 24, color: '#64748b' }}>Loading 3D…</div>}>
-                <ThreeGardenCanvas plants={plants} lotWidth={SAMPLE_LOT.width} lotLength={SAMPLE_LOT.length} readOnly enableZoom={false} enablePan={false} />
+                <ThreeGardenCanvas plants={plants} lotWidth={SAMPLE_LOT.width} lotLength={SAMPLE_LOT.length} enableZoom={false} enablePan={false} lotLabels={false} />
               </Suspense>
             ) : (
               <>

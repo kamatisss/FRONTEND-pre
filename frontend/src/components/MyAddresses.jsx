@@ -6,11 +6,12 @@ import PinMap from './PinMap';
 import { listAddresses, createAddress, updateAddress, deleteAddress, makeDefaultAddress } from '../services/api';
 import { normalizePhMobile } from '../services/checkout';
 
+import { useMe } from '../services/me';
 /* The customer's address book (Quezon Province only, every address pinned). Checkout and bookings
    offer these first; the default one is picked automatically. */
 const MAX = 10;
 
-export default function MyAddresses() {
+export default function MyAddresses({ embedded = false }) {
   const [list, setList] = useState(null);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState(null);   // null | { id?, label, contact_name, contact_phone, address }
@@ -19,7 +20,10 @@ export default function MyAddresses() {
   const load = () => listAddresses().then(setList).catch(() => setError('Could not load your addresses.'));
   useEffect(() => { load(); }, []);
 
-  const startNew = () => setEditing({ label: list?.length ? 'Other' : 'Home', contact_name: '', contact_phone: '', address: emptyAddress() });
+  // A new address starts with the account's own name and mobile as the receiver (change it for someone else)
+  const me = useMe();
+  const startNew = () => setEditing({ label: list?.length ? 'Other' : 'Home',
+    contact_name: me ? `${me.first_name} ${me.last_name}`.trim() : '', contact_phone: me?.phone || '', address: emptyAddress() });
   const startEdit = (a) => setEditing({
     id: a.id, label: a.label, contact_name: a.contact_name, contact_phone: a.contact_phone,
     address: { city_code: a.city_code, barangay_code: a.barangay_code, street: a.street, landmark: a.landmark, lat: a.lat, lng: a.lng, source: 'pin' },
@@ -48,10 +52,12 @@ export default function MyAddresses() {
   const makeDefault = async (a) => { await makeDefaultAddress(a.id).catch(() => {}); load(); };
 
   return (
-    <div className="max-w-3xl mx-auto px-4 py-6 sm:py-8">
+    <div className={embedded ? '' : 'max-w-3xl mx-auto px-4 py-6 sm:py-8'}>
       <div className="flex items-start justify-between gap-3 mb-5 flex-wrap">
         <div>
-          <h1 className="m-0 text-2xl font-extrabold text-slate-900">My Addresses</h1>
+          {/* Inside My account the tab already names it */}
+          {embedded ? <h2 className="m-0 text-lg font-extrabold text-slate-900">Addresses</h2>
+            : <h1 className="m-0 text-2xl font-extrabold text-slate-900">My Addresses</h1>}
           <p className="m-0 mt-1 text-sm text-slate-500">Saved addresses for deliveries and garden services in Quezon Province. Checkout picks your default.</p>
         </div>
         {!editing && list && list.length < MAX && (

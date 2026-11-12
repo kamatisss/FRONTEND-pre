@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useEffectEvent, useState } from 'react';
 import { X, Wallet, History, Flag, Link2, Copy, Check, Mail } from 'lucide-react';
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -13,7 +13,7 @@ import { X, Wallet, History, Flag, Link2, Copy, Check, Mail } from 'lucide-react
    ═══════════════════════════════════════════════════════════════════════ */
 
 // Mirrors ProjectTracker.STATUS_CHOICES in the backend
-export const PROJECT_STAGES = [
+const PROJECT_STAGES = [
   ['PENDING', 'Pending'],
   ['CONSULTATION_SCHEDULED', 'Consultation Scheduled'],
   ['SITE_INSPECTION', 'Site Inspection'],
@@ -62,22 +62,28 @@ export default function ProjectBillingModal({ booking, apiBase, headers, onClose
     setStage(t.status);
   };
 
-  useEffect(() => {
-    if (!trackerId) return;
-    fetch(`${apiBase}/projects/${trackerId}/`, { headers })
+  // headers is a new object on every parent render: read it through effect events, so the
+  // loads only re-run when the tracker changes
+  const loadTracker = useEffectEvent((id) => {
+    fetch(`${apiBase}/projects/${id}/`, { headers })
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then(applyTracker)
       .catch(() => setError('Could not load the project tracker.'))
       .finally(() => setLoading(false));
+  });
+  useEffect(() => {
+    if (trackerId) loadTracker(trackerId);
   }, [trackerId]);
 
   // Payment requests change on their own when the customer pays, so reload them with the tracker
-  useEffect(() => {
-    if (!tracker) return;
-    fetch(`${apiBase}/projects/${tracker.id}/payment-requests/`, { headers })
+  const loadRequests = useEffectEvent((id) => {
+    fetch(`${apiBase}/projects/${id}/payment-requests/`, { headers })
       .then((r) => (r.ok ? r.json() : []))
       .then(setRequests)
       .catch(() => {});
+  });
+  useEffect(() => {
+    if (tracker) loadRequests(tracker.id);
   }, [tracker]);
 
   // Runs a request; on success refreshes this view and the booking list

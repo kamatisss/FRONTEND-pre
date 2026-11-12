@@ -13,6 +13,7 @@ import ScrollManager from "./components/ui/ScrollManager";
 import PwaStatus from "./components/ui/PwaStatus";
 import AppHome from "./components/AppHome";
 import { CartProvider } from "./context/CartContext";
+import { ToastProvider } from "./components/ui/Toast";
 import "./App.css";
 
 // Pages load on demand: the landing page stays light, and three.js / the dashboards
@@ -27,7 +28,7 @@ const ManageAvailability = lazy(() => import("./components/ManageAvailability"))
 const BookService = lazy(() => import("./components/BookService"));
 const MyBookings = lazy(() => import("./components/MyBookings"));
 const UserOrders = lazy(() => import("./components/UserOrders"));
-const MyAddresses = lazy(() => import("./components/MyAddresses"));
+const MyAccount = lazy(() => import("./components/MyAccount"));
 const OrderSuccess = lazy(() => import("./components/OrderSuccess"));
 const ProjectPayment = lazy(() => import("./components/ProjectPayment"));
 const StaffAttendance = lazy(() => import("./components/StaffAttendance"));
@@ -46,6 +47,7 @@ const AIDesignerGate = lazy(() => import("./components/AIDesignerGate"));
 const ProjectGallery = lazy(() => import("./components/ProjectHub").then(m => ({ default: m.ProjectGallery })));
 const ProjectDetail = lazy(() => import("./components/ProjectHub").then(m => ({ default: m.ProjectDetail })));
 const NotFound = lazy(() => import("./components/NotFound"));
+const SharedDesign = lazy(() => import("./components/SharedDesign"));
 const PrivacyPolicy = lazy(() => import("./components/PrivacyPolicy"));
 const ModelCredits = lazy(() => import("./components/ModelCredits"));
 
@@ -77,6 +79,7 @@ function App() {
   return (
     <Router>
       <ScrollManager />
+      <ToastProvider>
       <AuthProvider>
         <CartProvider>
           <DesignProvider>
@@ -99,6 +102,8 @@ function App() {
               <Route path="/track-record" element={<TrackRecord />} />
               <Route path="/privacy" element={<PrivacyPolicy />} />
               <Route path="/credits" element={<ModelCredits />} />
+              {/* A design shared from the AI Designer: public, view-only */}
+              <Route path="/d/:token" element={<SharedDesign />} />
 
               {/* User Dashboard / Studio */}
               <Route
@@ -174,17 +179,19 @@ function App() {
                 }
               />
 
-              {/* My Addresses (User): the address book used by checkout and bookings */}
+              {/* My account (everyone): profile, address book (customers), password & email */}
               <Route
-                path="/my-addresses"
+                path="/account"
                 element={
-                  <RoleProtectedRoute allowedRoles={['user']}>
+                  <RoleProtectedRoute allowedRoles={['user', 'admin', 'staff']}>
                     <DashboardLayout>
-                      <MyAddresses />
+                      <MyAccount />
                     </DashboardLayout>
                   </RoleProtectedRoute>
                 }
               />
+              {/* The address book moved into My account */}
+              <Route path="/my-addresses" element={<Navigate to="/account?tab=addresses" replace />} />
 
               {/* My Orders (User) */}
               <Route
@@ -372,6 +379,7 @@ function App() {
           </DesignProvider>
         </CartProvider>
       </AuthProvider>
+      </ToastProvider>
     </Router>
   );
 }

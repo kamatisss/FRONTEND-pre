@@ -398,7 +398,8 @@ export default function IncomeAnalytics() {
   const { authTokens } = useAuth();
   const [range, setRange] = useState('12m');
   const [data, setData] = useState(null);
-  const [refetching, setRefetching] = useState(false);
+  const [loadedRange, setLoadedRange] = useState(null); // range the shown data/error is for
+  const refetching = !!authTokens && loadedRange !== range;
   const [error, setError] = useState('');
   const [showTable, setShowTable] = useState(false);
   const tooltip = useTooltip();
@@ -406,14 +407,13 @@ export default function IncomeAnalytics() {
   useEffect(() => {
     if (!authTokens) return;
     let cancelled = false;
-    setRefetching(true);
     fetch(`${API_BASE_URL}/analytics/income/?range=${range}`, {
       headers: { Authorization: `Bearer ${authTokens.access}` },
     })
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`Request failed (${res.status})`))))
       .then((json) => { if (!cancelled) { setData(json); setError(''); } })
       .catch((err) => { if (!cancelled) setError(err.message || 'Failed to load analytics.'); })
-      .finally(() => { if (!cancelled) setRefetching(false); });
+      .finally(() => { if (!cancelled) setLoadedRange(range); });
     return () => { cancelled = true; };
   }, [authTokens, range]);
 

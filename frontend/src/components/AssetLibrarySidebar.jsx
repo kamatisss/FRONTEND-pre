@@ -212,6 +212,7 @@ export default function AssetLibrarySidebar({ category, onPick }) {
   }, [state.products.length, dispatch]);
 
   const filtered = state.products.filter(p => {
+    if (p.is_groundcover) return false;   // groundcover carpets the beds (Lot drawer switch), not placed one by one
     const matchTab    = activeTab === 'all' || p.category === activeTab;
     const matchSearch = !search || p.name.toLowerCase().includes(search.toLowerCase());
     return matchTab && matchSearch;
@@ -233,7 +234,7 @@ export default function AssetLibrarySidebar({ category, onPick }) {
   // Count per tab
   const countFor = (key) => key === 'all'
     ? state.products.length
-    : state.products.filter(p => p.category === key).length;
+    : state.products.filter(p => p.category === key && !p.is_groundcover).length;
 
   return (
     <>

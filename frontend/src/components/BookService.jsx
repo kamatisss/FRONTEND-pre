@@ -8,15 +8,23 @@ import { API_BASE_URL as API_ROOT } from '../config';
 import AddressPicker from './AddressPicker';
 import { addressReady, toPayload, rememberAddress, firstError } from '../data/address';
 
+import { useMe, phoneDiffers, saveMyPhone } from '../services/me';
+import SavePhoneToggle from './ui/SavePhoneToggle';
+import { normalizePhMobile } from '../services/checkout';
 const BookService = () => {
-    const { authTokens } = useAuth();
+    const { authTokens, applyTokens } = useAuth();
+    const me = useMe();   // My account: the saved mobile number fills the contact number
     const location = useLocation();
     const incomingDesign = location.state || {};
 
     const [blackoutDates, setBlackoutDates] = useState([]);
     const [selectedDate, setSelectedDate] = useState(null);
     const [serviceType, setServiceType] = useState('maintenance');
-    const [contactNumber, setContactNumber] = useState('');
+    const [contactNumber, setContactNumber] = useState(null);   // null = not typed: show the account's number
+    const contactValue = contactNumber ?? me?.phone ?? '';
+    const contactInvalid = contactValue.trim() !== '' && !normalizePhMobile(contactValue);
+    const [savePhone, setSavePhone] = useState(null);   // null = default: save only if the account has no number yet
+    const savePhoneOn = savePhone ?? !me?.phone;
     const [siteAddress, setSiteAddress] = useState(null);   // AddressPicker value (pinned, Quezon)
     const [preferredTime, setPreferredTime] = useState('anytime');
     const [notes, setNotes] = useState('');
@@ -127,6 +135,10 @@ const BookService = () => {
         const formattedDate = localDate.toISOString().split('T')[0];
 
         // Format custom notes to append budget & dimensions for server tracking
+        if (contactInvalid) {
+            setMessage('Enter a PH mobile number for the crew, e.g. 09171234567.');
+            return;
+        }
         let finalNotes = notes;
         if (budget || lotWidth || lotLength || designProfile) {
             finalNotes += `\n\n--- AI Designer Context ---`;
@@ -146,7 +158,7 @@ const BookService = () => {
                 body: JSON.stringify({
                     service_type: serviceType,
                     scheduled_date: formattedDate,
-                    contact_number: contactNumber,
+                    contact_number: normalizePhMobile(contactValue) || contactValue.trim(),
                     preferred_time: preferredTime,
                     address: toPayload(siteAddress),
                     notes: finalNotes,
@@ -156,9 +168,10 @@ const BookService = () => {
 
             if (res.ok) {
                 await rememberAddress(siteAddress);
+                if (savePhoneOn && phoneDiffers(me, contactValue)) await saveMyPhone(contactValue, applyTokens);
                 setMessage('Booking submitted successfully! Our staff will review it shortly.');
                 setSelectedDate(null);
-                setContactNumber('');
+                setContactNumber(null);
                 setSiteAddress(null);
                 setPreferredTime('anytime');
                 setNotes('');
@@ -176,7 +189,7 @@ const BookService = () => {
                 const data = await res.json();
                 setMessage(firstError(data));
             }
-        } catch (error) {
+        } catch {
             setMessage('Error submitting booking.');
         } finally {
             setLoading(false);
@@ -453,11 +466,13 @@ const BookService = () => {
                             <label style={styles.label}>Contact Number</label>
                             <input
                                 type="tel"
-                                value={contactNumber}
+                                value={contactValue}
                                 onChange={(e) => setContactNumber(e.target.value)}
                                 placeholder="e.g. 09171234567"
                                 style={styles.inputBase}
                             />
+                            {contactInvalid && <span style={{ fontSize: 11, color: '#dc2626', fontWeight: 600 }}>Enter a PH mobile number, e.g. 09171234567.</span>}
+                            <SavePhoneToggle me={me} phone={contactValue} checked={savePhoneOn} onChange={setSavePhone} id="bookservice-save-phone" />
                         </div>
 
                         {/* Scheduled Date + Preferred Time (Side by Side) */}

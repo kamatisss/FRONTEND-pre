@@ -3,6 +3,9 @@ import { Html, Grid } from '@react-three/drei';
 import * as THREE from 'three';
 import { DEFAULT_LOT, LOT_MARGIN } from '../data/lot';
 import { planMaskCanvas } from '../data/gardenPlanMask';
+import { buildGroundcover } from '../data/groundcoverField';
+import { buildGrass, DEFAULT_LAWN_LOOK } from '../data/grassField';
+import { useFrame } from '@react-three/fiber';
 
 // Grass texture tile size in metres: the lawn keeps real-world scale at any lot size
 const GRASS_TILE_M = 6;   // mirrored tiling hides the photo's seams (plain repeat showed a checkerboard)
@@ -18,6 +21,8 @@ const EDGING = { width: 0.12, height: 0.2, color: '#d8d4ca' };
      displacementScale  – how far vertices push up/down (default 2.5)
      onTerrainClick(e)  – fired with the raw R3F event on every click
      onPlaceItem([x,y,z]) – fired with world-space coords for item placement
+     outline – the yard's own shape ([{x, z, house}] in lot metres, data/lot.js) or null: the part of the lot
+               outside it is paved over, the edging follows its sides, house walls get a dark plinth
      lotWidth / lotLength – the customer's lot in metres (centred on the origin, +z = front /
                             house side). Drawn at true size with an edging and labels, inside a
                             strip of plain ground; the ref is the group of both (placement
@@ -29,13 +34,17 @@ const GardenBackground = forwardRef(function GardenBackground(
     originalImageUrl,
     depthMapUrl,
     normalMapUrl,
-    rockMaskUrl,
-    grassMaskUrl,
     displacementScale = 2.5,
     lotWidth = DEFAULT_LOT.width,
     lotLength = DEFAULT_LOT.length,
     showGrid = false,
+    outline = null,
     gardenPlan = null, // beds + lawn from the AI Designer (dimensions.gardenPlan): beds drawn as mulch
+    ground = null,     // DesignContext's { beds, entries }: beds round the plants (hand-made designs) and their groundcover
+    groundPlants = [], // [{ x, z, h, s }] lot metres from the back-left corner: grown height / spread (shade under crowns)
+    growthStage = 'established',
+    lite = false,
+    lawnLook = DEFAULT_LAWN_LOOK,   // how long the grass looks (data/grassField.js LAWN_LOOKS)
     onTerrainClick,   // legacy: raw event (used by GardenDesigner to confirm placement)
     onPlaceItem,      // new: receives [x, y, z] world coords for item drop
   },
@@ -156,15 +165,91 @@ const GardenBackground = forwardRef(function GardenBackground(
   }, [textures, isPhoto, lotWidth, lotLength, outerW, outerL]);
   // The design's planting beds: mulch over the lawn, cut out where the open lawn is (not on a photo,
   // where the real ground is shown)
+  const plantMask = gardenPlan?.lawn ? null : ground?.beds?.mask || null;
   const bedMask = useMemo(() => {
     if (isPhoto) return null;
-    const canvas = planMaskCanvas(gardenPlan, lotWidth, lotLength);
+    // An AI plan's beds, else (a hand-made design) the beds round its plants
+    const canvas = planMaskCanvas(gardenPlan, lotWidth, lotLength) || plantMask;
     if (!canvas) return null;
     const t = new THREE.CanvasTexture(canvas);
     t.colorSpace = THREE.NoColorSpace;   // data, not colour
     return t;
-  }, [gardenPlan, lotWidth, lotLength, isPhoto]);
+  }, [gardenPlan, lotWidth, lotLength, isPhoto, plantMask]);
   useEffect(() => () => bedMask?.dispose(), [bedMask]);
+
+  // Groundcover over those beds (data/groundcoverField.js), growing with the growth stage. Not on a photo (the photo is
+  // the ground). The default depth map is nearly flat (29–38 of 255), so one height fits it.
+  const gcKey = ground?.entries?.length ? JSON.stringify(ground.entries) : '';
+  const groundcover = useMemo(() => {
+    if (isPhoto || !gcKey) return null;
+    return buildGroundcover(gardenPlan?.lawn ? gardenPlan : null, lotWidth, lotLength, ground.entries, {
+      plants: groundPlants, stage: growthStage, lite, outline, beds: gardenPlan?.lawn ? null : ground.beds,
+      heightOf: (p) => p.h || 0, spreadOf: (p) => p.s || 0,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- gcKey stands for ground.entries
+  }, [isPhoto, gcKey, gardenPlan, lotWidth, lotLength, groundPlants, growthStage, lite, outline, ground?.beds]);
+  useEffect(() => () => groundcover?.dispose(), [groundcover]);
+  // (at the default terrain's HIGHEST point, depth 38/255, plus the bed mesh's 1 cm: the mulch never hides it)
+  const groundY = displacementScale * (38 / 255 - 0.1) + 0.012;
+
+  // Living grass (data/grassField.js, the same as the AI 3D view): blades on the lawn — the AI plan's lawn, or round
+  // the beds of a hand-made design — rooted on the displaced terrain (heightAt reads the depth map the lot mesh is
+  // pushed by). Not on their own photo (the photo is the ground).
+  const heightAt = useMemo(() => {
+    const img = textures?.depthMap?.image;
+    if (isPhoto || !img || !(img.width > 4)) return null;
+    try {
+      const cw = Math.min(256, img.width), ch = Math.min(256, img.height);
+      const c = document.createElement('canvas');
+      c.width = cw; c.height = ch;
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(img, 0, 0, cw, ch);
+      const data = ctx.getImageData(0, 0, cw, ch).data;
+      // the lot mesh: UV (x/W, 1 − z/L) with the image's top row at the back; y = scale × (depth − 0.1)
+      return (x, z) => {
+        const px = Math.min(cw - 1, Math.max(0, Math.floor((x / lotWidth) * cw)));
+        const pz = Math.min(ch - 1, Math.max(0, Math.floor((z / lotLength) * ch)));
+        return displacementScale * (data[(pz * cw + px) * 4] / 255 - 0.1);
+      };
+    } catch {
+      return null;
+    }
+  }, [textures, isPhoto, lotWidth, lotLength, displacementScale]);
+  const grass = useMemo(() => {
+    if (isPhoto || !heightAt) return null;
+    const still = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const plan = gardenPlan?.lawn ? gardenPlan : null;
+    // a hand-made design: no grass in the beds round its plants (the same beds the mulch is drawn from)
+    return buildGrass(plan, lotWidth, lotLength, { outline, lite, still, beds: plan ? null : ground?.beds || null, look: lawnLook, heightAt });
+  }, [isPhoto, heightAt, gardenPlan, lotWidth, lotLength, outline, lite, ground?.beds, lawnLook]);
+  useEffect(() => () => grass?.dispose(), [grass]);
+  useFrame(({ clock }) => grass?.tick(clock.elapsedTime));
+
+  // A shaped yard: paving over the rest of the lot, as a mask on the lot's own (displaced) ground like the
+  // beds above — white outside the yard. Canvas (px, py) = lot (x, z) × pixels per metre, top row = the back.
+  const shapeKey = outline ? JSON.stringify(outline) : '';
+  const pavingMask = useMemo(() => {
+    if (!outline) return null;
+    const px = Math.min(64, 1024 / Math.max(lotWidth, lotLength));
+    const c = document.createElement('canvas');
+    c.width = Math.max(2, Math.round(lotWidth * px)); c.height = Math.max(2, Math.round(lotLength * px));
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, c.width, c.height);
+    ctx.fillStyle = '#000000'; ctx.beginPath();
+    outline.forEach((p, i) => (i ? ctx.lineTo(p.x * px, p.z * px) : ctx.moveTo(p.x * px, p.z * px)));
+    ctx.closePath(); ctx.fill();
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.NoColorSpace;
+    return t;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- shapeKey stands for outline
+  }, [shapeKey, lotWidth, lotLength]);
+  useEffect(() => () => pavingMask?.dispose(), [pavingMask]);
+  const sides = outline ? outline.map((a, i) => {
+    const b = outline[(i + 1) % outline.length];
+    const ax = a.x - lotWidth / 2, az = a.z - lotLength / 2, bx = b.x - lotWidth / 2, bz = b.z - lotLength / 2;
+    return { key: i, house: !!a.house, x: (ax + bx) / 2, z: (az + bz) / 2, len: Math.hypot(bx - ax, bz - az),
+      angle: -Math.atan2(bz - az, bx - ax) };
+  }).filter(sd => sd.len > 0.05) : null;
 
   useEffect(() => () => {
     if (!maps) return;
@@ -283,6 +368,9 @@ const GardenBackground = forwardRef(function GardenBackground(
         </mesh>
       )}
 
+      {groundcover && <primitive object={groundcover.group} position={[-lotWidth / 2, groundY, -lotLength / 2]} />}
+      {grass?.mesh && <primitive object={grass.mesh} position={[-lotWidth / 2, 0.012, -lotLength / 2]} />}
+
       {/* ── Plain ground around the lot: duller, flat, not part of the design ── */}
       <mesh position={[0, -0.03, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
         <planeGeometry args={[outerW, outerL]} />
@@ -290,8 +378,24 @@ const GardenBackground = forwardRef(function GardenBackground(
           normalScale={[0.4, 0.4]} roughness={0.95} metalness={0} />
       </mesh>
 
+      {/* ── A shaped yard: paving over the rest of the lot, edging along the yard's sides, house walls ── */}
+      {pavingMask && (
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.012, 0]} receiveShadow raycast={() => null}>
+          <planeGeometry args={[lotWidth, lotLength, segW, segL]} />
+          <meshStandardMaterial color="#b9b4aa" alphaMap={pavingMask} alphaTest={0.5}
+            displacementMap={textures.depthMap} displacementScale={displacementScale} displacementBias={-displacementScale * 0.1}
+            roughness={0.95} metalness={0} polygonOffset polygonOffsetFactor={-3} polygonOffsetUnits={-6} />
+        </mesh>
+      )}
+      {sides && sides.map(sd => (
+        <mesh key={`side${sd.key}`} position={[sd.x, sd.house ? 0.2 : edgeY, sd.z]} rotation={[0, sd.angle, 0]} castShadow receiveShadow>
+          <boxGeometry args={[sd.len + EDGING.width, sd.house ? 0.45 : EDGING.height, sd.house ? 0.3 : EDGING.width]} />
+          <meshStandardMaterial color={sd.house ? '#475569' : EDGING.color} roughness={0.9} />
+        </mesh>
+      ))}
+
       {/* ── Lot edging (concrete) ── */}
-      {[
+      {!outline && [
         [0, hl, lotWidth + EDGING.width, EDGING.width],    // front (house side)
         [0, -hl, lotWidth + EDGING.width, EDGING.width],   // back
         [-hw, 0, EDGING.width, lotLength],                  // left

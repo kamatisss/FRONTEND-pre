@@ -1,9 +1,8 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useEffectEvent, useState, useCallback, useRef } from 'react';
 import CustomerEditsNote from './CustomerEditsNote';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useDesign } from '../context/DesignContext';
-import { loadDesign } from '../services/api';
 import CrewDashboardView from './CrewDashboardView';
 import {
   LayoutDashboard, Shield, Eye, CheckCircle2,
@@ -12,6 +11,7 @@ import {
   CheckCircle, XCircle, Banknote,
 } from 'lucide-react';
 import ThreeGardenCanvas from './ThreeGardenCanvas';
+import { toCanvasPlants } from '../data/projectHub';
 import OfficeWorkMap from './OfficeWorkMap';
 import TodayAttention from './TodayAttention';
 import ProjectBillingModal from './ProjectBillingModal';
@@ -22,6 +22,7 @@ import { cachedGet } from '../crew/outbox';
 import { DEFAULT_TIME_OF_DAY } from '../data/studioLight';
 import { API_BASE_URL as API_ROOT } from '../config';
 
+import { loadDesignForStudio } from '../data/studioDesign';
 /* ─── Toast notification system ─────────────────────────────────────────── */
 function useToast() {
   const [toasts, setToasts] = useState([]);
@@ -132,28 +133,36 @@ const StaffDashboard = () => {
   const [activeAttendance, setActiveAttendance] = useState(null);
   const [loading,          setLoading]          = useState(true);
   const isFieldCrew = user?.staff_role === 'FIELD_CREW';
-  const [activeTab,        setActiveTab]        = useState(() => user?.staff_role === 'FIELD_CREW' ? 'home' : 'overview');
+  // ?tab= in the URL picks the tab (notification links, back/forward)
+  const tabFromUrl = (search) => {
+    const tab = new URLSearchParams(search).get('tab');
+    const validTabs = isFieldCrew
+      ? ['home', 'projects', 'attendance']
+      : ['overview', 'designs', 'bookings', 'orders', 'cash'];
+    return tab && validTabs.includes(tab) ? tab : null;
+  };
+  const [activeTab,        setActiveTab]        = useState(() => tabFromUrl(location.search) || (isFieldCrew ? 'home' : 'overview'));
   const [actionLoading,    setActionLoading]    = useState(null);
   const [designModal,      setDesignModal]      = useState(null);
   const [modalArMode,      setModalArMode]      = useState(false);
-  const [crewViewMode,       setCrewViewMode]       = useState('today'); // 'today' | 'all'
   const [billingBooking,     setBillingBooking]     = useState(null);    // booking open in Project & Billing
 
   const API = API_ROOT;
 
-  /* Sync tab with ?tab= URL param */
-  useEffect(() => {
-    const tab = new URLSearchParams(location.search).get('tab');
-    const validTabs = isFieldCrew
-      ? ['home', 'projects', 'attendance']
-      : ['overview', 'designs', 'bookings', 'orders', 'cash'];
-    if (tab && validTabs.includes(tab)) {
-      setActiveTab(tab);
-    }
-  }, [location.search]);
+  /* The URL changed: follow its ?tab= (set while rendering, not in an effect, to skip an extra render) */
+  const [syncedSearch, setSyncedSearch] = useState(location.search);
+  if (syncedSearch !== location.search) {
+    setSyncedSearch(location.search);
+    const tab = tabFromUrl(location.search);
+    if (tab) setActiveTab(tab);
+  }
 
   /* Reset AR mode whenever a new design is opened in the modal */
-  useEffect(() => { setModalArMode(false); }, [designModal]);
+  const [arModalFor, setArModalFor] = useState(designModal);
+  if (arModalFor !== designModal) {
+    setArModalFor(designModal);
+    setModalArMode(false);
+  }
 
   const headers = { Authorization: `Bearer ${authTokens?.access}` };
 
@@ -176,8 +185,8 @@ const StaffDashboard = () => {
   };
   const loadCrewBookings = () => cachedGet('/bookings/', 'bookings').then(applyCrewBookings);
 
-  useEffect(() => {
-    if (!authTokens) return;
+  // Effect event: reads the latest headers/role without re-running the load on every render
+  const loadDashboard = useEffectEvent(() => {
     const get = (url) => fetch(`${API}${url}`, { headers }).then(r => r.ok ? r.json() : Promise.reject());
     const fetches = [
       refreshActiveAttendance(),
@@ -193,6 +202,9 @@ const StaffDashboard = () => {
       );
     }
     Promise.all(fetches).finally(() => setLoading(false));
+  });
+  useEffect(() => {
+    if (authTokens) loadDashboard();
   }, [authTokens]);
 
   // Crew: a notification link (new job, date change…) brings a fresh job list
@@ -277,49 +289,16 @@ const StaffDashboard = () => {
 
   const handleViewDesign = async (id) => {
     try {
-      const design = await loadDesign(id);
-      dispatch({
-        type: 'LOAD_DESIGN',
-        payload: {
-          designId: design.id,
-          designName: design.name,
-          depthData: design.depth_data,
-          placedItems: (design.placed_items || []).map((item, idx) => ({
-            id: Date.now() + idx,
-            productId: item.product_id,
-            name: item.name,
-            modelType: item.model_type,
-            price: item.price,
-            position: item.position,
-            rotation: item.rotation,
-            scale: item.scale,
-          })),
-          dimensions: design.dimensions || { width: 10, length: 15, terrainType: 'flat' },
-          terrainHeight: design.terrain_height || 1.5,
-          timeOfDay: design.time_of_day ?? DEFAULT_TIME_OF_DAY,
-        },
-      });
+      // Both design formats (AI Designer and Studio), extra items kept (data/studioDesign.js)
+      const { payload, products } = await loadDesignForStudio(id, []);
+      if (products) dispatch({ type: 'SET_PRODUCTS', payload: products });
+      dispatch({ type: 'LOAD_DESIGN', payload });
       navigate('/studio');
     } catch {
       toast('Could not load the design for preview.', 'error');
     }
   };
 
-  /* ── Transform placed_items → ThreeGardenCanvas plant format ── */
-  const toCanvasPlants = (placedItems = []) =>
-    placedItems.map(item => {
-      // AI designer flat format: { plant_id, x, z, rotation }
-      if (item.plant_id !== undefined) {
-        return { plant_id: item.plant_id, x: item.x ?? 0, z: item.z ?? 0, rotation: item.rotation ?? 0 };
-      }
-      // Studio format: { productId/modelType, position: {x,z}, rotation: {y} }
-      return {
-        plant_id: item.modelType || item.model_type || String(item.productId || ''),
-        x: item.position?.x ?? 0,
-        z: item.position?.z ?? 0,
-        rotation: item.rotation?.y ?? 0,
-      };
-    });
 
   /* ── Greeting ── */
   const hour = new Date().getHours();
@@ -600,7 +579,7 @@ function DesignReviewModal({ design, arMode, setArMode, onClose, toCanvasPlants 
         {/* Canvas */}
         <div style={{ height: '480px' }}>
           <ThreeGardenCanvas
-            plants={toCanvasPlants(design.placed_items)}
+            plants={toCanvasPlants(design.placed_items, design.dimensions?.width || 10, design.dimensions?.length || 15)}
             lotWidth={design.dimensions?.width || 10}
             lotLength={design.dimensions?.length || 15}
             backgroundImageUrl={design.reference_image_url || design.image_url || null}
@@ -608,6 +587,8 @@ function DesignReviewModal({ design, arMode, setArMode, onClose, toCanvasPlants 
             arGrid={arMode}
             photoCorners={design.dimensions?.photoCorners}
             gardenPlan={design.dimensions?.gardenPlan}
+            survey={design.dimensions?.siteSurvey}
+            groundcover={design.dimensions?.groundcover}
             readOnly={true}
           />
         </div>

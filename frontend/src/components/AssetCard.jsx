@@ -7,15 +7,8 @@ const CATEGORY_ICONS = {
   furniture: Sofa,
 };
 
-const CATEGORY_COLORS = {
-  plant:      'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-400',
-  hardscape:  'bg-amber-100   text-amber-600   dark:bg-amber-900/40   dark:text-amber-400',
-  furniture:  'bg-sky-100     text-sky-600     dark:bg-sky-900/40     dark:text-sky-400',
-};
-
 export default function AssetCard({ product, isSelected, onClick }) {
   const CatIcon  = CATEGORY_ICONS[product.category]  || Leaf;
-  const catColor = CATEGORY_COLORS[product.category] || CATEGORY_COLORS.plant;
   const price    = Number(product.unit_price).toLocaleString('en-PH', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,

@@ -10,10 +10,13 @@ import {
 import { submitOrder, createCheckoutSession, getPricing, getEstimate } from '../services/api';
 import { normalizePhMobile, codBlockReason, PHONE_HINT } from '../services/checkout';
 import { useAuth } from '../context/AuthContext';
-import { lotOf } from '../data/lot';
+import { lotArea, lotOf } from '../data/lot';
+import { designTips } from '../data/designTips';
 import AddressPicker from './AddressPicker';
 import { addressReady, toPayload, rememberAddress } from '../data/address';
 
+import { useMe, phoneDiffers, saveMyPhone } from '../services/me';
+import SavePhoneToggle from './ui/SavePhoneToggle';
 /* ─────────────────────────────────────────────────────────────────────────
    GLOBAL STYLES
 ───────────────────────────────────────────────────────────────────────── */
@@ -262,20 +265,29 @@ const Dot = ({ i }) => (
 // onCheckout: optional override (the guest Studio asks visitors to sign in first)
 // compact: phones. Starts as the pill and opens to the screen width.
 export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
-  const { totalCost, costBreakdown, state, dispatch } = useDesign();
+  const { totalCost, costBreakdown, state, dispatch, ground } = useDesign();
   const { placedItems } = state;
 
   /* ── UI state ── */
   const [minimized, setMinimized]       = useState(false);
   const [collapsed, setCollapsed]       = useState(compact);
   const [showCheckout, setShowCheckout] = useState(false);
-  const [formData, setFormData]         = useState({ name: '', email: '', phone: '' });
+  // null = not typed yet: show what My account holds (name, email, mobile)
+  const [formData, setFormData]         = useState({ name: null, email: null, phone: null });
   const [deliveryAddress, setDeliveryAddress] = useState(null);   // AddressPicker value (pinned, Quezon)
   const [payMethod, setPayMethod]       = useState('online');
   const [loading, setLoading]           = useState(false);
   const [shippingFee, setShippingFee]   = useState(150);   // from the admin rate card
   const [codMax, setCodMax]             = useState(5000);  // COD cap, also from the rate card
-  const { user } = useAuth() || {};
+  const { user, applyTokens } = useAuth() || {};
+  const me = useMe();
+  const fields = {
+    name: formData.name ?? (me ? `${me.first_name} ${me.last_name}`.trim() : ''),
+    email: formData.email ?? me?.email ?? '',
+    phone: formData.phone ?? me?.phone ?? '',
+  };
+  const [savePhone, setSavePhone] = useState(null);   // null = default: save only if the account has no number yet
+  const savePhoneOn = savePhone ?? !me?.phone;
   const [installEst, setInstallEst]     = useState(null);  // { low, high } with crew installation
   // The checkout dialog: focus inside, Tab kept in, Escape closes (not while the order is being placed)
   const dialogRef = useDialog(showCheckout, () => setShowCheckout(false), { busy: loading });
@@ -288,22 +300,26 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
   }, []);
 
   const codBlocked = codBlockReason({ total: totalCost + shippingFee, codMax, loggedIn: !!user });
-  useEffect(() => {
-    if (codBlocked && payMethod === 'cod') setPayMethod('online');
-  }, [codBlocked, payMethod]);
-  const phoneInvalid = formData.phone.trim() !== '' && !normalizePhMobile(formData.phone);
+  // Cash on delivery stopped being allowed (total over the limit…): switch to paying now.
+  // Adjusted while rendering rather than in an effect, so there's no extra render with COD shown.
+  if (codBlocked && payMethod === 'cod') setPayMethod('online');
+  const phoneInvalid = fields.phone.trim() !== '' && !normalizePhMobile(fields.phone);
 
   // Installed-by-our-crew estimate from the rate card (debounced while the design changes)
   const itemCounts = JSON.stringify(placedItems.reduce((acc, i) => {
     if (i.productId != null) acc[i.productId] = (acc[i.productId] || 0) + 1;
     return acc;
-  }, {}));
+  }, (ground?.entries || []).reduce((acc, g) => ({ ...acc, [g.plant_id]: g.area_sqm }), {})));   // groundcover: m²
   const lot = lotOf(state.dimensions);   // the same (clamped) lot the 3D ground shows
-  const area = lot.width * lot.length;
+  const area = lotArea(lot);   // the yard's own shape when it has one
   // A design from the AI Designer keeps an open lawn: priced as turf (or left alone), like the designer did
   const plan = state.dimensions?.gardenPlan;
-  const lawnSqm = plan?.lawn ? Number(plan.lawn_area) || 0 : 0;
+  // A hand-made design: lawn everywhere but the beds round its plants (data/plantBeds.js)
+  const lawnSqm = plan?.lawn ? Number(plan.lawn_area) || 0 : Math.max(0, Math.round(area - (ground?.bedArea || 0)));
   const newLawn = plan?.newLawn !== false;
+  // Design tips (data/designTips.js): the planting rules as gentle suggestions; dismissed ones stay hidden this visit
+  const [dismissedTips, setDismissedTips] = useState(() => new Set());
+  const tips = designTips(placedItems, state.products, { ground, lotWidth: lot.width }).filter(t => !dismissedTips.has(t.id)).slice(0, 3);
   useEffect(() => {
     const counts = JSON.parse(itemCounts);
     const items = Object.entries(counts).map(([product_id, quantity]) => ({ product_id: Number(product_id), quantity }));
@@ -351,7 +367,7 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
   const handleCheckout = async (e) => {
     e.preventDefault();
     if (!placedItems.length) return;
-    const phone = normalizePhMobile(formData.phone);
+    const phone = normalizePhMobile(fields.phone);
     if (!phone) { alert(PHONE_HINT); return; }
     if (!addressReady(deliveryAddress)) {
       alert('Choose your town and barangay, enter your street, and pin your house on the map.');
@@ -365,8 +381,8 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
       }).filter(i => i.id !== null);
 
       const orderPayload = {
-        customer_name: formData.name,
-        customer_email: formData.email,
+        customer_name: fields.name,
+        customer_email: fields.email,
         customer_phone: phone,
         address: toPayload(deliveryAddress),
         payment_method: payMethod,
@@ -375,6 +391,7 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
 
       const orderResult = await submitOrder(orderPayload);
       await rememberAddress(deliveryAddress);
+      if (savePhoneOn && phoneDiffers(me, phone)) await saveMyPhone(phone, applyTokens);
 
       if (payMethod === 'online') {
         const receiptUrl = `/order-success?order_id=${orderResult.order_id}&token=${orderResult.receipt_token}`;
@@ -390,7 +407,7 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
         dispatch({ type: 'CLEAR_DESIGN' });
         setShowCheckout(false);
         setMinimized(false);
-        setFormData({ name: '', email: '', phone: '' });
+        setFormData({ name: null, email: null, phone: null });
         setDeliveryAddress(null);
         alert('🌿 Order confirmed! Your garden will be delivered. Pay on arrival.');
         setLoading(false);
@@ -577,6 +594,25 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
                   ))}
                 </div>
 
+                {tips.length > 0 && (
+                  <div role="region" aria-label="Design tips" style={{ margin: '10px 12px 4px', padding: '10px 12px', borderRadius: 12,
+                    background: '#F0FDF4', border: '1px solid #BBF7D0' }}>
+                    <div style={{ fontSize: 11, fontWeight: 800, color: '#166534', letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 6 }}>
+                      Design tips
+                    </div>
+                    {tips.map(t => (
+                      <div key={t.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12, color: '#14532D', lineHeight: 1.45, marginTop: 4 }}>
+                        <span style={{ flex: 1 }}>{t.text}</span>
+                        <button type="button" aria-label="Hide this tip" title="Hide this tip"
+                          onClick={() => setDismissedTips(prev => new Set(prev).add(t.id))}
+                          style={{ border: 'none', background: 'transparent', color: '#4D7C0F', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 2px', minWidth: 24, minHeight: 24 }}>
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 {/* Rows */}
                 {costBreakdown.map((item, i) => (
                   <div
@@ -605,25 +641,38 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
                       </div>
                       {/* Action row */}
                       <div style={{ display: 'flex', gap: 5, paddingLeft: 14 }}>
-                        <IconBtn
-                          onClick={() => {
-                            const found = placedItems.find(p => p.name === item.name);
-                            if (found) handleEdit(found.id);
-                          }}
-                          bg={C.greenDim} color={C.green}
-                          size={26} radius={7}
-                          tooltip="Edit placement"
-                        >
-                          <Pencil size={10} />
-                        </IconBtn>
-                        <IconBtn
-                          onClick={() => handleRemoveAll(item.name)}
-                          bg={C.redDim} color={C.red}
-                          size={26} radius={7}
-                          tooltip="Remove all"
-                        >
-                          <Trash2 size={10} />
-                        </IconBtn>
+                        {item.groundcover ? (
+                          <IconBtn
+                            onClick={() => dispatch({ type: 'SET_DIMENSIONS', payload: { groundcoverOff: true } })}
+                            bg={C.redDim} color={C.red}
+                            size={26} radius={7}
+                            tooltip="Mulch the beds instead (no groundcover)"
+                          >
+                            <Trash2 size={10} />
+                          </IconBtn>
+                        ) : (
+                          <>
+                            <IconBtn
+                              onClick={() => {
+                                const found = placedItems.find(p => p.name === item.name);
+                                if (found) handleEdit(found.id);
+                              }}
+                              bg={C.greenDim} color={C.green}
+                              size={26} radius={7}
+                              tooltip="Edit placement"
+                            >
+                              <Pencil size={10} />
+                            </IconBtn>
+                            <IconBtn
+                              onClick={() => handleRemoveAll(item.name)}
+                              bg={C.redDim} color={C.red}
+                              size={26} radius={7}
+                              tooltip="Remove all"
+                            >
+                              <Trash2 size={10} />
+                            </IconBtn>
+                          </>
+                        )}
                       </div>
                     </div>
 
@@ -634,8 +683,9 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
                         width: 26, height: 26, borderRadius: 8,
                         background: C.greenDim, border: `1px solid ${C.greenDimBdr}`,
                         fontSize: '0.75rem', fontWeight: 800, color: C.green,
+                        ...(item.unit && { width: 'auto', padding: '0 5px', fontSize: '0.68rem' }),
                       }}>
-                        {item.quantity}
+                        {item.quantity}{item.unit ? ` ${item.unit}` : ''}
                       </span>
                     </div>
 
@@ -803,7 +853,7 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
                 </label>
                 <input
                   required type="text" className="w-full px-4 py-2 bg-gray-50 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#10b981] focus:border-transparent transition-all duration-200"
-                  value={formData.name} placeholder="Juan dela Cruz"
+                  value={fields.name} placeholder="Juan dela Cruz"
                   onChange={e => setFormData(f => ({ ...f, name: e.target.value }))}
                 />
               </div>
@@ -814,7 +864,7 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
                   <label style={{ display: 'block', marginBottom: 6 }}><Label>Email</Label></label>
                   <input
                     required type="email" className="w-full px-4 py-2 bg-gray-50 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#10b981] focus:border-transparent transition-all duration-200"
-                    value={formData.email} placeholder="juan@email.com"
+                    value={fields.email} placeholder="juan@email.com"
                     onChange={e => setFormData(f => ({ ...f, email: e.target.value }))}
                   />
                 </div>
@@ -822,13 +872,14 @@ export default function ProjectSummaryPanel({ onCheckout, compact = false }) {
                   <label style={{ display: 'block', marginBottom: 6 }}><Label>Phone</Label></label>
                   <input
                     required type="tel" className="w-full px-4 py-2 bg-gray-50 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#10b981] focus:border-transparent transition-all duration-200"
-                    value={formData.phone} placeholder="09XX XXX XXXX" inputMode="tel"
+                    value={fields.phone} placeholder="09XX XXX XXXX" inputMode="tel"
                     onChange={e => setFormData(f => ({ ...f, phone: e.target.value }))}
                     style={phoneInvalid ? { borderColor: '#f87171' } : undefined}
                   />
                   {phoneInvalid && (
                     <p style={{ margin: '4px 0 0', fontSize: 10.5, color: '#dc2626', fontWeight: 500 }}>{PHONE_HINT}</p>
                   )}
+                  <SavePhoneToggle me={me} phone={fields.phone} checked={savePhoneOn} onChange={setSavePhone} id="studio-save-phone" />
                 </div>
               </div>
 

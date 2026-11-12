@@ -1,4 +1,5 @@
-import { useMemo } from 'react';
+import { useId, useMemo } from 'react';
+import { seededRandom } from '../data/seededRandom';
 import * as THREE from 'three';
 
 /* ============================================================
@@ -11,17 +12,19 @@ const metalMat = new THREE.MeshStandardMaterial({ color: '#4a4a4a', roughness: 0
 
 // ── River Stones ──────────────────────────────────────────────
 export function RiverStones({ scale = 1, ...props }) {
+  const seed = useId(); // stable per model, so its shape doesn't change on re-mount
   const stones = useMemo(() => {
+    const rand = seededRandom(seed);
     const items = [];
     for (let i = 0; i < 7; i++) {
       items.push({
-        pos: [(Math.random() - 0.5) * 0.6, Math.random() * 0.05, (Math.random() - 0.5) * 0.6],
-        s: [0.08 + Math.random() * 0.1, 0.05 + Math.random() * 0.06, 0.08 + Math.random() * 0.1],
-        r: [Math.random(), Math.random(), Math.random()],
+        pos: [(rand() - 0.5) * 0.6, rand() * 0.05, (rand() - 0.5) * 0.6],
+        s: [0.08 + rand() * 0.1, 0.05 + rand() * 0.06, 0.08 + rand() * 0.1],
+        r: [rand(), rand(), rand()],
       });
     }
     return items;
-  }, []);
+  }, [seed]);
 
   return (
     <group {...props} scale={[scale, scale, scale]}>
@@ -38,16 +41,18 @@ export function RiverStones({ scale = 1, ...props }) {
 
 // ── Stepping Path ─────────────────────────────────────────────
 export function SteppingPath({ scale = 1, ...props }) {
+  const seed = useId(); // stable per model, so its shape doesn't change on re-mount
   const tiles = useMemo(() => {
+    const rand = seededRandom(seed);
     const items = [];
     for (let i = 0; i < 5; i++) {
       items.push({
-        pos: [(Math.random() - 0.5) * 0.3, 0.02, i * 0.5 - 1],
-        rot: [0, Math.random() * 0.3, 0],
+        pos: [(rand() - 0.5) * 0.3, 0.02, i * 0.5 - 1],
+        rot: [0, rand() * 0.3, 0],
       });
     }
     return items;
-  }, []);
+  }, [seed]);
 
   return (
     <group {...props} scale={[scale, scale, scale]}>
@@ -141,11 +146,4 @@ export function SolarLight({ scale = 1, ...props }) {
   );
 }
 
-// ── Registry ──────────────────────────────────────────────────
-export const HARDSCAPE_COMPONENTS = {
-  river_stones: RiverStones,
-  stepping_path: SteppingPath,
-  garden_bench: GardenBench,
-  trellis_arch: TrellisArch,
-  solar_light: SolarLight,
-};
+// Lookup by model_type: data/proceduralModels.js

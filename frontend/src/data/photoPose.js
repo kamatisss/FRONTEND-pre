@@ -110,15 +110,51 @@ export function solvePhotoCamera(corners, lotWidth, lotLength, photoWidth, photo
   if (!validCorners(corners) || !(W > 0 && L > 0 && iw > 0 && ih > 0)) return { ok: false, reason: 'missing' };
   const image = corners.map(p => [p.u * iw - iw / 2, p.v * ih - ih / 2]);   // pixels from the photo centre, y down
   if (!isConvex(image)) return { ok: false, reason: 'shape' };
-  const ground = [[0, 0], [W, 0], [W, L], [0, L]];
-  const H = homography(ground, image);
-  if (!H) return { ok: false, reason: 'shape' };
+  return solveFromGround(corners, [[0, 0], [W, 0], [W, L], [0, L]], iw, ih);
+}
+
+/** Least-squares homography for 4 or more point pairs (normalised so pixels and metres weigh alike). */
+export function homographyLS(ground, image) {
+  if (ground.length === 4) return homography(ground, image);
+  const gs = Math.max(1, ...ground.flat().map(Math.abs)), is = Math.max(1, ...image.flat().map(Math.abs));
+  const AtA = Array.from({ length: 8 }, () => new Array(8).fill(0)), Atb = new Array(8).fill(0);
+  const addRow = (row, b) => {
+    for (let i = 0; i < 8; i++) {
+      Atb[i] += row[i] * b;
+      for (let j = 0; j < 8; j++) AtA[i][j] += row[i] * row[j];
+    }
+  };
+  ground.forEach(([X0, Z0], k) => {
+    const X = X0 / gs, Z = Z0 / gs, x = image[k][0] / is, y = image[k][1] / is;
+    addRow([X, Z, 1, 0, 0, 0, -X * x, -Z * x], x);
+    addRow([0, 0, 0, X, Z, 1, -X * y, -Z * y], y);
+  });
+  const h = solve(AtA, Atb);
+  if (!h) return null;
+  // Undo the scaling: H = diag(is, is, 1) · Hn · diag(1/gs, 1/gs, 1)
+  const Hn = [[h[0], h[1], h[2]], [h[3], h[4], h[5]], [h[6], h[7], 1]];
+  const H = Hn.map((row, r) => row.map((v, c) => v * (r < 2 ? is : 1) * (c < 2 ? 1 / gs : 1)));
+  return H.map(row => row.map(v => v / H[2][2]));
+}
+
+/**
+ * The camera from pins on any known ground points (lot metres): the yard's corners when it isn't a rectangle,
+ * a post the customer measured… pins [{u, v}], ground [[x, z]] (same order, 4 or more, not all in a line).
+ * The rotation's right angle and equal scale fix the lens just as for a rectangle, so any metric points do.
+ * focalHint (px, from the photo's EXIF) is tried too. With 5 or more pins the fit is least squares, and
+ * checkError (m) says how far the worst pin's spot lands from where it should be.
+ */
+export function solveFromGround(pins, ground, iw, ih, focalHint = null) {
+  const image = pins.map(p => [p.u * iw - iw / 2, p.v * ih - ih / 2]);
+  const H = homographyLS(ground, image);
+  if (!H || H.flat().some(v => !Number.isFinite(v))) return { ok: false, reason: 'shape' };
+  const corners = pins;
   const longSide = Math.max(iw, ih);
   const minF = 0.4 * longSide, maxF = 3 * longSide;
 
   const fitError = (pose) => {
     let worst = 0;
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < ground.length; i++) {
       const q = projectGroundPoint(pose, ground[i][0], ground[i][1], iw, ih);
       if (!(q.depth > 0)) return Infinity;
       worst = Math.max(worst, Math.hypot((q.u - corners[i].u) * iw, (q.v - corners[i].v) * ih));
@@ -143,6 +179,10 @@ export function solvePhotoCamera(corners, lotWidth, lotLength, photoWidth, photo
     const c = f2 > 0 ? tryFocal(Math.sqrt(f2)) : null;
     if (c && (!best || c.err < best.err)) best = { ...c, estimated: false };
   }
+  if (focalHint > 0) {
+    const c = tryFocal(focalHint);
+    if (c && (!best || c.err < best.err + 0.001)) best = { ...c, estimated: false };   // the photo's own lens wins a tie
+  }
   if (!best || best.err > 0.002) {
     for (let i = 0; i <= 48; i++) {                     // log-spaced search, then refine around the best
       const c = tryFocal(minF * Math.pow(maxF / minF, i / 48));
@@ -163,7 +203,15 @@ export function solvePhotoCamera(corners, lotWidth, lotLength, photoWidth, photo
   const { pose } = best;
   if (pose.position[1] <= 0.05) return { ok: false, reason: 'upside_down' };   // pins mirrored / back and front swapped
   if (pose.position[1] > 80) return { ok: false, reason: 'shape' };
-  return { ok: true, ...pose, estimatedFocal: best.estimated, fitError: best.err };
+  let checkError = null;
+  if (ground.length > 4) {
+    checkError = 0;
+    pins.forEach((p, i) => {
+      const g = imageToGround(pose, p.u, p.v, iw, ih);
+      checkError = Math.max(checkError, g ? Math.hypot(g.x - ground[i][0], g.z - ground[i][1]) : Infinity);
+    });
+  }
+  return { ok: true, ...pose, estimatedFocal: best.estimated, fitError: best.err, checkError };
 }
 
 /* ── Side-edge pins: the usual photo, where the front corners are out of the frame ───────────────
@@ -254,17 +302,50 @@ function poseFromAxes(rx, ry, rz, t, focal, ih) {
  * Pins in any saved form → { pins, mode, focal35 }, or null. Older designs saved a bare array of the
  * four yard corners; newer ones { pins, mode: 'edges' | 'corners', focal35 }.
  */
+const validPointPins = (v) => v && Array.isArray(v.pins) && Array.isArray(v.anchors) && v.pins.length >= 4
+  && v.pins.length <= MAX_POINT_PINS && v.anchors.length === v.pins.length
+  && v.pins.every(p => p && Number.isFinite(p.u) && Number.isFinite(p.v))
+  && v.anchors.every(a => a && Number.isFinite(a.x) && Number.isFinite(a.z));
+
 export function normalizePins(value) {
+  const vantage = value && VANTAGES[value.vantage] ? { vantage: value.vantage } : {};
+  if (value?.mode === 'points') {
+    return validPointPins(value)
+      ? { pins: value.pins, mode: 'points', anchors: value.anchors, focal35: Number(value.focal35) > 0 ? Number(value.focal35) : null, ...vantage }
+      : null;
+  }
+  if (value?.mode === 'fences') {
+    return validFencePins(value.pins)
+      ? { pins: value.pins, mode: 'fences', focal35: Number(value.focal35) > 0 ? Number(value.focal35) : null, ...vantage,
+        ...(Number(value.frontWidth) > 0 && { frontWidth: Number(value.frontWidth) }),   // measured width at the house side
+        ...(['left', 'right'].includes(value.lean) && { lean: value.lean }) }               // which fence angles (else both)
+      : null;
+  }
   if (validCorners(value)) return { pins: value, mode: 'corners', focal35: null };
   if (value && validCorners(value.pins)) {
     return { pins: value.pins, mode: value.mode === 'corners' ? 'corners' : 'edges',
-      focal35: Number(value.focal35) > 0 ? Number(value.focal35) : null };
+      focal35: Number(value.focal35) > 0 ? Number(value.focal35) : null, ...vantage };
   }
   return null;
 }
 
-export const pinLabels = (mode) => (mode === 'corners' ? CORNER_LABELS : EDGE_LABELS);
-export const defaultPins = (mode) => (mode === 'corners' ? defaultCorners() : defaultEdgePins());
+/**
+ * Where the photo was taken from, as the customer says (saved with the pins as `vantage`): the camera height
+ * we expect (height) and the heights that still look right (range). Many yard photos are taken from an
+ * upstairs window or balcony: judged as "standing", they look 3–8 m too high and the size fix would be wrong.
+ */
+export const VANTAGES = {
+  ground: { label: 'Standing in the yard', height: 1.5, range: [0.8, 2.6] },
+  upstairs: { label: 'Upstairs window or balcony', height: 4.5, range: [2.6, 6.5] },
+  high: { label: 'Two floors up or higher', height: 7.5, range: [5.5, 14] },
+};
+export const vantageOf = (setup) => VANTAGES[setup?.vantage] || VANTAGES.ground;
+
+export const pinLabels = (mode, setup = null) => (mode === 'points'
+  ? (setup?.anchors || []).map((a, i) => a.label || `Pin ${i + 1}`)
+  : mode === 'fences' ? FENCE_LABELS : mode === 'corners' ? CORNER_LABELS : EDGE_LABELS);
+export const MAX_POINT_PINS = 6;   // 4 fix the camera; up to 2 more check it
+export const defaultPins = (mode) => (mode === 'fences' ? defaultFencePins() : mode === 'corners' ? defaultCorners() : defaultEdgePins());
 
 /**
  * The camera for saved pins ({ pins, mode, focal35 }) on a W × L lot and a photo of iw × ih pixels.
@@ -272,9 +353,15 @@ export const defaultPins = (mode) => (mode === 'corners' ? defaultCorners() : de
  */
 export function solvePhotoPose(setup, lotWidth, lotLength, photoWidth, photoHeight) {
   const s = normalizePins(setup) || { pins: defaultEdgePins(), mode: 'edges', focal35: null };
-  const pose = s.mode === 'corners'
-    ? solvePhotoCamera(s.pins, lotWidth, lotLength, photoWidth, photoHeight)
-    : solveFromEdges(s.pins, lotWidth, photoWidth, photoHeight, focalPixels(s.focal35, photoWidth, photoHeight));
+  const pose = s.mode === 'fences'
+    ? solveFromFences(s.pins, lotWidth, photoWidth, photoHeight, focalPixels(s.focal35, photoWidth, photoHeight),
+      { front: s.frontWidth ? { width: s.frontWidth, z: Number(lotLength) } : null, split: s.lean || 'both' })
+    : s.mode === 'points'
+    ? solveFromGround(s.pins, s.anchors.map(a => [a.x, a.z]), photoWidth, photoHeight,
+      s.focal35 ? focalPixels(s.focal35, photoWidth, photoHeight) : null)
+    : s.mode === 'corners'
+      ? solvePhotoCamera(s.pins, lotWidth, lotLength, photoWidth, photoHeight)
+      : solveFromEdges(s.pins, lotWidth, photoWidth, photoHeight, focalPixels(s.focal35, photoWidth, photoHeight));
   return pose.ok ? { ...pose, mode: s.mode, cameraHeight: pose.position[1] } : { ...pose, mode: s.mode };
 }
 
@@ -284,6 +371,20 @@ export function projectGroundPoint(pose, x, z, photoWidth, photoHeight) {
   const camX = dot(rel, pose.axes.right), camY = dot(rel, pose.axes.up), depth = -dot(rel, pose.axes.back);
   const f = pose.focal;
   return { u: (f * camX / depth + photoWidth / 2) / photoWidth, v: (-f * camY / depth + photoHeight / 2) / photoHeight, depth };
+}
+
+/**
+ * The ground point (x, z) under a spot on the photo (u, v fractions) — the inverse of projectGroundPoint:
+ * the camera ray through that pixel, met with the ground (y = 0). null at or above the horizon (sky, roofs).
+ * With the pins lined up, a tap on the photo is a real spot in the yard (Mark your yard, YardSurvey.jsx).
+ */
+export function imageToGround(pose, u, v, photoWidth, photoHeight) {
+  const px = u * photoWidth - photoWidth / 2, py = -(v * photoHeight - photoHeight / 2);
+  const { right, up, back } = pose.axes;
+  const dir = [0, 1, 2].map(i => right[i] * px + up[i] * py - back[i] * pose.focal);
+  if (!(dir[1] < -1e-9)) return null;
+  const t = -pose.position[1] / dir[1];
+  return { x: pose.position[0] + t * dir[0], z: pose.position[2] + t * dir[2] };
 }
 
 /**
@@ -301,3 +402,237 @@ export function suggestLength(corners, lotWidth, photoWidth, photoHeight) {
   }
   return best && best.err < 0.015 ? Math.round(best.L * 2) / 2 : null;
 }
+
+/* ── Helping the customer line up (YardSurvey step 1) ──────────────────────────────────────────── */
+
+/**
+ * The lot size that puts the camera where the customer says the photo was taken from (vantageOf) — the
+ * usual reason a camera "works out 8 m high" is a yard width typed from memory (or the photo was taken
+ * upstairs). With back corners + side fences the pins only fix the shape: the scale comes from the width
+ * alone, so it scales straight to that height; with all four corners width and length scale together
+ * (their ratio is in the pins). Spots the customer measured fix the scale themselves: null.
+ * Length (back corners + side fences): the pins don't fix it, but where the photo was taken does — standing
+ * in the yard, or at a window of the house on its front side, the yard reaches about that far (standZ, from
+ * the back fence), so a shorter length only grows to it.
+ * → { width, length, cameraHeight, standX, standZ, changed } (0.5 m steps) or null.
+ */
+export function fitSizeToCamera(setup, lotWidth, lotLength, photoWidth, photoHeight, { min = 2, max = 50 } = {}) {
+  const s = normalizePins(setup);
+  if (!s || s.mode === 'points') return null;
+  const W = Number(lotWidth), L = Number(lotLength);
+  const pose = solvePhotoPose(s, W, L, photoWidth, photoHeight);
+  if (!pose.ok || !(pose.cameraHeight > 0)) return null;
+  const k = vantageOf(s).height / pose.cameraHeight;
+  const half = (v) => Math.round(v * 2) / 2;
+  const width = half(W * k);
+  let length = s.mode === 'corners' ? half(L * k) : L;
+  const stood = pose.position[2] * k;   // edges: distances scale with the width too
+  if ((s.mode === 'edges' || s.mode === 'fences') && stood > length + 0.75) length = half(stood);
+  if (s.mode === 'fences' && pose.measuredLength) length = half(pose.measuredLength * k);   // the house-side pin measured it
+  if (!(width >= min && width <= max && length >= min && length <= max)) return null;
+  const check = solvePhotoPose(s, width, length, photoWidth, photoHeight);
+  if (!check.ok) return null;
+  return { width, length, cameraHeight: check.cameraHeight, standX: check.position[0], standZ: check.position[2], measured: !!pose.measuredLength,
+    changed: Math.abs(width - W) >= 0.5 || Math.abs(length - L) >= 0.5 };
+}
+
+/**
+ * The patch of ground the photo shows, seen from above: the photo's border walked round, each point taken
+ * down to the ground (cut at the horizon, and at `far` metres from the camera). → [{ x, z }] (lot metres).
+ */
+export function photoFootprint(pose, photoWidth, photoHeight, far = 60) {
+  const n = 24, border = [];
+  for (let k = 0; k <= n; k++) border.push([0, k / n]);            // left edge, top → bottom
+  for (let k = 1; k <= n; k++) border.push([k / n, 1]);            // bottom edge, left → right
+  for (let k = 1; k <= n; k++) border.push([1, 1 - k / n]);        // right edge, bottom → top
+  for (let k = 1; k < n; k++) border.push([1 - k / n, 0]);         // top edge, right → left
+  const [cx, , cz] = pose.position;
+  const { right, up, back } = pose.axes;
+  const out = [];
+  border.forEach(([u, v]) => {
+    const px = u * photoWidth - photoWidth / 2, py = -(v * photoHeight - photoHeight / 2);
+    const dir = [0, 1, 2].map(i => right[i] * px + up[i] * py - back[i] * pose.focal);
+    const g = imageToGround(pose, u, v, photoWidth, photoHeight);
+    const flat = Math.hypot(dir[0], dir[2]) || 1;
+    const farPt = { x: cx + (dir[0] / flat) * far, z: cz + (dir[2] / flat) * far };
+    if (!g || Math.hypot(g.x - cx, g.z - cz) > far) out.push(farPt);   // sky, or very far: cut at `far`
+    else out.push(g);
+  });
+  return out;
+}
+
+/** Share (0..1) of the W × L lot inside a ground polygon (e.g. photoFootprint), on a 24 × 24 sample. */
+export function lotShareInside(poly, lotWidth, lotLength) {
+  if (!poly?.length) return 0;
+  const inside = (x, z) => {
+    let c = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const a = poly[i], b = poly[j];
+      if ((a.z > z) !== (b.z > z) && x < ((b.x - a.x) * (z - a.z)) / (b.z - a.z) + a.x) c = !c;
+    }
+    return c;
+  };
+  let hit = 0;
+  for (let i = 0; i < 24; i++) for (let j = 0; j < 24; j++) if (inside(((i + 0.5) / 24) * lotWidth, ((j + 0.5) / 24) * lotLength)) hit++;
+  return hit / 576;
+}
+
+/* ── Six pins: back corners + two points on each side fence ('fences', the default from 2026-11-12) ─────────
+   A fence is a line, so two pins on each side fence (near and far) say exactly where it runs. With the two back
+   corners that is more than the camera needs (8 conditions for 6 unknowns), so the pins can be checked against
+   each other: a pin off its fence shows up, and a yard whose fences aren't parallel (narrower or wider towards
+   the back) is recognised and measured instead of being forced into a rectangle.
+   Order (clockwise on the photo): back left, back right, right fence far, right fence near, left fence near,
+   left fence far. The camera is fitted by damped least squares (Levenberg–Marquardt, numeric Jacobian) on the
+   pins' ground positions, starting from the four-pin solution. */
+/* Eight pins (2026-11-12): the six above, then
+     6 · Back fence, middle — a third point on the back fence: the back corners can now be checked too (the three
+         must line up), and the fit has one more condition to hold.
+     7 · House side — where the yard meets the house (or the front fence), if the photo shows it (taken from
+         upstairs or a corner). The other pins fix the camera; this one then MEASURES the yard's length, which six
+         pins can't. Most photos are taken from the house, so it's usually out of view: { skip: true } = not used.
+   Older saved designs have six pins and work as before. */
+export const FENCE_LABELS = ['Back left', 'Back right', 'Right fence, far', 'Right fence, near', 'Left fence, near', 'Left fence, far',
+  'Back fence, middle', 'House side'];
+export const FENCE_OUTLINE = 6;   // the first six pins outline the yard on the photo; the other two sit on its edges
+export const defaultFencePins = () => [
+  // each fence's far pin a third of the way from its corner to its near pin: on the line, so nothing starts red
+  { u: 0.3, v: 0.42 }, { u: 0.7, v: 0.42 }, { u: 0.7875, v: 0.574 }, { u: 0.95, v: 0.86 }, { u: 0.05, v: 0.86 }, { u: 0.2125, v: 0.574 },
+  { u: 0.5, v: 0.42 },                 // on the back line, between the corners
+  { u: 0.5, v: 0.97, skip: true },     // the house side: only when they can see it
+];
+export const validFencePins = (p) => Array.isArray(p) && (p.length === 6 || p.length === 8)
+  && p.every(q => q && Number.isFinite(q.u) && Number.isFinite(q.v));
+const hasMid = (pins) => pins.length >= 7 && !pins[6].skip;
+const hasHouse = (pins) => pins.length >= 8 && !pins[7].skip;
+export const FENCE_OFF = 0.3;   // m
+export const FENCE_BEND = 0.012; // share of the photo's diagonal: a fence pin this far off the line its corner and partner make
+
+// Rotate a vector about an axis (Rodrigues); w = axis × angle
+function rotate(v, w) {
+  const a = len(w);
+  if (a < 1e-12) return v;
+  const k = scale(w, 1 / a), c = Math.cos(a), s = Math.sin(a);
+  return add(add(scale(v, c), scale(cross(k, v), s)), scale(k, dot(k, v) * (1 - c)));
+}
+function nudged(base, p) {   // p: [dx, dy, dz, wx, wy, wz] applied to a pose
+  const w = [p[3], p[4], p[5]];
+  return { ...base, position: add(base.position, [p[0], p[1], p[2]]),
+    axes: { right: rotate(base.axes.right, w), up: rotate(base.axes.up, w), back: rotate(base.axes.back, w) } };
+}
+
+// The ground under each pin for a pose; null above the horizon
+const groundOf = (pose, pins, iw, ih) => pins.map(q => imageToGround(pose, q.u, q.v, iw, ih));
+const rmsOf = (r) => Math.sqrt(r.reduce((s, v) => s + v * v, 0) / r.length);
+
+// Residuals (m): back corners on (0,0) and (W,0); side pins on the fence lines. taper = [a, b]: each fence leaves
+// its back corner at that angle from straight ahead (0 = square to the back fence)
+function fenceResiduals(pose, pins, W, iw, ih, taper, front = null) {
+  const g = groundOf(pose, pins.slice(0, 7), iw, ih);   // (the house-side pin isn't fitted: it measures)
+  if (g.some((p, i) => !p && !(i === 6 && !hasMid(pins)))) return null;
+  const [a, b] = taper || [0, 0];
+  const off = (p, x0, t) => (p.x - x0 - p.z * Math.tan(t)) * Math.cos(t);
+  const r = [g[0].x, g[0].z, g[1].x - W, g[1].z, off(g[2], W, b), off(g[3], W, b), off(g[4], 0, a), off(g[5], 0, a)];
+  if (hasMid(pins)) r.push(g[6].z);   // the back fence's middle pin: on the back fence too
+  // A measured width at the house side (front.width at front.z metres from the back): the one thing a single
+  // photo can't tell — a tapering yard looks exactly like a rectangle seen from another height
+  if (front) r.push((W + front.z * (Math.tan(b) - Math.tan(a))) - front.width);
+  return r;
+}
+
+// Damped least squares over the pose (and the fence angles when `free`); skip: a side pin (2–5) left out
+// split (with a front width): which fences lean — 'both' (equally, mirrored), 'left' or 'right' (the other is square)
+const leanOf = (q, split) => (split === 'left' ? [q[6], 0] : split === 'right' ? [0, q[6]] : [-q[6], q[6]]);
+function fitFences(start, pins, W, iw, ih, { free = false, skip = [], front = null, split = 'both' } = {}) {
+  let p = new Array(free ? 7 : 6).fill(0);
+  const weight = (i) => (skip.includes(i - 2) ? 0 : 1);
+  const res = (q) => {
+    const r = fenceResiduals(nudged(start, q), pins, W, iw, ih, free ? leanOf(q, split) : null, front);
+    return r && r.map((v, i) => v * weight(i));
+  };
+  const cost = (r) => (r ? r.reduce((s, v) => s + v * v, 0) : Infinity);
+  let r = res(p), c = cost(r), lambda = 1e-3;
+  if (!r) return null;
+  for (let it = 0; it < 80; it++) {
+    const J = p.map((_, j) => {
+      const h = j < 3 ? 1e-4 : 1e-6, q = p.slice();
+      q[j] += h;
+      const rq = res(q);
+      return rq ? rq.map((v, i) => (v - r[i]) / h) : null;
+    });
+    if (J.some(col => !col)) break;
+    const n = p.length;
+    const A = Array.from({ length: n }, (_, i) => Array.from({ length: n }, (_, j) => J[i].reduce((s, v, k) => s + v * J[j][k], 0)));
+    const g = Array.from({ length: n }, (_, i) => -J[i].reduce((s, v, k) => s + v * r[k], 0));
+    let improved = false, moved = false;
+    for (let tries = 0; tries < 10 && !moved; tries++) {
+      const Ad = A.map((row, i) => row.map((v, j) => v + (i === j ? lambda * (v + 1e-9) : 0)));
+      const step = solve(Ad, g);
+      if (!step) { lambda *= 10; continue; }
+      const q = p.map((v, i) => v + step[i]);
+      const rq = res(q), cq = cost(rq);
+      if (cq < c) { improved = c - cq > 1e-16; p = q; r = rq; c = cq; lambda = Math.max(1e-12, lambda / 3); moved = true; }
+      else lambda *= 10;
+    }
+    if (!improved) break;
+  }
+  const pose = nudged(start, p), taper = free ? leanOf(p, split) : [0, 0];
+  return { pose, taper, residuals: fenceResiduals(pose, pins, W, iw, ih, taper, front) };
+}
+
+/**
+ * The camera for six fence pins on a yard whose back is W metres wide, and how well the pins agree.
+ * front: { width, z } — the yard's width measured at the house side, z metres from the back fence (optional).
+ * Without it the yard is taken as a rectangle (a single photo can't tell a tapering yard from a rectangle seen
+ * from another height); with it, fences that lean are measured.
+ * → { ok, ...pose, mode: 'fences', fitError (m, RMS), offPins: [side pins that sit off their fence],
+ *     taper: null | { left, right (radians), outline(L) → [{x, z}] from the back-left corner } } or { ok: false, reason }.
+ */
+export function solveFromFences(pins, lotWidth, photoWidth, photoHeight, focal, { front = null, split = 'both' } = {}) {
+  const W = Number(lotWidth), iw = Number(photoWidth), ih = Number(photoHeight);
+  if (!validFencePins(pins) || !(W > 0 && iw > 0 && ih > 0)) return { ok: false, reason: 'missing' };
+  // Pins off their fence: a straight fence is a straight line on the photo too (whatever the camera or the yard's
+  // shape), so each back corner and its two fence pins must line up. With three points the photo can't say which
+  // one moved, so the fence is named (both its pins are highlighted). Checked first: it holds even when no camera fits.
+  const offPins = [], diag = Math.hypot(iw, ih);
+  const dist = (p, q, r) => Math.abs((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])) / (Math.hypot(q[0] - p[0], q[1] - p[1]) || 1);
+  for (const [c, a, b] of [[1, 2, 3], [0, 5, 4]]) {
+    const P = [c, a, b].map(k => [pins[k].u * iw, pins[k].v * ih]);
+    if (Math.max(dist(P[0], P[2], P[1]), dist(P[0], P[1], P[2])) / diag > FENCE_BEND) offPins.push(a, b);
+  }
+  // The back fence: its middle pin must line up with the two back corners (any of the three may be the one off)
+  if (hasMid(pins)) {
+    const P = [0, 6, 1].map(k => [pins[k].u * iw, pins[k].v * ih]);
+    if (dist(P[0], P[2], P[1]) / diag > FENCE_BEND) offPins.push(0, 1, 6);
+  }
+  // Start: the four-pin solution from whichever pair of side pins gives a camera nearest eye level
+  // (no convexity test: on a straight fence the back corner and its two pins are in a line, as they should be)
+  let start = null;
+  for (const [r, l] of [[2, 5], [3, 4], [2, 4], [3, 5]]) {
+    const s = solveFromEdges([pins[0], pins[1], pins[r], pins[l]], W, iw, ih, focal);
+    if (s.ok && (!start || Math.abs(s.position[1] - 1.7) < Math.abs(start.position[1] - 1.7))) start = s;
+  }
+  if (!start) return { ok: false, reason: 'upside_down', offPins };
+  const hasFront = front && Number(front.width) > 0 && Number(front.z) > 0 && Math.abs(Number(front.width) - W) >= 0.1;
+  let fit = hasFront
+    ? fitFences(start, pins, W, iw, ih, { free: true, split, front: { width: Number(front.width), z: Number(front.z) } })
+    : fitFences(start, pins, W, iw, ih);
+  // A stray pin can drag the fit somewhere impossible: keep the plain four-pin camera then
+  const sane = (f) => f?.residuals && f.pose.position[1] > 0.05 && f.pose.position[1] <= 80;
+  if (!sane(fit)) {
+    const r = fenceResiduals(start, pins, W, iw, ih, null);
+    fit = r ? { pose: start, taper: [0, 0], residuals: r } : null;
+  }
+  if (!sane(fit)) return { ok: false, reason: 'shape', offPins };
+  const pose = fit.pose;
+  const rms = rmsOf(fit.residuals.slice(0, hasMid(pins) ? 9 : 8));
+  const [ta, tb] = fit.taper;
+  const taper = hasFront && (Math.abs(ta) > 1e-4 || Math.abs(tb) > 1e-4) && Math.abs(ta) < 0.45 && Math.abs(tb) < 0.45
+    ? { left: ta, right: tb, outline: (L) => [{ x: 0, z: 0 }, { x: W, z: 0 }, { x: W + L * Math.tan(tb), z: L }, { x: L * Math.tan(ta), z: L }] }
+    : null;
+  // The house-side pin, when they could see it: the ground under it is how far the yard runs from the back fence
+  const house = hasHouse(pins) ? imageToGround(pose, pins[7].u, pins[7].v, iw, ih) : null;
+  const measuredLength = house && house.z > 0.5 && house.z < 200 ? house.z : null;
+  return { ok: true, ...pose, mode: 'fences', estimatedFocal: true, fitError: rms, offPins, taper, measuredLength };
+}
+

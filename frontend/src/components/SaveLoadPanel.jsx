@@ -1,12 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useEffectEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useDesign } from '../context/DesignContext';
-import { saveDesign, listDesigns, loadDesign, deleteDesign, submitDesign } from '../services/api';
+import { saveDesign, listDesigns, deleteDesign, submitDesign } from '../services/api';
 import {
-  Save, FolderOpen, Sparkles, X, Loader, HardDrive, Send, Trash2
+  Save, FolderOpen, Sparkles, X, Loader, HardDrive, Send, Trash2, Lock
 } from 'lucide-react';
 import { DEFAULT_TIME_OF_DAY } from '../data/studioLight';
+import { useToast } from './ui/Toast';
 
+import { loadDesignForStudio } from '../data/studioDesign';
 /* ═══════════════════════════════════════════════════════════════
    INLINE STYLES
    ═══════════════════════════════════════════════════════════════ */
@@ -112,10 +114,15 @@ const T = {
   msgSuccess: { fontSize: 11, fontWeight: 700, textAlign: 'center', color: '#059669', marginTop: 8 },
   msgError: { fontSize: 11, fontWeight: 700, textAlign: 'center', color: '#EF4444', marginTop: 8 },
   dirtyLabel: { fontSize: 10, fontWeight: 700, textAlign: 'center', color: '#F59E0B', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 8 },
+  bookedChip: {
+    display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 999,
+    background: '#ECFDF5', color: '#047857', fontSize: 10, fontWeight: 800, marginLeft: 8, verticalAlign: 'middle',
+  },
 };
 
 export default function SaveLoadPanel({ toolbarVariant }) {
-  const { state, dispatch, totalCost } = useDesign();
+  const { state, dispatch, totalCost, ground } = useDesign();
+  const toast = useToast();
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [loadingList, setLoadingList] = useState(false);
@@ -168,8 +175,9 @@ export default function SaveLoadPanel({ toolbarVariant }) {
     }
   };
 
+  const loadDesigns = useEffectEvent(() => fetchDesigns());
   useEffect(() => {
-    if (showModal) fetchDesigns();
+    if (showModal) loadDesigns();
   }, [showModal]);
 
   const fetchDesigns = async () => {
@@ -184,16 +192,12 @@ export default function SaveLoadPanel({ toolbarVariant }) {
     }
   };
 
-  const handleSave = async () => {
-    setSaving(true);
-    setMessage('');
-    try {
-      const payload = {
+  const designPayload = () => ({
         id: state.designId || undefined,
         name: state.designName,
         original_image_url: state.originalImageUrl || '',
         depth_data: state.depthData || {},
-        placed_items: state.placedItems.map(item => ({
+        placed_items: [...state.placedItems.map(item => ({
           product_id: item.productId,
           name: item.name,
           model_type: item.modelType || item.model_type || null,
@@ -201,19 +205,51 @@ export default function SaveLoadPanel({ toolbarVariant }) {
           position: item.position,
           rotation: item.rotation,
           scale: item.scale,
-        })),
-        dimensions: state.dimensions,
+        })), ...(state.carriedItems || [])],
+        // the groundcover over the beds (m² per product) goes with it: staff, crew and share links draw it the same way
+        dimensions: { ...state.dimensions, groundcover: ground?.entries || [] },
         total_cost: totalCost,
         terrain_height: state.terrainHeight,
         time_of_day: state.timeOfDay,
-      };
-      const result = await saveDesign(payload);
-      dispatch({ type: 'SET_DESIGN_META', payload: { designId: result.id } });
+  });
+
+  // A booked design can't be changed (the crew builds from it): keep the booked one as it is and
+  // carry on in a new design. The Studio then works on the new one.
+  const saveAsNew = async () => {
+    setSaving(true);
+    try {
+      const base = (state.designName || 'My design').replace(/ \(new version\)$/, '');
+      const result = await saveDesign({ ...designPayload(), id: undefined, name: `${base} (new version)`.slice(0, 100) });
+      dispatch({ type: 'SET_DESIGN_META', payload: { designId: result.id, designName: result.name, designLocked: false } });
+      dispatch({ type: 'MARK_CLEAN' });
+      toast({ id: 'design-save', type: 'success', title: 'Saved as a new design',
+        message: `"${result.name}". Your booked design hasn't changed.` });
+    } catch (err) {
+      toast({ id: 'design-save', type: 'error', title: "Couldn't save the design", message: err.message });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    setMessage('');
+    try {
+      const result = await saveDesign(designPayload());
+      dispatch({ type: 'SET_DESIGN_META', payload: { designId: result.id, designLocked: !!result.locked } });
       dispatch({ type: 'MARK_CLEAN' });
       setMessage('Design saved successfully!');
       setTimeout(() => setMessage(''), 3000);
+      toast({ id: 'design-save', type: 'success', title: 'Design saved' });
     } catch (err) {
-      setMessage('Save failed: ' + err.message);
+      if (err.locked) {
+        dispatch({ type: 'SET_DESIGN_META', payload: { designLocked: true } });
+        toast({ id: 'design-save', type: 'info', title: 'This design is booked', message: err.message, duration: 0,
+          action: { label: 'Save as a new design', onClick: saveAsNew } });
+      } else {
+        setMessage('Save failed: ' + err.message);
+        toast({ id: 'design-save', type: 'error', title: "Couldn't save the design", message: err.message });
+      }
     } finally {
       setSaving(false);
     }
@@ -221,28 +257,10 @@ export default function SaveLoadPanel({ toolbarVariant }) {
 
   const handleLoad = async (id) => {
     try {
-      const design = await loadDesign(id);
-      dispatch({
-        type: 'LOAD_DESIGN',
-        payload: {
-          designId: design.id,
-          designName: design.name,
-          depthData: design.depth_data,
-          placedItems: (design.placed_items || []).map((item, idx) => ({
-            id: Date.now() + idx,
-            productId: item.product_id,
-            name: item.name,
-            modelType: item.model_type,
-            price: item.price,
-            position: item.position,
-            rotation: item.rotation,
-            scale: item.scale,
-          })),
-          dimensions: design.dimensions || { width: 10, length: 15, terrainType: 'flat' },
-          terrainHeight: design.terrain_height || 1.5,
-          timeOfDay: design.time_of_day ?? DEFAULT_TIME_OF_DAY,
-        },
-      });
+      // Both design formats (AI Designer and Studio), extra items kept (data/studioDesign.js)
+      const { payload, products } = await loadDesignForStudio(id, state.products);
+      if (products) dispatch({ type: 'SET_PRODUCTS', payload: products });
+      dispatch({ type: 'LOAD_DESIGN', payload });
       setShowModal(false);
       setMessage('Design loaded!');
       setTimeout(() => setMessage(''), 3000);
@@ -258,6 +276,7 @@ export default function SaveLoadPanel({ toolbarVariant }) {
       fetchDesigns();
     } catch (err) {
       setMessage('Delete failed');
+      toast({ id: 'design-delete', type: 'error', title: "Couldn't delete the design", message: err.message });
     }
   };
 
@@ -299,7 +318,10 @@ export default function SaveLoadPanel({ toolbarVariant }) {
                 onMouseEnter={e => e.currentTarget.style.background = '#F0FDF4'}
                 onMouseLeave={e => e.currentTarget.style.background = '#F9FAFB'}>
                 <div>
-                  <p style={T.designName}>{d.name || 'Untitled'}</p>
+                  <p style={T.designName}>
+                    {d.name || 'Untitled'}
+                    {d.locked && <span style={T.bookedChip} title="A booking uses this design. Our crew builds from it, so it can't be changed or deleted."><Lock size={10} /> Booked</span>}
+                  </p>
                   <p style={T.designMeta}>₱{Number(d.total_cost).toLocaleString()} · {new Date(d.updated_at).toLocaleDateString()}</p>
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
@@ -308,15 +330,18 @@ export default function SaveLoadPanel({ toolbarVariant }) {
                     onMouseLeave={e => { e.currentTarget.style.borderColor = '#E5E7EB'; e.currentTarget.style.background = '#fff'; }}>
                     Open
                   </button>
-                  <button 
-                    onClick={() => handleDelete(d.id)} 
-                    style={T.deleteBtn}
-                    title="Delete Design"
-                    onMouseEnter={e => e.currentTarget.style.color = '#EF4444'}
-                    onMouseLeave={e => e.currentTarget.style.color = '#D1D5DB'}
-                  >
-                    <Trash2 size={16} />
-                  </button>
+                  {!d.locked && (
+                    <button
+                      onClick={() => handleDelete(d.id)}
+                      style={T.deleteBtn}
+                      title="Delete Design"
+                      aria-label={`Delete ${d.name || 'design'}`}
+                      onMouseEnter={e => e.currentTarget.style.color = '#EF4444'}
+                      onMouseLeave={e => e.currentTarget.style.color = '#D1D5DB'}
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
@@ -357,8 +382,16 @@ export default function SaveLoadPanel({ toolbarVariant }) {
         {/* Unsaved indicator */}
         {state.isDirty && <div style={T.dirtyDot} title="Unsaved changes" />}
 
+        {/* A booking uses this design: saving offers a new design instead */}
+        {state.designId && state.designLocked && (
+          <span style={{ ...T.bookedChip, marginLeft: 0 }}
+            title="A booking uses this design. Our crew builds from it, so your changes save as a new design.">
+            <Lock size={10} /> Booked
+          </span>
+        )}
+
         {/* Submit for Review */}
-        {state.designId && (
+        {state.designId && !state.designLocked && (
           <button onClick={handleSubmitForReview} disabled={submitting || state.isDirty}
             style={{ ...T.submitBtn, opacity: (submitting || state.isDirty) ? 0.5 : 1 }}
             onMouseEnter={e => { if (!submitting) e.currentTarget.style.background = '#000'; }}

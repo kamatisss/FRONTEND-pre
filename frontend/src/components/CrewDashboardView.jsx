@@ -6,6 +6,7 @@ import {
   LogOut, CalendarCheck, Banknote, WifiOff, Crosshair,
 } from 'lucide-react';
 import ThreeGardenCanvas from './ThreeGardenCanvas';
+import { toCanvasPlants } from '../data/projectHub';
 import CrewJobCard, { JobShift, JobSteps, OnMyWay } from './CrewJobCard';
 import CrewDeliveries from './CrewDeliveries';
 import StopsMap from './StopsMap';
@@ -19,6 +20,7 @@ import OutboxBar from '../crew/OutboxBar';
 import { useOutbox } from '../crew/useOutbox';
 import { cachedGet, flushOutbox, sendAction, withPendingAttendance, withPendingDeliveries } from '../crew/outbox';
 
+import SettingOutPlan from './SettingOutPlan';
 /*
  * Field crew app (phone first). Four tabs, all in the URL so links from notifications and the
  * phone's Back button work:  Today (?tab=home) · Jobs (?tab=projects) · Deliveries · Me (?tab=me);
@@ -106,7 +108,8 @@ export default function CrewDashboardView({
   const closeJob = () => (window.history.state?.idx > 0 ? navigate(-1) : navigate('/staff-dashboard?tab=projects', { replace: true }));
 
   const [designModal, setDesignModal] = useState(null);
-  const [modalArMode, setModalArMode] = useState(false);
+  const [modalView, setModalView] = useState('3d');   // '3d' | 'ar' | 'plan' (setting out)
+  const modalArMode = modalView === 'ar';
   const [refreshing, setRefreshing] = useState(false);
   // Weak signal on site: say so plainly, and catch up by itself when the signal comes back
   const [online, setOnline] = useState(() => navigator.onLine !== false);
@@ -204,9 +207,6 @@ export default function CrewDashboardView({
     }
   };
 
-  const toCanvasPlants = (placedItems = []) => placedItems.map(item => (item.plant_id !== undefined
-    ? { plant_id: item.plant_id, x: item.x ?? 0, z: item.z ?? 0, rotation: item.rotation ?? 0 }
-    : { plant_id: item.modelType || item.model_type || String(item.productId || ''), x: item.position?.x ?? 0, z: item.position?.z ?? 0, rotation: item.rotation?.y ?? 0 }));
 
   const clockOutNow = async () => {
     if (!window.confirm('Clock out now? Do this when you leave the site for the day.')) return;
@@ -396,7 +396,7 @@ export default function CrewDashboardView({
           <CrewJobCard booking={job} todayIso={today} activeAttendance={activeAttendance}
             refreshActiveAttendance={refreshActiveAttendance} api={API} headers={headers} toast={toast} user={user}
             submitting={actionLoading === job.id} onSubmit={(id) => updateBookingStatus(id, 'For Review')}
-            onOpenDesign={(design, ar) => { setDesignModal(design); setModalArMode(ar); }}
+            onOpenDesign={(design, view) => { setDesignModal(design); setModalView(view === true ? 'ar' : view || '3d'); }}
             onWorkOrder={handleDownloadJobSheet} onChanged={reloadBookings} onFindIt={findJob} />
         </>
       )}
@@ -490,18 +490,23 @@ export default function CrewDashboardView({
             <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-slate-100">
               <div className="min-w-0">
                 <p className="m-0 font-extrabold text-slate-900 truncate">{designModal.name || 'Garden design'}</p>
-                <p className="m-0 text-xs text-slate-500">{modalArMode ? 'AR photo overlay' : '3D layout'} · view only</p>
+                <p className="m-0 text-xs text-slate-500">{{ ar: 'AR photo overlay', plan: 'Setting-out plan' }[modalView] || '3D layout'} · view only</p>
               </div>
-              {(designModal.reference_image_url || designModal.image_url) && (
-                <div className="flex bg-slate-100 rounded-lg p-1 gap-1 shrink-0">
-                  {[{ ar: false, label: '3D' }, { ar: true, label: 'AR' }].map(({ ar, label }) => (
-                    <button key={label} type="button" onClick={() => setModalArMode(ar)} aria-pressed={modalArMode === ar}
-                      className={`min-h-[36px] px-3 rounded-md text-xs font-bold border-none cursor-pointer ${modalArMode === ar ? 'bg-white text-emerald-800 shadow-sm' : 'bg-transparent text-slate-500'}`}>
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              )}
+              {(() => {
+                const views = [{ key: '3d', label: '3D' },
+                  ...((designModal.reference_image_url || designModal.image_url) ? [{ key: 'ar', label: 'AR' }] : []),
+                  ...(designModal.setting_out?.items?.length ? [{ key: 'plan', label: 'Plan' }] : [])];
+                return views.length > 1 && (
+                  <div className="flex bg-slate-100 rounded-lg p-1 gap-1 shrink-0">
+                    {views.map(({ key, label }) => (
+                      <button key={key} type="button" onClick={() => setModalView(key)} aria-pressed={modalView === key}
+                        className={`min-h-[36px] px-3 rounded-md text-xs font-bold border-none cursor-pointer ${modalView === key ? 'bg-white text-emerald-800 shadow-sm' : 'bg-transparent text-slate-500'}`}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()}
               <button type="button" onClick={() => setDesignModal(null)} aria-label="Close"
                 className="w-10 h-10 rounded-lg text-slate-500 hover:bg-slate-100 bg-transparent border-none cursor-pointer flex items-center justify-center shrink-0">
                 <X size={20} />
@@ -510,18 +515,26 @@ export default function CrewDashboardView({
             {(designModal.dimensions?.customerEdits || designModal.dimensions?.editedByCustomer) && (
               <div className="px-4 pb-2"><CustomerEditsNote dimensions={designModal.dimensions} /></div>
             )}
-            <div style={{ height: 'min(70vh, 480px)' }}>
-              <ThreeGardenCanvas
-                plants={toCanvasPlants(designModal.placed_items)}
-                lotWidth={designModal.dimensions?.width || 10}
-                lotLength={designModal.dimensions?.length || 15}
-                backgroundImageUrl={designModal.reference_image_url || designModal.image_url || null}
-                arMode={modalArMode} arGrid={modalArMode}
-                photoCorners={designModal.dimensions?.photoCorners}
-                gardenPlan={designModal.dimensions?.gardenPlan}
-                readOnly
-              />
-            </div>
+            {modalView === 'plan' ? (
+              <div className="overflow-y-auto" style={{ maxHeight: 'min(78vh, 720px)' }}>
+                <SettingOutPlan data={designModal.setting_out} gardenPlan={designModal.dimensions?.gardenPlan} />
+              </div>
+            ) : (
+              <div style={{ height: 'min(70vh, 480px)' }}>
+                <ThreeGardenCanvas
+                  plants={toCanvasPlants(designModal.placed_items, designModal.dimensions?.width || 10, designModal.dimensions?.length || 15)}
+                  lotWidth={designModal.dimensions?.width || 10}
+                  lotLength={designModal.dimensions?.length || 15}
+                  backgroundImageUrl={designModal.reference_image_url || designModal.image_url || null}
+                  arMode={modalArMode} arGrid={modalArMode}
+                  photoCorners={designModal.dimensions?.photoCorners}
+                  gardenPlan={designModal.dimensions?.gardenPlan}
+                  survey={designModal.dimensions?.siteSurvey}
+                  groundcover={designModal.dimensions?.groundcover}
+                  readOnly
+                />
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -3,7 +3,7 @@ import InstallAppCard from './InstallAppCard';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useDesign } from '../context/DesignContext';
-import api, { listDesigns, loadDesign } from '../services/api';
+import api, { listDesigns } from '../services/api';
 import { 
     LayoutDashboard, 
     Calendar, 
@@ -20,10 +20,13 @@ import {
     Clock, 
     User,
     Package,
-    Compass
+    Compass,
+    AlertTriangle
 } from 'lucide-react';
 import { DEFAULT_TIME_OF_DAY } from '../data/studioLight';
 
+import { loadDesignForStudio } from '../data/studioDesign';
+import ProfileNudge from './ProfileNudge';
 // Booking Step helper for milestone stepper
 const getActiveStep = (status, hasDesign) => {
     switch (status) {
@@ -254,11 +257,13 @@ const UserDashboard = () => {
     const [orders, setOrders] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [reloadKey, setReloadKey] = useState(0); // "Try again" re-runs the load
 
     useEffect(() => {
         const fetchDashboardData = async () => {
             try {
                 setLoading(true);
+                setError(null);
                 // Fetch designs
                 const dData = await listDesigns();
                 setDesigns(dData || []);
@@ -281,32 +286,14 @@ const UserDashboard = () => {
         if (authTokens) {
             fetchDashboardData();
         }
-    }, [authTokens]);
+    }, [authTokens, reloadKey]);
 
     const handleEditDesign = async (id) => {
         try {
-            const design = await loadDesign(id);
-            dispatch({
-                type: 'LOAD_DESIGN',
-                payload: {
-                    designId: design.id,
-                    designName: design.name,
-                    depthData: design.depth_data,
-                    placedItems: (design.placed_items || []).map((item, idx) => ({
-                        id: Date.now() + idx,
-                        productId: item.product_id,
-                        name: item.name,
-                        modelType: item.model_type,
-                        price: item.price,
-                        position: item.position,
-                        rotation: item.rotation,
-                        scale: item.scale,
-                    })),
-                    dimensions: design.dimensions || { width: 10, length: 15, terrainType: 'flat' },
-                    terrainHeight: design.terrain_height || 1.5,
-                    timeOfDay: design.time_of_day ?? DEFAULT_TIME_OF_DAY,
-                },
-            });
+            // Both design formats (AI Designer and Studio), extra items kept (data/studioDesign.js)
+            const { payload, products } = await loadDesignForStudio(id, []);
+            if (products) dispatch({ type: 'SET_PRODUCTS', payload: products });
+            dispatch({ type: 'LOAD_DESIGN', payload });
             navigate('/studio');
         } catch (err) {
             console.error('Failed to load design:', err);
@@ -370,7 +357,21 @@ const UserDashboard = () => {
 
     return (
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8" style={{ fontFamily: "'Inter', sans-serif" }}>
+                {/* A failed load would otherwise look like an empty account */}
+                {error && (
+                    <div role="alert" className="flex flex-wrap items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                        <AlertTriangle size={18} className="shrink-0 text-amber-600" />
+                        <span className="flex-1 min-w-[12rem] font-medium">{error} Your designs, bookings and orders may be missing below.</span>
+                        <button type="button" onClick={() => setReloadKey(k => k + 1)}
+                            className="rounded-xl border-none bg-amber-600 px-3 py-1.5 text-xs font-bold text-white cursor-pointer hover:bg-amber-700">
+                            Try again
+                        </button>
+                    </div>
+                )}
                 
+                {/* A mobile number and a saved address make every checkout and booking shorter */}
+                <ProfileNudge />
+
                 {/* Header Welcome and Quick Actions */}
                 <div style={{ 
                     background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', 
@@ -667,7 +668,15 @@ const UserDashboard = () => {
                                             {!design.original_image_url && <Sparkles size={24} />}
                                         </div>
                                         <h4 style={{ margin: '8px 0 2px 0', fontSize: '14px', fontWeight: '800', color: '#1e293b' }}>{design.name}</h4>
-                                        <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8' }}>Edited {new Date(design.updated_at).toLocaleDateString()}</p>
+                                        <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8' }}>
+                                            Edited {new Date(design.updated_at).toLocaleDateString()}
+                                            {design.locked && (
+                                                <span title="A booking uses this design. Our crew builds from it, so changes save as a new design."
+                                                    style={{ marginLeft: 6, padding: '1px 7px', borderRadius: 999, background: '#ecfdf5', color: '#047857', fontWeight: 800 }}>
+                                                    Booked
+                                                </span>
+                                            )}
+                                        </p>
                                     </div>
                                     <button 
                                         onClick={() => handleEditDesign(design.id)}

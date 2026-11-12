@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useEffectEvent, useState } from 'react';
 import { Plus, FileText, Trash2, Pencil, X, AlertTriangle, EyeOff, ExternalLink } from 'lucide-react';
 import { listCredentials, saveCredential, deleteCredential } from '../services/api';
 
@@ -34,8 +34,9 @@ export default function CredentialsManager({ flash }) {
   const [items,   setItems]   = useState(null);
   const [editing, setEditing] = useState(null); // null | { ...form, id? }
 
+  const showLoadError = useEffectEvent((msg) => flash(msg, 'error'));
   useEffect(() => {
-    listCredentials().then(setItems).catch(e => { setItems([]); flash(e.message, 'error'); });
+    listCredentials().then(setItems).catch(e => { setItems([]); showLoadError(e.message); });
   }, []);
 
   const remove = async (c) => {

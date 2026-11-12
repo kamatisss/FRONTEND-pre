@@ -5,6 +5,7 @@ import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { realScale, widthFit } from '../data/modelSizing';
 import { exactBounds } from '../services/modelBounds';
+import { swayObject, releaseSway } from '../data/plantSway';
 
 // ─── Category scale multipliers ────────────────────────────────────────────────
 // After normalizing every model to 1 unit, these multipliers make each category
@@ -37,7 +38,8 @@ const DEFAULT_CATEGORY_SCALE = 1.5; // fallback for unknown categories
 // targetWidth: metres wide to draw it (a plant's spread at the growth stage; data/modelSizing.widthFit keeps
 // the stretch believable). Empty = keep the model's own shape.
 // stage + establishedSize: plants that grow part by part (data/plantGrowth.js) are reshaped for the stage
-export default function NormalizedModel({ url, scale = 1, category = 'plant', realWorldSize, targetWidth, stage, establishedSize }) {
+// sway: moves in the wind (data/plantSway.js) — placed plants in the Studio; the placement ghost stays still
+export default function NormalizedModel({ url, scale = 1, category = 'plant', realWorldSize, targetWidth, stage, establishedSize, sway = false }) {
   const { scene } = useGLTF(url);
 
   const normalizedScene = useMemo(() => {
@@ -76,6 +78,7 @@ export default function NormalizedModel({ url, scale = 1, category = 'plant', re
     // ── 2b. Planted, not potted: nursery models lose their pot and soil before being measured,
     //        so the height is the plant's own and it grows from the ground (data/plantedModel.js)
     plantOut(clone, url);
+    if (sway) swayObject(clone);   // this copy's own materials, and its shadow, bend in the wind
     // ── 2c. Growing by parts: the palm's trunk lengthens under its crown; fruit and flowers come later
     const rig = rigGrowth(clone, url);
     const ratio = Number(establishedSize) > 0 && Number(realWorldSize) > 0 ? Number(realWorldSize) / Number(establishedSize) : 1;
@@ -120,12 +123,13 @@ export default function NormalizedModel({ url, scale = 1, category = 'plant', re
     );
 
     return clone;
-  }, [scene, scale, category, realWorldSize, url, targetWidth, stage, establishedSize]);
+  }, [scene, scale, category, realWorldSize, url, targetWidth, stage, establishedSize, sway]);
   // Re-run whenever the loaded scene, the user's scale, or the category changes.
 
   // Free this instance's cloned materials when replaced or unmounted.
   // Geometry and textures stay shared with the GLTF cache, so they aren't disposed.
   useEffect(() => () => {
+    releaseSway(normalizedScene);
     normalizedScene.traverse((child) => {
       if (!child.isMesh || !child.material) return;
       (Array.isArray(child.material) ? child.material : [child.material]).forEach((m) => m.dispose());

@@ -9,7 +9,7 @@ import { useBusiness } from '../services/business';
  * It describes what this system really does; when a feature changes what is collected or who
  * receives it, update this page. The owner should read it through before going live.
  */
-export const PRIVACY_UPDATED = 'November 7, 2026';
+export const PRIVACY_UPDATED = 'November 10, 2026';
 
 const Section = ({ title, children }) => (
   <section className="mt-9">
@@ -82,8 +82,8 @@ export default function PrivacyPolicy() {
 
           <Section title="How long we keep it">
             <List items={[
-              ['Your account and designs:', 'until you ask us to delete them.'],
-              ['Bookings, orders and payments:', 'as long as tax and accounting rules require, even after an account is closed.'],
+              ['Your account and designs:', 'until you close your account (My account → Privacy). Closing erases your name, email, mobile number, saved addresses and the designs you never booked; your reviews stay, shown as “Verified customer”.'],
+              ['Bookings, orders and payments:', 'as long as tax and accounting rules require, even after an account is closed, but without your phone number or map pin.'],
               ['Backups:', 'a daily copy of the system is kept for 7 days, then replaced.'],
               ['On a crew phone:', 'jobs and photos saved for use without signal are wiped when the crew member signs out.'],
             ]} />
@@ -97,7 +97,9 @@ export default function PrivacyPolicy() {
           <Section title="Your rights">
             <p className="m-0">Under the Data Privacy Act you have the right to be informed, to access your information, to have it corrected,
               to object to its use, to have it deleted or blocked, to receive a copy in a common format, and to be compensated
-              for damage caused by its misuse. If you believe we have mishandled your information, you can complain to the
+              for damage caused by its misuse. You can do most of this yourself under <b>My account</b>: correct your details
+              (Profile), get a copy of everything we hold about you (Privacy → Download your data), and close your account
+              (Privacy → Close your account). If you believe we have mishandled your information, you can complain to the
               National Privacy Commission (<a href="https://privacy.gov.ph" target="_blank" rel="noopener noreferrer" className="text-emerald-700 font-semibold">privacy.gov.ph</a>).</p>
           </Section>
 

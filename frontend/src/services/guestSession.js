@@ -68,13 +68,13 @@ export const clearStudioDraft = () => {
 };
 
 // ─── Studio → AI Designer hand-off ────────────────────────────────
-// Lot size and chosen plants carry over so the customer doesn't retype them. The landing
+// Lot size, the yard's shape (outline, lot metres) and chosen plants carry over so the customer doesn't redo them. The landing
 // estimate also passes its budget range and install mode (source: 'estimate').
 const AI_PREFILL_KEY = 'gs_ai_prefill';
 
-export const saveAiPrefill = ({ lotWidth, lotLength, plantIds = [], budgetRange = null, install = null, source = 'studio' }) => {
+export const saveAiPrefill = ({ lotWidth, lotLength, plantIds = [], budgetRange = null, install = null, source = 'studio', outline = null }) => {
   try {
-    localStorage.setItem(AI_PREFILL_KEY, JSON.stringify({ lotWidth, lotLength, plantIds, budgetRange, install, source, savedAt: Date.now() }));
+    localStorage.setItem(AI_PREFILL_KEY, JSON.stringify({ lotWidth, lotLength, plantIds, budgetRange, install, source, outline, savedAt: Date.now() }));
   } catch { /* storage blocked or full */ }
 };
 

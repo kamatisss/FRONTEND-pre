@@ -4,7 +4,7 @@ import { Sparkles, Lock, X, ArrowRight } from 'lucide-react';
 import { useDesign } from '../context/DesignContext';
 import { saveAiPrefill, trackFunnel } from '../services/guestSession';
 import { useIsPhone } from './ui/useMediaQuery';
-import { clampLot } from '../data/lot';   // same 2–50 m range as the Studio's lot
+import { clampLot, lotOf } from '../data/lot';   // same 2–50 m range as the Studio's lot
 
 /*
  * Floating "Let AI design this yard" card inside the 3D Studio. Carries the lot
@@ -34,7 +34,7 @@ export default function StudioAITeaser({ guest, onGate }) {
   const setLot = (field, value) => dispatch({ type: 'SET_DIMENSIONS', payload: { [field]: value } });
 
   const go = () => {
-    saveAiPrefill({ lotWidth: clampLot(width), lotLength: clampLot(length, 15), plantIds });
+    saveAiPrefill({ lotWidth: clampLot(width), lotLength: clampLot(length, 15), plantIds, outline: lotOf(state.dimensions).outline });
     if (guest) {
       trackFunnel('ai_teaser_clicked');
       onGate('ai');

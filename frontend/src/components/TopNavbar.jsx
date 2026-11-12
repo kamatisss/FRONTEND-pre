@@ -3,7 +3,9 @@ import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { customerLinks, useStaffLinks } from './navLinks';
 import NotificationBell from './ui/NotificationBell';
-import { LogOut, Leaf, ChevronDown, Menu, X, Download, LayoutDashboard } from 'lucide-react';
+import { LogOut, Leaf, ChevronDown, Menu, X, Download, LayoutDashboard, ShoppingCart, UserRound } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { useCart } from '../context/CartContext';
 import { useInstall } from '../pwa/useInstall';
 import InstallAppSheet from './ui/InstallAppSheet';
 import { dashboardPath } from '../data/roleHome';
@@ -115,6 +117,7 @@ function ProfileDropdown({ user, logoutUser, onClose, onInstall, canInstall }) {
       {/* Menu items */}
       <div style={{ padding: '8px 0' }}>
         <DropItem icon={<LayoutDashboard size={15} />} label="My dashboard" onClick={() => { onClose(); navigate(dashboardPath(user)); }} />
+        <DropItem icon={<UserRound size={15} />} label="My account" onClick={() => { onClose(); navigate('/account'); }} />
         {canInstall && <DropItem icon={<Download size={15} />} label="Install app" onClick={() => { onClose(); onInstall(); }} />}
       </div>
 
@@ -173,6 +176,33 @@ function DropItem({ icon, label, onClick }) {
     >
       <span style={{ color: '#94a3b8' }}>{icon}</span>
       {label}
+    </button>
+  );
+}
+
+/* ─── Cart button (customers): count badge that pops when something is added ─── */
+function CartButton() {
+  const { cartCount } = useCart();
+  const navigate = useNavigate();
+  return (
+    <button
+      type="button"
+      onClick={() => navigate('/shop?cart=open')}
+      aria-label={cartCount ? `Cart, ${cartCount} item${cartCount === 1 ? '' : 's'}` : 'Cart, empty'}
+      className="relative flex items-center justify-center w-10 h-10 rounded-xl border border-slate-200 bg-white text-slate-600 hover:text-emerald-700 hover:border-emerald-200 cursor-pointer shrink-0 transition-colors"
+    >
+      <ShoppingCart size={18} />
+      {cartCount > 0 && (
+        <motion.span
+          key={cartCount}
+          initial={{ scale: 1.6 }}
+          animate={{ scale: 1 }}
+          transition={{ type: 'spring', stiffness: 500, damping: 14 }}
+          className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-black flex items-center justify-center ring-2 ring-white"
+        >
+          {cartCount > 9 ? '9+' : cartCount}
+        </motion.span>
+      )}
     </button>
   );
 }
@@ -307,6 +337,10 @@ const TopNavbar = () => {
         @media (max-width: 340px) {
           .tn-brand-name { display: none !important; }
         }
+        /* Customers also have the cart button: the logo alone carries the brand on small phones */
+        @media (max-width: 419px) {
+          .tn-brand-name.tn-has-cart { display: none !important; }
+        }
         .tn-menu-link {
           display: flex; align-items: center; gap: 12px;
           padding: 12px 14px; border-radius: 12px;
@@ -349,7 +383,7 @@ const TopNavbar = () => {
           }}>
             <Leaf size={16} color="white" />
           </div>
-          <span className="tn-brand-name" style={{
+          <span className={`tn-brand-name${isAdminOrStaff ? '' : ' tn-has-cart'}`} style={{
             fontSize: 16, fontWeight: 900, color: '#0f172a', letterSpacing: '-0.5px',
           }}>
             Garden Studio
@@ -375,6 +409,7 @@ const TopNavbar = () => {
 
         {/* Far right: notifications + profile dropdown */}
         <div className={isAdminOrStaff ? 'ml-auto' : 'ml-auto lg:ml-0'} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        {!isAdminOrStaff && <CartButton />}
         <NotificationBell />
         <div ref={dropRef} style={{ position: 'relative' }}>
           <button

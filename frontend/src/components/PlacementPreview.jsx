@@ -3,8 +3,7 @@ import { useThree, useFrame } from '@react-three/fiber';
 import { ErrorBoundary } from 'react-error-boundary';
 import * as THREE from 'three';
 import { useDesign } from '../context/DesignContext';
-import { PLANT_COMPONENTS } from './ProceduralPlants';
-import { HARDSCAPE_COMPONENTS } from './ProceduralHardscape';
+import { PLANT_COMPONENTS, HARDSCAPE_COMPONENTS } from '../data/proceduralModels';
 import NormalizedModel from './NormalizedModel';
 import ModelPlaceholder from './ModelPlaceholder';
 import { resolveModelUrl } from '../data/modelCatalog';
@@ -20,7 +19,7 @@ const ALL_COMPONENTS = { ...PLANT_COMPONENTS, ...HARDSCAPE_COMPONENTS };
  */
 export default function PlacementPreview({ terrainRef }) {
   const { state, dispatch } = useDesign();
-  const { camera, gl, raycaster, scene } = useThree();
+  const { camera, gl, raycaster } = useThree();
 
   const groupRef = useRef();
   const targetPos = useRef(new THREE.Vector3(0, 0, 0));

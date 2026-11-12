@@ -20,8 +20,8 @@ const peso = (n) => `₱${Number(n || 0).toLocaleString('en-PH', { maximumFracti
 export default function StudioItemTray({ category, onCategory, onClose, onSeeAll }) {
   const { state, dispatch } = useDesign();
   const placing = state.placementMode === 'placing' && state.previewObject;
-  const items = state.products.filter(p => p.category === category);
-  const count = (key) => state.products.filter(p => p.category === key).length;
+  const items = state.products.filter(p => p.category === category && !p.is_groundcover);
+  const count = (key) => state.products.filter(p => p.category === key && !p.is_groundcover).length;
 
   const pick = (product) => {
     if (placing && state.selectedProduct?.id === product.id) { dispatch({ type: 'CANCEL_PLACEMENT' }); return; }
@@ -77,6 +77,21 @@ export default function StudioItemTray({ category, onCategory, onClose, onSeeAll
             <p style={{ fontSize: 12.5, color: '#475569', display: 'flex', alignItems: 'center', gap: 4 }}>
               <Hand size={13} /> Tap the ground where it goes
             </p>
+          {state.previewObject?.productId != null && state.products.find(p => p.id === state.previewObject.productId)?.category === 'plant' && state.placementMode !== 'editing' && (
+            <div role="radiogroup" aria-label="How many to plant" style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: '#475569', marginRight: 2 }}>Plant</span>
+              {[1, 3, 5, 7].map(n => (
+                <button key={n} type="button" role="radio" aria-checked={(state.groupSize || 1) === n}
+                  onClick={() => dispatch({ type: 'SET_GROUP_SIZE', payload: n })}
+                  title={n === 1 ? 'One plant' : `A natural group of ${n}, spaced to grow`}
+                  style={{ minWidth: 34, minHeight: 32, padding: '0 8px', borderRadius: 8, cursor: 'pointer', fontWeight: 800, fontSize: 12.5,
+                    border: `1.5px solid ${(state.groupSize || 1) === n ? '#059669' : '#CBD5E1'}`,
+                    background: (state.groupSize || 1) === n ? '#ECFDF5' : '#fff', color: (state.groupSize || 1) === n ? '#065F46' : '#334155' }}>
+                  {n === 1 ? '1' : `×${n}`}
+                </button>
+              ))}
+            </div>
+          )}
           </div>
           <button type="button" className="sit-cancel" onClick={() => dispatch({ type: 'CANCEL_PLACEMENT' })}>Cancel</button>
         </div>

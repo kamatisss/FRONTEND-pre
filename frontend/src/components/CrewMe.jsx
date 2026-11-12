@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Clock, LogOut, ChevronRight, CalendarClock, Navigation } from 'lucide-react';
+import { Clock, LogOut, ChevronRight, CalendarClock, Navigation, UserRound } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import PushAlertsCard from './PushAlertsCard';
 import InstallAppCard from './InstallAppCard';
@@ -141,6 +141,16 @@ export default function CrewMe({ user, activeAttendance, api, headers, toast, re
         <span className="flex-1">
           <span className="block text-sm font-bold">Attendance page</span>
           <span className="block text-xs text-slate-500">Clock in without a job, full history</span>
+        </span>
+        <ChevronRight size={18} className="text-slate-400" />
+      </Link>
+
+      <Link to="/account"
+        className="flex items-center gap-3 min-h-[56px] px-4 bg-white rounded-2xl border border-slate-200 no-underline text-slate-800 hover:bg-slate-50">
+        <UserRound size={18} className="text-emerald-600 shrink-0" />
+        <span className="flex-1">
+          <span className="block text-sm font-bold">My account</span>
+          <span className="block text-xs text-slate-500">Name, mobile number, password</span>
         </span>
         <ChevronRight size={18} className="text-slate-400" />
       </Link>

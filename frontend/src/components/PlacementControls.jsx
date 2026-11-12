@@ -51,6 +51,23 @@ export default function PlacementControls() {
         )}
       </div>
 
+      {/* "Plant a group": odd-numbered drifts look natural (plants only) */}
+          {state.previewObject?.productId != null && state.products.find(p => p.id === state.previewObject.productId)?.category === 'plant' && !isEditing && (
+            <div role="radiogroup" aria-label="How many to plant" style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap', flexShrink: 0 }}>
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: '#CBD5E1', marginRight: 2 }}>Plant</span>
+              {[1, 3, 5, 7].map(n => (
+                <button key={n} type="button" role="radio" aria-checked={(state.groupSize || 1) === n}
+                  onClick={() => dispatch({ type: 'SET_GROUP_SIZE', payload: n })}
+                  title={n === 1 ? 'One plant' : `A natural group of ${n}, spaced to grow`}
+                  style={{ minWidth: 34, minHeight: 32, padding: '0 8px', borderRadius: 8, flexShrink: 0, cursor: 'pointer', fontWeight: 800, fontSize: 12.5,
+                    border: `1.5px solid ${(state.groupSize || 1) === n ? '#059669' : '#CBD5E1'}`,
+                    background: (state.groupSize || 1) === n ? '#ECFDF5' : '#fff', color: (state.groupSize || 1) === n ? '#065F46' : '#334155' }}>
+                  {n === 1 ? '1' : `×${n}`}
+                </button>
+              ))}
+            </div>
+          )}
+
       {/* Action buttons */}
       <div className="placement-actions">
         <button

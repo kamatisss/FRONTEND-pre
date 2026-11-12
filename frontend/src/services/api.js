@@ -26,6 +26,10 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => { if (import.meta.env.DEV) console.log(`✅ ${response.status} ${response.config.url}`); return response; },
   (error) => {
+    // "Sign out everywhere" ended this login: AuthContext signs out here too and says why
+    if (error.response?.status === 401 && error.response.data?.code === 'session_ended') {
+      window.dispatchEvent(new Event('auth:session-ended'));
+    }
     if (!import.meta.env.DEV) { /* production: screens show the error; no API details in the console */ }
     else if (error.response) console.error(`❌ ${error.response.status}:`, error.response.data);
     else if (error.request) console.error('❌ No response — is Django running?');
@@ -122,17 +126,29 @@ export const loadDesign = async (id) => {
   return res.data;
 };
 
+// A booked design is locked (the crew builds from it): the server answers 409 with { error, locked }.
+// The thrown Error carries the server's sentence and `locked` so the Studio can offer "Save as a new design".
+const designError = (err, fallback) => {
+  const e = errorOf(err, fallback);
+  e.locked = !!err.response?.data?.locked;
+  return e;
+};
+
 export const saveDesign = async (designData) => {
-  if (designData.id) {
-    const res = await api.put(`/designs/${designData.id}/`, designData);
+  try {
+    if (designData.id) {
+      const res = await api.put(`/designs/${designData.id}/`, designData);
+      return res.data;
+    }
+    const res = await api.post('/designs/', designData);
     return res.data;
-  }
-  const res = await api.post('/designs/', designData);
-  return res.data;
+  } catch (err) { throw designError(err, 'Could not save the design'); }
 };
 
 export const deleteDesign = async (id) => {
-  await api.delete(`/designs/${id}/`);
+  try {
+    await api.delete(`/designs/${id}/`);
+  } catch (err) { throw designError(err, 'Could not delete the design'); }
 };
 
 export const duplicateDesign = async (id) => {
@@ -168,7 +184,7 @@ export const patchItemTransform = async (designId, itemId, transformData) => {
 };
 
 // Legacy alias kept for backwards compatibility
-export const patchItemRotation = (productId, itemId, rotationData) => {
+export const patchItemRotation = () => {
   console.warn('patchItemRotation is deprecated. Use patchItemTransform(designId, itemId, data) instead.');
   return Promise.resolve({ status: 'local_only' });
 };
@@ -392,6 +408,44 @@ export const getPublicProject = async (slug) => {
   } catch (err) { throw errorOf(err, 'Project not found'); }
 };
 
+// ─── Design share links (/d/<token>) ─────────────────────────────
+// Owner only: make the link for a saved design (or get the one already live)
+export const shareDesign = async (designId) => {
+  try {
+    const res = await api.post(`/designs/${designId}/share/`);
+    return res.data; // { token, path, created_at, view_count }
+  } catch (err) { throw errorOf(err, 'Could not make the link'); }
+};
+
+export const stopSharingDesign = async (designId) => {
+  try {
+    await api.delete(`/designs/${designId}/share/`);
+  } catch (err) { throw errorOf(err, 'Could not stop sharing'); }
+};
+
+// Owner only: the design's PDF proposal. form: FormData with optional render / photo_before /
+// photo_after pictures and a credits line. Returns { blob, fileName }.
+export const downloadDesignProposal = async (designId, form) => {
+  try {
+    const res = await api.post(`/designs/${designId}/proposal/`, form, { responseType: 'blob' });
+    const fileName = /filename="?([^";]+)"?/.exec(res.headers['content-disposition'] || '')?.[1] || 'garden-proposal.pdf';
+    return { blob: res.data, fileName };
+  } catch (err) {
+    // The error body is a Blob too: read its message
+    let message = 'Could not make the PDF.';
+    try { message = JSON.parse(await err.response.data.text()).error || message; } catch { /* not JSON */ }
+    throw new Error(err.response ? message : (err.message || message));
+  }
+};
+
+// Anyone with the link: the view-only copy
+export const getSharedDesign = async (token) => {
+  try {
+    const res = await publicGet(`/shared-designs/${encodeURIComponent(token)}/`);
+    return res.data;
+  } catch (err) { throw errorOf(err, 'This link was stopped or never existed.'); }
+};
+
 // Landing page proof: projects with a Before/After and/or 3D design/Built photo pair
 export const getProjectShowcase = async (limit = 3) => {
   try {
@@ -611,10 +665,88 @@ export const deletePortfolioPhoto = async (id, mediaId) => {
   } catch (err) { throw errorOf(err, 'Failed to remove photo'); }
 };
 
+// Final design approval (backend design_review.py). step: send | approved_in_person (office),
+// approve (customer, with the revision on their screen) | changes (customer, with a note).
+// Returns the updated booking.
+export const designReviewStep = async (bookingId, step, { note = '', revision } = {}) => {
+  try {
+    const res = await api.post(`/bookings/${bookingId}/design-review/`, { step, note, revision });
+    return res.data;
+  } catch (err) { throw errorOf(err, 'Could not update the design approval'); }
+};
+
+// ─── My account (backend account.py) ─────────────────────────────
+// Changes return { ...me, tokens } (or just { tokens } for the password): pass tokens to useAuth().applyTokens.
+// Errors carry the server's per-field messages in err.fields.
+const accountError = (err, fallback) => {
+  const e = errorOf(err, fallback);
+  const d = err.response?.data;
+  if (d && typeof d === 'object' && !Array.isArray(d)) e.fields = d;
+  return e;
+};
+export const getMe = async () => {
+  try { return (await api.get('/me/')).data; } catch (err) { throw accountError(err, 'Could not load your account'); }
+};
+export const updateMe = async (data) => {
+  try { return (await api.patch('/me/', data)).data; } catch (err) { throw accountError(err, 'Could not save your details'); }
+};
+export const changePassword = async (current_password, new_password) => {
+  try { return (await api.post('/me/password/', { current_password, new_password })).data; }
+  catch (err) { throw accountError(err, 'Could not change your password'); }
+};
+export const changeEmail = async (email, current_password) => {
+  try { return (await api.post('/me/email/', { email, current_password })).data; }
+  catch (err) { throw accountError(err, 'Could not change your email'); }
+};
+
+// My account → Privacy (backend account_privacy.py)
+export const getPrivacy = async () => {
+  try { return (await api.get('/me/privacy/')).data; } catch (err) { throw accountError(err, 'Could not load your privacy settings'); }
+};
+export const acceptPrivacyNotice = async () => {
+  try { return (await api.post('/me/privacy/accept/')).data; } catch (err) { throw accountError(err, 'Could not record that'); }
+};
+// Saves the JSON file in the browser; returns the file name
+export const downloadMyData = async () => {
+  try {
+    const res = await api.get('/me/export/', { responseType: 'blob' });
+    const match = /filename="([^"]+)"/.exec(res.headers['content-disposition'] || '');
+    const name = match ? match[1] : 'my-garden-studio-data.json';
+    const url = URL.createObjectURL(res.data);
+    const a = Object.assign(document.createElement('a'), { href: url, download: name });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return name;
+  } catch (err) { throw accountError(err, 'Could not prepare your data'); }
+};
+// Every other device signed out at once; this one gets fresh tokens ({ tokens, signed_out_everywhere_at })
+export const signOutEverywhere = async () => {
+  try { return (await api.post('/me/sign-out-everywhere/')).data; }
+  catch (err) { throw accountError(err, 'Could not sign out the other devices'); }
+};
+export const closeAccount = async (current_password, confirm) => {
+  try { return (await api.post('/me/close/', { current_password, confirm })).data; }
+  catch (err) { throw accountError(err, 'Could not close your account'); }
+};
+
 export default api;
 // ── Addresses (Quezon Province only, always with a map pin; backend addresses.py) ──
 let areasPromise = null;
 /** Towns and barangays with map centres; loaded once per visit (the server also lets browsers cache it). */
+// Which town and barangay a map pin is in (backend geo_lookup.py: official boundaries, on our server).
+// → { match: 'inside' | 'near', city_code, barangay_code, city_name, barangay_name, distance_m } or { match: null }.
+// Answers are kept per spot (about 1 m), so moving the pin back and forth doesn't ask again.
+const locateCache = new Map();
+export const locateAddress = (lat, lng) => {
+  const key = `${Number(lat).toFixed(5)},${Number(lng).toFixed(5)}`;
+  if (!locateCache.has(key)) {
+    const job = publicGet('/address-locate/', { params: { lat, lng } }).then(r => r.data)
+      .catch(err => { locateCache.delete(key); throw errorOf(err, 'Could not look up the barangay'); });
+    locateCache.set(key, job);
+  }
+  return locateCache.get(key);
+};
+
 export const getAddressAreas = () => {
   if (!areasPromise) {
     areasPromise = api.get('/address-areas/').then(r => r.data).catch(err => { areasPromise = null; throw errorOf(err, 'Could not load the towns'); });
@@ -645,4 +777,24 @@ export const listUsersPage = async ({ group = 'staff', q = '', page = 1 } = {}) 
   } catch (err) {
     throw new Error(err.response?.data?.error || err.response?.data?.detail || err.message || 'Failed to fetch users');
   }
+};
+
+// Mark your yard → Show sun & shade (backend site_survey.sun_map_view; the same sun hours the design engine uses).
+// → { hours: rows[gz][gx] (gz 0 = the back), grid, summary: { full_sun, partial_shade, full_shade }, classes }.
+// Kept per lot + facing + house + kept trees, so flicking the layer on and off doesn't ask again.
+const sunCache = new Map();
+export const getSunMap = (lotWidth, lotLength, survey) => {
+  const keeps = (survey?.items || []).filter(i => i.kind === 'keep');
+  const body = { lot_width: Number(lotWidth), lot_length: Number(lotLength), site_survey: { items: keeps, sun: survey?.sun } };
+  const key = JSON.stringify([body.lot_width, body.lot_length, survey?.sun, keeps.map(i => [i.x, i.z, i.r])]);
+  if (!sunCache.has(key)) {
+    const job = api.post('/sun-map/', body)
+      .catch(err => (err.response?.status === 401
+        ? axios.post(`${API_BASE_URL}/sun-map/`, body, { headers: { Accept: 'application/json' } })
+        : Promise.reject(err)))
+      .then(r => r.data)
+      .catch(err => { sunCache.delete(key); throw errorOf(err, 'Could not work out the sun and shade'); });
+    sunCache.set(key, job);
+  }
+  return sunCache.get(key);
 };

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useEffectEvent, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { 
     Calendar, 
@@ -47,8 +47,10 @@ const BookingManagement = () => {
         }
     };
 
+    // Effect event: always the latest fetchBookings, without re-running the effect each render
+    const loadBookings = useEffectEvent(() => fetchBookings());
     useEffect(() => {
-        fetchBookings();
+        loadBookings();
         
         // Auto-poll bookings every 10 seconds to reflect status changes made by admins/staff instantly
         const intervalId = setInterval(async () => {

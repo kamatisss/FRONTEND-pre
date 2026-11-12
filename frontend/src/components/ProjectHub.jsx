@@ -355,7 +355,7 @@ export function ProjectDetail() {
                   <div className="rounded-2xl overflow-hidden border border-slate-200 bg-white" style={{ height: 450 }}>
                     <Suspense fallback={<p className="p-6 text-slate-400 m-0">Loading 3D…</p>}>
                       <ThreeGardenCanvas
-                        plants={toCanvasPlants(design.placed_items)}
+                        plants={toCanvasPlants(design.placed_items, design.width || 10, design.length || 15)}
                         lotWidth={design.width || 10}
                         lotLength={design.length || 15}
                         readOnly

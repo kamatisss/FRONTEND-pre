@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useEffectEvent, useRef } from "react";
 import {
   getCurrentAttendance,
   clockIn,
@@ -404,8 +404,9 @@ const StaffAttendance = () => {
 
   const handleRefreshAll = () => { loadStatusAndData(); fetchGPS(); };
 
+  const loadOnSignIn = useEffectEvent(() => { loadStatusAndData(); fetchGPS(); });
   useEffect(() => {
-    if (authTokens) { loadStatusAndData(); fetchGPS(); }
+    if (authTokens) loadOnSignIn();
   }, [authTokens]);
 
   /* ── Camera ── */
@@ -1259,7 +1260,7 @@ const StaffAttendance = () => {
                   ) : (
                     <>
                       <Video size={32} color="#4b5563" />
-                      <p style={{ fontSize: 13, color: "#9ca3af" }}>Upload a photo as proof of presence</p>
+                      <p style={{ fontSize: 13, color: "#9ca3af" }}>{cameraError || "Upload a photo as proof of presence"}</p>
                     </>
                   )}
                   <label

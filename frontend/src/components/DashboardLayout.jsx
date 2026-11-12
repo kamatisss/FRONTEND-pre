@@ -51,7 +51,8 @@ const DashboardLayout = ({ children }) => {
         '/admin-attendance',
         '/portfolio-manager',
         '/review-moderation',
-        '/pricing-settings'
+        '/pricing-settings',
+        '/account',   // My account: staff keep their sidebar (customers never get one)
     ];
     const isOperationalRoute = operationalRoutes.some(route => location.pathname.startsWith(route));
 

@@ -179,6 +179,7 @@ export default function HeroGarden({ fallback }) {
             active={visible}
             lite={support.lite}
             timeOfDay={hour}
+            lotLabels={false}
           />
         </Suspense>
 

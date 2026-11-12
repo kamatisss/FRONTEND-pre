@@ -2,7 +2,6 @@ import { useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Paintbrush, Calendar, Package, Clock, Layers, Users, Banknote, ScrollText, Building2, BarChart3,
   Image as ImageIcon, MessageSquare, Calculator, Sparkles, ShoppingBag, Archive, Home, CalendarPlus, Truck, Sun, Briefcase, UserRound,
-  MapPin,
 } from 'lucide-react';
 
 // Customer navigation. `primary` links sit in the top bar on desktop; all of them
@@ -15,7 +14,7 @@ export const customerLinks = [
   { to: '/book-service', label: 'Book a Service', icon: CalendarPlus },
   { to: '/my-bookings', label: 'My Bookings', icon: Calendar, primary: true },
   { to: '/my-orders', label: 'Order History', icon: Archive, primary: true },
-  { to: '/my-addresses', label: 'My Addresses', icon: MapPin },
+  { to: '/account', label: 'My account', icon: UserRound },
 ];
 
 // Operational (admin / staff) navigation: the sidebar on desktop, the drawer on phones.

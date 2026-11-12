@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Minus, Plus, Home, Info, Grid3x3 } from 'lucide-react';
+import { LAWN_LOOKS } from '../data/grassField';
+import { Minus, Plus, Home, Info, Grid3x3, Sprout } from 'lucide-react';
 import { useDesign } from '../context/DesignContext';
-import { LOT_MIN, LOT_MAX, LOT_PRESETS, clampLot, lotOf } from '../data/lot';
+import { LOT_MIN, LOT_MAX, LOT_PRESETS, clampLot, lotArea, lotOf } from '../data/lot';
+import YardShapePanel from './YardShapePanel';
+import YardShapePlan from './YardShapePlan';
 
 /*
  * Lot size for the 3D Studio: one size for the 3D ground, where items can go, the price
@@ -39,11 +42,14 @@ function SideField({ label, value, fallback, onCommit }) {
   );
 }
 
-export default function LotSizePanel({ showGrid = false, onToggleGrid }) {
-  const { state, dispatch } = useDesign();
+export default function LotSizePanel({ showGrid = false, onToggleGrid, lawnLook = null, onLawnLook }) {
+  const { state, dispatch, ground } = useDesign();
   const lot = lotOf(state.dimensions);
   const set = (field) => (v) => dispatch({ type: 'SET_DIMENSIONS', payload: { [field]: v } });
-  const area = lot.width * lot.length;
+  const area = lotArea(lot);
+  // The yard's shape inside the lot (data/lot.js): drawn on the plan below, the 3D ground follows it
+  const [picked, setPicked] = useState(null);
+  const setOutline = (next) => dispatch({ type: 'SET_DIMENSIONS', payload: { outline: next } });
 
   return (
     <div>
@@ -69,9 +75,20 @@ export default function LotSizePanel({ showGrid = false, onToggleGrid }) {
       <SideField label="Width" value={lot.width} fallback={10} onCommit={set('width')} />
       <SideField label="Length" value={lot.length} fallback={15} onCommit={set('length')} />
 
+      <p style={{ margin: '4px 0 0', fontSize: 12, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Shape of the yard</p>
+      <div style={{ marginBottom: 14 }}>
+        <YardShapePanel W={lot.width} L={lot.length} outline={lot.outline} editing showToggle={false} onEditing={() => {}}
+          selected={picked} onSelect={setPicked} onChange={setOutline} />
+        {lot.outline && (
+          <div style={{ marginTop: 8, padding: 6, borderRadius: 12, border: '1px solid #E5E7EB', background: '#fff' }}>
+            <YardShapePlan W={lot.width} L={lot.length} outline={lot.outline} selected={picked} onSelect={setPicked} onChange={setOutline} />
+          </div>
+        )}
+      </div>
+
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', padding: '10px 12px',
         borderRadius: 12, background: '#ECFDF5', border: '1px solid #A7F3D0', marginBottom: 14 }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: '#065F46' }}>Area</span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: '#065F46' }}>Area{lot.outline ? ' of the yard' : ''}</span>
         <span style={{ fontSize: 15, fontWeight: 800, color: '#065F46' }}>{area.toLocaleString(undefined, { maximumFractionDigits: 1 })} m²</span>
       </div>
 
@@ -82,6 +99,45 @@ export default function LotSizePanel({ showGrid = false, onToggleGrid }) {
             <Grid3x3 size={16} style={{ color: '#059669' }} /> Show 1 m grid
           </span>
           <input type="checkbox" checked={showGrid} onChange={onToggleGrid} style={{ width: 20, height: 20, accentColor: '#059669' }} />
+        </label>
+      )}
+
+      {onLawnLook && (
+        <div style={{ marginBottom: 14 }}>
+          <p id="lawn-look-label" style={{ margin: '0 0 6px', fontSize: 12, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Lawn look</p>
+          <div role="radiogroup" aria-labelledby="lawn-look-label" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 6 }}>
+            {Object.entries(LAWN_LOOKS).map(([key, l]) => {
+              const on = lawnLook === key;
+              return (
+                <button key={key} type="button" role="radio" aria-checked={on} onClick={() => onLawnLook(key)}
+                  style={{ minHeight: 44, padding: '6px 4px', borderRadius: 10, cursor: 'pointer', fontSize: 12, fontWeight: 700,
+                    border: on ? '1.5px solid #6ee7b7' : '1px solid #E5E7EB', background: on ? '#ECFDF5' : '#fff',
+                    color: on ? '#065F46' : '#374151', minWidth: 0 }}>
+                  {l.label}
+                </button>
+              );
+            })}
+          </div>
+          <p style={{ margin: '6px 0 0', fontSize: 11.5, color: '#6B7280', lineHeight: 1.45 }}>
+            How long the grass looks in 3D. It doesn't change your design or its price.
+          </p>
+        </div>
+      )}
+
+      {ground?.available && (
+        <label style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, minHeight: 44,
+          padding: '8px 12px', borderRadius: 12, border: '1px solid #E5E7EB', marginBottom: 14, cursor: 'pointer' }}>
+          <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 700, color: '#374151' }}>
+              <Sprout size={16} style={{ color: '#059669' }} /> Groundcover in the beds
+            </span>
+            <span style={{ fontSize: 11.5, color: '#6B7280', lineHeight: 1.4 }}>
+              Your plants sit in beds; groundcover fills the soil between them (a shade one under trees).
+              {ground.bedArea >= 1 ? ` Beds now: about ${Math.round(ground.bedArea)} m².` : ' Place some plants first.'} Off = mulched beds.
+            </span>
+          </span>
+          <input type="checkbox" checked={ground.on} style={{ width: 20, height: 20, accentColor: '#059669', flexShrink: 0, marginTop: 2 }}
+            onChange={e => dispatch({ type: 'SET_DIMENSIONS', payload: { groundcoverOff: !e.target.checked } })} />
         </label>
       )}
 

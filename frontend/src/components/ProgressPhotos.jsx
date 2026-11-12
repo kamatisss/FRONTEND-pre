@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { Camera, Trash2, ChevronDown, ChevronUp, Upload, CloudUpload } from 'lucide-react';
 import { listProgressPhotos, deleteProgressPhoto } from '../services/api';
 import { sendPhoto, pendingPhotos } from '../crew/outbox';
@@ -31,10 +31,11 @@ export default function ProgressPhotos({ booking, user, toast, canUpload = true,
     setPhotos(prev => prev || []);
     setError(navigator.onLine === false ? "No signal: photos already sent can't be shown right now." : e.message);
   });
+  const loadPhotos = useEffectEvent(() => load());
   useEffect(() => {
     if (!open || photos !== null) return;
-    load();
-  }, [open]);
+    loadPhotos();
+  }, [open, photos]); // once loaded (or failed) photos isn't null, so this doesn't repeat
 
   // A kept photo was sent: show the server's copy instead
   const keptBefore = useRef(kept.length);

@@ -23,7 +23,14 @@ export default defineConfig([
       },
     },
     rules: {
-      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      // Core ESLint doesn't count JSX use (<motion.div>, <Icon />) as using a variable, so
+      // capitalised names and `motion` are exempt, for variables and for arguments ({ icon: Icon })
+      'no-unused-vars': ['error', { varsIgnorePattern: '^([A-Z_]|motion$)', argsIgnorePattern: '^[A-Z_]' }],
+      // Each context file exports its provider plus the hook that reads it; that pairing is intended
+      'react-refresh/only-export-components': ['error', {
+        allowConstantExport: true,
+        allowExportNames: ['useAuth', 'useCart', 'useToast', 'useDesign'],
+      }],
     },
   },
 ])

@@ -14,8 +14,20 @@ export function planMaskCanvas(plan, width, length) {
   canvas.width = Math.max(2, Math.round(width * s));
   canvas.height = Math.max(2, Math.round(length * s));
   const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const shape = Array.isArray(plan.outline) && plan.outline.length >= 3 ? plan.outline : null;
+  if (shape) {
+    // A shaped yard: only its own outline is bed; the rest of the lot isn't garden
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    shape.forEach((p, i) => (i ? ctx.lineTo(p.x * s, p.z * s) : ctx.moveTo(p.x * s, p.z * s)));
+    ctx.closePath();
+    ctx.fill();
+  } else {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
   ctx.fillStyle = '#000000';
   const g = plan.lawn;
   ctx.beginPath();
@@ -24,5 +36,7 @@ export function planMaskCanvas(plan, width, length) {
   ctx.fill();
   const e = plan.entry;
   if (e) ctx.fillRect(e.x0 * s, e.z0 * s, (e.x1 - e.x0) * s, (e.z1 - e.z0) * s);
+  // Paths from gates are open ground too, not bed
+  (plan.paths || []).forEach(p => ctx.fillRect(p.x0 * s, p.z0 * s, (p.x1 - p.x0) * s, (p.z1 - p.z0) * s));
   return canvas;
 }

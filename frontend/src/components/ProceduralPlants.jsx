@@ -1,4 +1,5 @@
-import { useMemo, useRef } from 'react';
+import { useId, useMemo, useRef } from 'react';
+import { seededRandom } from '../data/seededRandom';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 
@@ -30,14 +31,16 @@ export function CoconutPalm({ scale = 1, ...props }) {
     }
   });
 
+  const seed = useId(); // stable per model, so its shape doesn't change on re-mount
   const fronds = useMemo(() => {
+    const rand = seededRandom(seed);
     const items = [];
     for (let i = 0; i < 7; i++) {
       const angle = (i / 7) * Math.PI * 2;
-      items.push({ angle, tilt: 0.6 + Math.random() * 0.4 });
+      items.push({ angle, tilt: 0.6 + rand() * 0.4 });
     }
     return items;
-  }, []);
+  }, [seed]);
 
   return (
     <group {...props} scale={[scale, scale, scale]}>
@@ -70,16 +73,18 @@ export function CoconutPalm({ scale = 1, ...props }) {
 
 // ── Bougainvillea ─────────────────────────────────────────────
 export function Bougainvillea({ scale = 1, ...props }) {
+  const seed = useId(); // stable per model, so its shape doesn't change on re-mount
   const flowers = useMemo(() => {
+    const rand = seededRandom(seed);
     const items = [];
     for (let i = 0; i < 30; i++) {
       items.push({
-        pos: [(Math.random() - 0.5) * 1.4, 0.5 + Math.random() * 1.2, (Math.random() - 0.5) * 1.4],
-        s: 0.06 + Math.random() * 0.08,
+        pos: [(rand() - 0.5) * 1.4, 0.5 + rand() * 1.2, (rand() - 0.5) * 1.4],
+        s: 0.06 + rand() * 0.08,
       });
     }
     return items;
-  }, []);
+  }, [seed]);
 
   return (
     <group {...props} scale={[scale, scale, scale]}>
@@ -106,17 +111,19 @@ export function Bougainvillea({ scale = 1, ...props }) {
 
 // ── Bamboo Cluster ────────────────────────────────────────────
 export function BambooCluster({ scale = 1, ...props }) {
+  const seed = useId(); // stable per model, so its shape doesn't change on re-mount
   const stalks = useMemo(() => {
+    const rand = seededRandom(seed);
     const items = [];
     for (let i = 0; i < 5; i++) {
       items.push({
-        x: (Math.random() - 0.5) * 0.5,
-        z: (Math.random() - 0.5) * 0.5,
-        h: 2.5 + Math.random() * 1.5,
+        x: (rand() - 0.5) * 0.5,
+        z: (rand() - 0.5) * 0.5,
+        h: 2.5 + rand() * 1.5,
       });
     }
     return items;
-  }, []);
+  }, [seed]);
 
   return (
     <group {...props} scale={[scale, scale, scale]}>
@@ -240,15 +247,17 @@ export function TravelersPalm({ scale = 1, ...props }) {
 
 // ── Hibiscus ──────────────────────────────────────────────────
 export function Hibiscus({ scale = 1, ...props }) {
+  const seed = useId(); // stable per model, so its shape doesn't change on re-mount
   const flowers = useMemo(() => {
+    const rand = seededRandom(seed);
     const items = [];
     for (let i = 0; i < 8; i++) {
       items.push({
-        pos: [(Math.random() - 0.5) * 0.8, 0.4 + Math.random() * 0.6, (Math.random() - 0.5) * 0.8],
+        pos: [(rand() - 0.5) * 0.8, 0.4 + rand() * 0.6, (rand() - 0.5) * 0.8],
       });
     }
     return items;
-  }, []);
+  }, [seed]);
 
   return (
     <group {...props} scale={[scale, scale, scale]}>
@@ -284,15 +293,17 @@ export function Duranta({ scale = 1, ...props }) {
 
 // ── Santan (Ixora) ────────────────────────────────────────────
 export function Santan({ scale = 1, ...props }) {
+  const seed = useId(); // stable per model, so its shape doesn't change on re-mount
   const clusters = useMemo(() => {
+    const rand = seededRandom(seed);
     const items = [];
     for (let i = 0; i < 6; i++) {
       items.push({
-        pos: [(Math.random() - 0.5) * 0.5, 0.35 + Math.random() * 0.3, (Math.random() - 0.5) * 0.5],
+        pos: [(rand() - 0.5) * 0.5, 0.35 + rand() * 0.3, (rand() - 0.5) * 0.5],
       });
     }
     return items;
-  }, []);
+  }, [seed]);
 
   return (
     <group {...props} scale={[scale, scale, scale]}>
@@ -310,16 +321,4 @@ export function Santan({ scale = 1, ...props }) {
   );
 }
 
-// ── Registry for lookup by model_type ─────────────────────────
-export const PLANT_COMPONENTS = {
-  coconut_palm: CoconutPalm,
-  bougainvillea: Bougainvillea,
-  bamboo: BambooCluster,
-  frangipani: Frangipani,
-  bird_of_paradise: BirdOfParadise,
-  banana: BananaPlant,
-  travelers_palm: TravelersPalm,
-  hibiscus: Hibiscus,
-  duranta: Duranta,
-  santan: Santan,
-};
+// Lookup by model_type: data/proceduralModels.js

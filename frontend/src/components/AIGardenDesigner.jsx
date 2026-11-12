@@ -1,33 +1,42 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useEffectEvent, useRef, useMemo } from 'react';
 import { evaluatePlantCompatibility } from '../data/plantCompatibility';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { Sparkles, ArrowLeft, Check, Compass, ShieldAlert, Upload, X, CalendarPlus, Info, Cpu, Wrench, RefreshCw, Box, ChevronLeft, ChevronRight, Leaf, Sun, CloudSun, Cloud, Droplet, Undo2, RotateCcw, Pencil, AlertTriangle, Wand2, Plus, FlipHorizontal2 } from 'lucide-react';
+import { Sparkles, ArrowLeft, Check, Compass, ShieldAlert, Upload, X, CalendarPlus, Info, Cpu, Wrench, RefreshCw, Box, ChevronLeft, ChevronRight, Leaf, Sun, CloudSun, Cloud, Droplet, Undo2, RotateCcw, Pencil, AlertTriangle, Wand2, Plus, FlipHorizontal2, Link2, Download, ImageDown, FileText, Grid3x3 } from 'lucide-react';
+import { useToast } from './ui/Toast';
+import { saveBlob, glbFileName, designFileName, fileSize } from './ui/download';
 import { productImage } from '../data/productImage';
-import ZonePicker from './ZonePicker';
+import YardSurvey from './YardSurvey';
+import { emptySurvey, yardArea } from '../data/yardSurvey';
 import BudgetPicker from './BudgetPicker';
 import PageHero from './ui/PageHero';
 import { color, cardStyle, inputStyle, labelStyle, radius } from './ui/tokens';
 import { useCart } from '../context/CartContext';
 import { lotPlantsToStudioItems } from '../data/sampleGarden';
 import { API_BASE_URL as API_ROOT } from '../config';
-import { plantBudgetFromAllIn, itemCostToCustomer } from '../data/pricing';
+import { plantBudgetFromAllIn, itemCostToCustomer, isSmallStone, layoutSpacing, layoutLayer, rockLimits } from '../data/pricing';
 import ThreeGardenCanvas from './ThreeGardenCanvas';
+import { yardSummary, hasSurvey } from '../data/yardScene';
 import { useDesign } from '../context/DesignContext';
-import { getInventoryItems, getPricing } from '../services/api';
+import api, { getInventoryItems, getPricing, shareDesign, stopSharingDesign, downloadDesignProposal } from '../services/api';
+import { MODEL_CREDITS } from '../data/modelCredits';
+import ShareDesignDialog from './ShareDesignDialog';
 import { useAuth } from '../context/AuthContext';
 import { saveGuestDesign, loadGuestDesign, clearGuestDesign, saveAiSession, loadAiSession, clearAiSession, loadAiPrefill, clearAiPrefill } from '../services/guestSession';
 import GuestAuthModal from './GuestAuthModal';
 import { useIsPhone, useMediaQuery } from './ui/useMediaQuery';
 import { DEFAULT_TIME_OF_DAY } from '../data/studioLight';
-import { defaultPins } from '../data/photoPose';
+import { defaultPins, vantageOf } from '../data/photoPose';
 import { readFocal35 } from '../data/photoExif';
 import { LOT_MAX } from '../data/lot';
-import { DEFAULT_GROWTH_STAGE } from '../data/modelSizing';
+import { DEFAULT_GROWTH_STAGE, GROWTH_STAGES } from '../data/modelSizing';
 import GrowthStagePicker from './GrowthStagePicker';
+import LawnLookSelect from './LawnLookSelect';
+import { useLawnLook } from '../data/lawnLook';
 import { editSummary } from '../data/designEdits';
 import { mirrorEdit } from '../data/mirrorEdit';
 
+import InstallOffer from './InstallOffer';
 const LOADING_PHASES = [
   'Analyzing your garden space…',
   'Composing Symmetrical layout…',
@@ -37,11 +46,13 @@ const LOADING_PHASES = [
   'Finalizing your garden options…',
 ];
 
-// Garden features the AI Designer places (mirrors garden_ai.FEATURE_CATEGORIES / MAX_SEATS / MAX_ROCKS)
+// Garden features the AI Designer places (mirrors garden_ai.FEATURE_CATEGORIES / MAX_SEATS; rocks: rockLimits by yard size)
 const FEATURE_KIND = { furniture: 'seat', hardscape: 'rock' };
 const MAX_SEATS = 2;
-const MAX_ROCKS = 9;
 const ROCK_GROUP = 3;
+// Small garden stones (data/pricing isSmallStone): ordered half a dozen at a time, from a dozen
+const STONE_STEP = 6;
+const STONE_FIRST = 12;
 
 // Where a plant goes in the design, by fully grown height — the same layers as the layout engine
 // (layout_engine.PlantSpec.layer): tall at the back, low along the borders
@@ -174,7 +185,7 @@ function ChoiceChips({ label, value, onChange, options, touch }) {
 function plantingSchedule(design, catalog, featureItems) {
   const find = (id) => catalog.find(i => String(i.id) === String(id)) || featureItems.find(i => String(i.id) === String(id));
   let rows = design.plant_breakdown?.length
-    ? design.plant_breakdown.map(r => ({ id: String(r.plant_id), quantity: r.quantity, name: r.name }))
+    ? design.plant_breakdown.map(r => ({ id: String(r.plant_id), quantity: r.quantity, name: r.name, unit: r.unit }))
     : null;
   if (!rows) {
     const counts = new Map();
@@ -183,7 +194,7 @@ function plantingSchedule(design, catalog, featureItems) {
   }
   return rows.map(r => {
     const detail = find(r.id);
-    return { ...r, detail, name: r.name || detail?.name || `Plant #${r.id}`, role: roleOf(detail) };
+    return { ...r, detail, name: r.name || detail?.name || `Plant #${r.id}`, role: detail?.is_groundcover ? 'Groundcover' : roleOf(detail) };
   });
 }
 
@@ -288,20 +299,29 @@ export default function AIGardenDesigner() {
   const [lawn, setLawn] = useState('new');
   // Installed: a full garden makeover, or planting into the customer's existing garden (no ground work)
   const [scope, setScope] = useState('makeover');
-  const { addToCart } = useCart();
+  const { addToCart, addCartNotices } = useCart();
   const [rates, setRates] = useState(null);   // admin rate card
   useEffect(() => { getPricing().then(setRates).catch(() => {}); }, []);
   const [inventory, setInventory] = useState([]);
   const [inventoryLoading, setInventoryLoading] = useState(true);
+  // A failed load (server restarting, a dropped connection) is retried a few times, then said plainly with a
+  // Retry button — never shown as an empty catalog
+  const [inventoryError, setInventoryError] = useState(false);
+  const [inventoryTry, setInventoryTry] = useState(0);
 
   useEffect(() => {
     let alive = true;
-    getInventoryItems('plant')
-      .then(data => { if (alive) setInventory(data); })
-      .catch(() => {})
+    const load = (attempt) => getInventoryItems('plant').catch((err) => {
+      if (attempt >= 2) throw err;
+      return new Promise((r) => setTimeout(r, 1500 * (attempt + 1))).then(() => (alive ? load(attempt + 1) : []));
+    });
+    load(0)
+      .then(data => { if (alive) { setInventory(Array.isArray(data) ? data : []); setInventoryError(false); } })
+      .catch(() => { if (alive) setInventoryError(true); })
       .finally(() => { if (alive) setInventoryLoading(false); });
     return () => { alive = false; };
-  }, []);
+  }, [inventoryTry]);
+  const retryInventory = () => { setInventoryLoading(true); setInventoryError(false); setInventoryTry(n => n + 1); };
 
   // Garden features the designer can place: seating (furniture) and accent rocks (hardscape) with a 3D model
   const [featureItems, setFeatureItems] = useState([]);
@@ -334,15 +354,16 @@ export default function AIGardenDesigner() {
     setFeatureQty(prev => {
       const next = { ...prev };
       if (next[id]) delete next[id];
-      else next[id] = FEATURE_KIND[item.category] === 'seat' ? 1 : ROCK_GROUP;
+      else next[id] = FEATURE_KIND[item.category] === 'seat' ? 1 : isSmallStone(item) ? Math.min(STONE_FIRST, Number(item.stock_quantity) || 0) : ROCK_GROUP;
       return next;
     });
   };
   const changeFeatureQty = (item, delta) => {
     const id = String(item.id);
     setFeatureQty(prev => {
-      const max = FEATURE_KIND[item.category] === 'seat' ? (prev[id] || 0) + MAX_SEATS - seatTotal : MAX_ROCKS;
-      const qty = Math.min(max, Math.min(Number(item.stock_quantity) || 0, (prev[id] || 0) + delta));
+      const stone = isSmallStone(item);
+      const max = FEATURE_KIND[item.category] === 'seat' ? (prev[id] || 0) + MAX_SEATS - seatTotal : rockLimitOf(item);
+      const qty = Math.min(max, Math.min(Number(item.stock_quantity) || 0, (prev[id] || 0) + delta * (stone ? STONE_STEP : 1)));
       const next = { ...prev };
       if (qty <= 0) delete next[id]; else next[id] = qty;
       return next;
@@ -366,6 +387,9 @@ export default function AIGardenDesigner() {
   const [lotWidth, setLotWidth] = useState(prefill?.lotWidth || 10.0);
   const [lotLength, setLotLength] = useState(prefill?.lotLength || 10.0);
   const [preferredPlants, setPreferredPlants] = useState(prefill?.plantIds || []);
+  const [plantQty, setPlantQty] = useState({});   // { plant id: how many } — only for amounts the customer set
+  // Groundcover over the beds between plants (backend groundcover.py): on by default, as landscapers plant
+  const [groundcoverOn, setGroundcoverOn] = useState(true);
   const [selectedImage, setSelectedImage] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -388,6 +412,12 @@ export default function AIGardenDesigner() {
   const [mirrorOn, setMirrorOn] = useState(true);   // Symmetrical designs: "Mirror my changes"
   const [mirrorNote, setMirrorNote] = useState('');
   const [activeView, setActiveView] = useState('3d');
+  const [showGrid, setShowGrid] = useState(false);   // 1 m grid over the lot in the 3D view
+  const [lawnLook, setLawnLook] = useLawnLook();   // how long the lawn's grass is in the 3D view (remembered)
+  // 3D view ground: the design's beds and lawn, or their own ground from the yard photo (null = the default:
+  // their photo when we plant into the garden as it is, the design otherwise)
+  const [groundChoice, setGroundChoice] = useState(null);
+  const [photoGroundStatus, setPhotoGroundStatus] = useState(null);
   const phone = useIsPhone();
   const touch = useMediaQuery('(pointer: coarse)');
   // Phones & tablets: the three options are a swipe carousel. Desktop keeps them side by
@@ -399,12 +429,20 @@ export default function AIGardenDesigner() {
   const [bookingLoading, setBookingLoading] = useState(false);
   // Photo overlay: four pins on the yard's corners in the photo (null = not placed yet, a guess is used)
   const [photoCorners, setPhotoCorners] = useState(null);   // the 4 pins on the photo ({u, v} each)
-  // 'edges': back corners + a point on each side edge (the usual photo: the front corners are out of
+  // 'fences' (default): back corners + two pins on each side fence; 'edges' (older designs): one per side fence; (the usual photo: the front corners are out of
   // shot); 'corners': all four corners are visible. photoLens: 35 mm-equivalent focal length from EXIF.
-  const [pinMode, setPinMode] = useState('edges');
+  const [pinMode, setPinMode] = useState('fences');   // six pins: back corners + two on each side fence
   const [photoLens, setPhotoLens] = useState(null);
-  const photoSetup = useMemo(() => (photoCorners ? { pins: photoCorners, mode: pinMode, focal35: photoLens } : null),
-    [photoCorners, pinMode, photoLens]);
+  // 'points' (a yard that isn't a rectangle): each pin sits on a known spot, pinAnchors [{x, z, label, corner?}]
+  const [pinAnchors, setPinAnchors] = useState(null);
+  // Where the photo was taken from (photoPose VANTAGES): standing, upstairs window… sets the camera height we expect
+  const [photoVantage, setPhotoVantage] = useState('ground');
+  // The yard's width at the house side ({ width, lean }), when it differs from the back: six fence pins then measure the taper
+  const [photoFront, setPhotoFront] = useState(null);
+  const photoSetup = useMemo(() => (photoCorners
+    ? { pins: photoCorners, mode: pinMode, focal35: photoLens, vantage: photoVantage, ...(pinMode === 'points' && { anchors: pinAnchors || [] }),
+        ...(pinMode === 'fences' && Number(photoFront?.width) > 0 && { frontWidth: Number(photoFront.width), lean: photoFront.lean || 'both' }) }
+    : null), [photoCorners, pinMode, photoLens, pinAnchors, photoVantage, photoFront]);
   const [editingCorners, setEditingCorners] = useState(false);
   const [poseStatus, setPoseStatus] = useState(null);
   const [photoTone, setPhotoTone] = useState(null);
@@ -412,10 +450,43 @@ export default function AIGardenDesigner() {
   const [expandedBreakdowns, setExpandedBreakdowns] = useState({});
   const [loadingPhase, setLoadingPhase] = useState(0);
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authFor, setAuthFor] = useState('book');      // what to carry on with after signing in: 'book' | 'share'
+  // Share links: one per version of a design (fingerprint → { designId, url }), so sharing the same
+  // design twice gives the same link; after an edit, sharing saves the new version with its own link
+  const [shareLinks, setShareLinks] = useState({});
+  // Saved copies of each design version (key → Promise<design id>): Share and the PDF proposal both
+  // need one, and pressing both (or twice) must not save it twice
+  const savedDesignsRef = useRef({});
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [shareSheet, setShareSheet] = useState(null);  // ShareDesignDialog: { status, url, name, designId, message }
+  const gardenCanvasRef = useRef(null);                // the 3D view: .exportGlb() for the download
+  const [glbBusy, setGlbBusy] = useState(false);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const toast = useToast();
   const [budgetWarning, setBudgetWarning] = useState('');
   // Keep-clear zones from the photo: suggested by the AI scan, confirmed by the customer
-  const [zoneScan, setZoneScan] = useState({ status: 'idle', zones: [] });
+  // Older sessions and links can still carry the 7 coarse zones; new designs use the yard survey instead
   const [keepClear, setKeepClear] = useState([]);
+  // Mark your yard (YardSurvey): what's already there, in lot metres — the engine plans around it
+  const [survey, setSurvey] = useState(() => (Array.isArray(prefill?.outline) ? { ...emptySurvey(), outline: prefill.outline } : emptySurvey()));
+  // How many of one kind of rock the yard takes (garden_ai.rock_limits): its own shape's area when it has one
+  const rockMax = rockLimits(yardArea(survey, Number(lotWidth), Number(lotLength)));
+  const rockLimitOf = (item) => (isSmallStone(item) ? rockMax.stones : rockMax.boulders);
+  // A smaller yard: bring rocks already chosen down to what it takes
+  useEffect(() => {
+    if (!featureItems.length) return;
+    setFeatureQty(prev => {
+      let changed = false;
+      const next = { ...prev };
+      featureItems.forEach(item => {
+        const id = String(item.id);
+        if (FEATURE_KIND[item.category] !== 'rock' || !next[id]) return;
+        const cap = isSmallStone(item) ? rockMax.stones : rockMax.boulders;
+        if (next[id] > cap) { next[id] = cap; changed = true; }
+      });
+      return changed ? next : prev;
+    });
+  }, [featureItems, rockMax.stones, rockMax.boulders]);
   const [seed, setSeed] = useState(0);          // "Show other variations"
   const [notice, setNotice] = useState('');     // e.g. AI unavailable → smart layouts
   const scanFileRef = React.useRef(null);
@@ -441,6 +512,7 @@ export default function AIGardenDesigner() {
       if (saved.lotWidth) setLotWidth(saved.lotWidth);
       if (saved.lotLength) setLotLength(saved.lotLength);
       if (Array.isArray(saved.preferredPlants)) setPreferredPlants(saved.preferredPlants);
+      if (saved.plantQty && typeof saved.plantQty === 'object') setPlantQty(saved.plantQty);
     }
     if (saved.featureQty && typeof saved.featureQty === 'object') setFeatureQty(saved.featureQty);
     if (typeof saved.install === 'boolean') setInstall(saved.install);
@@ -449,6 +521,7 @@ export default function AIGardenDesigner() {
     if (saved.sun !== undefined) setSun(saved.sun);
     if (saved.maintenance) setMaintenance(saved.maintenance);
     if (Array.isArray(saved.keepClear)) setKeepClear(saved.keepClear);
+    if (Array.isArray(saved.survey?.items)) setSurvey({ items: saved.survey.items, sun: saved.survey.sun || null, outline: saved.survey.outline || null });
     if (saved.savedAt) setRestored({ at: saved.savedAt, hadPhoto: !!saved.hadPhoto, edited: layouts.some(l => l.edited) });
     // Left mid-update (closed while a price was on its way): price those designs again
     layouts.filter(l => l.pricing === 'pending' || l.pricing === 'error').forEach(l => reprice(l.edit_id));
@@ -543,34 +616,29 @@ export default function AIGardenDesigner() {
     setPreferredPlants(prev =>
       prev.includes(id) ? prev.filter(pId => pId !== id) : [...prev, id]
     );
+    setPlantQty(prev => { if (!(id in prev)) return prev; const next = { ...prev }; delete next[id]; return next; });
+  };
+  // How many of a picked plant: blank = "let us decide" (the design chooses), else that many (engine: placed first,
+  // as many as space, stock and budget allow, with a note when fewer fit)
+  const setPlantAmount = (id, value, max) => {
+    const n = Math.round(Number(value));
+    setPlantQty(prev => {
+      const next = { ...prev };
+      if (value === '' || !Number.isFinite(n) || n <= 0) delete next[id];
+      else next[id] = Math.min(max, n);
+      return next;
+    });
+  };
+  // About how many fit: planting beds (the yard less a lawn) over the plant's spacing squared; tall plants keep to
+  // the back half. A hint, not a promise — the design works it out exactly and says if fewer fit.
+  const roomFor = (plant) => {
+    const area = Number(lotWidth) * Number(lotLength);
+    if (!(area > 0)) return null;
+    const beds = area * 0.55 * (layoutLayer(plant) === 'tall' ? 0.5 : 1);   // designs keep about 45% as open lawn
+    const sp = layoutSpacing(plant);
+    return Math.max(1, Math.floor(beds / (sp * sp)));
   };
 
-  const authHeaders = () => {
-    try {
-      const tokens = JSON.parse(localStorage.getItem('authTokens') || 'null');
-      return tokens?.access ? { Authorization: `Bearer ${tokens.access}` } : {};
-    } catch { return {}; }
-  };
-
-  // Ask the AI to suggest keep-clear zones; the customer confirms them in ZonePicker.
-  // A failed scan just means the customer marks the zones themselves.
-  const scanZones = async (file) => {
-    scanFileRef.current = file;
-    setZoneScan({ status: 'scanning', zones: [] });
-    setKeepClear([]);
-    try {
-      const form = new FormData();
-      form.append('image', file);
-      const API_BASE_URL = API_ROOT;
-      const res = await axios.post(`${API_BASE_URL}/scan-zones/`, form, { headers: authHeaders() });
-      if (scanFileRef.current !== file) return; // a newer photo replaced this one
-      const zones = res.data.zones || [];
-      setZoneScan({ status: res.data.status || 'failed', zones });
-      setKeepClear([...new Set(zones.map(z => z.zone))]);
-    } catch {
-      if (scanFileRef.current === file) setZoneScan({ status: 'failed', zones: [] });
-    }
-  };
 
   const handleImageChange = (e) => {
     const file = e.target.files[0];
@@ -579,7 +647,7 @@ export default function AIGardenDesigner() {
       setImagePreview(URL.createObjectURL(file));
       setPhotoCorners(null);   // a new photo needs its own pins
       setPhotoLens(null);
-      scanZones(file);   // sets scanFileRef: the photo now on screen
+      scanFileRef.current = file;   // the photo now on screen (its lens reading can arrive after a newer photo)
       readFocal35(file).then(mm => { if (scanFileRef.current === file) setPhotoLens(mm); });
     }
   };
@@ -591,7 +659,6 @@ export default function AIGardenDesigner() {
     setImagePreview(null);
     setPhotoCorners(null);
     setPhotoLens(null);
-    setZoneScan({ status: 'idle', zones: [] });
     setKeepClear([]);
   };
 
@@ -616,9 +683,13 @@ export default function AIGardenDesigner() {
     formData.append('lot_width', Number(lotWidth));
     formData.append('lot_length', Number(lotLength));
     formData.append('preferred_plant_ids', JSON.stringify(preferredPlants));
+    formData.append('groundcover', groundcoverOn ? 'auto' : 'off');
+    formData.append('plant_qty', JSON.stringify(Object.entries(plantQty)
+      .filter(([id]) => preferredPlants.includes(id)).map(([id, quantity]) => ({ id: Number(id), quantity }))));
     formData.append('features', JSON.stringify(Object.entries(featureQty).map(([id, quantity]) => ({ id: Number(id), quantity }))));
     // The photo stays in the browser for the AR view; only the confirmed zones are sent
     formData.append('keep_clear_zones', JSON.stringify(keepClear));
+    formData.append('site_survey', JSON.stringify(survey));
     formData.append('seed', variationSeed);
     if (sun) formData.append('sun', sun);
     formData.append('maintenance', maintenance);
@@ -633,7 +704,7 @@ export default function AIGardenDesigner() {
           plants: (design.plants || []).filter(p =>
             p.is_existing || inventoryIds.has(String(p.plant_id))
           ),
-        })), { install, scope: response.data.scope || scope, newLawn: lawn !== 'keep', lot: [Number(lotWidth), Number(lotLength)], keepClear });
+        })), { install, scope: response.data.scope || scope, newLawn: lawn !== 'keep', lot: [Number(lotWidth), Number(lotLength)], keepClear, survey });
         setEditHistory({});
         setGeneratedLayouts(validated);
         setSlide(0);
@@ -692,7 +763,7 @@ export default function AIGardenDesigner() {
         designName: `${design.design_name} (from AI Designer)`,
         placedItems: lotPlantsToStudioItems(design.plants || [], catalog, w, l),
         // The beds and lawn come along, so the Studio shows the same garden (dropped if the lot is resized)
-        dimensions: { width: w, length: l, terrainType: 'flat',
+        dimensions: { width: w, length: l, terrainType: 'flat', outline: survey.outline || null,
           ...(design.garden_plan?.lawn && { gardenPlan: { ...design.garden_plan, newLawn: lawn !== 'keep' } }) },
         depthData: null,
         originalImageUrl: null,
@@ -726,21 +797,13 @@ export default function AIGardenDesigner() {
       priceSeq.current[id] = seq;
       const layout = layoutsRef.current.find(l => l.edit_id === id);
       if (!layout) return;
-      const ctx = layout.price_ctx || { install, scope, newLawn: lawn !== 'keep', lot: [Number(lotWidth), Number(lotLength)] };
-      const area = ctx.lot[0] * ctx.lot[1];
+      const ctx = layout.price_ctx || defaultCtx();
       // Designer's notes (too close, on the lawn, tall at the front…): suggestions only, never blocking
       axios.post(`${API_ROOT}/layout-review/`, layoutBody(layout, ctx), { timeout: EDIT_TIMEOUT })
         .then(({ data }) => { if (priceSeq.current[id] === seq) patchLayout(id, { notes: data.notes || [] }); })
         .catch(() => { if (priceSeq.current[id] === seq) patchLayout(id, { notes: null }); });
-      const counts = {};
-      layout.plants.forEach(p => { if (!p.is_existing) counts[p.plant_id] = (counts[p.plant_id] || 0) + 1; });
       try {
-        const { data: est } = await axios.post(`${API_ROOT}/pricing/estimate/`, {
-          items: Object.entries(counts).map(([pid, quantity]) => ({ product_id: Number(pid), quantity })),
-          area_sqm: area,
-          lawn_sqm: ctx.install ? Math.min(area, Number(layout.garden_plan?.lawn_area) || 0) : 0,
-          new_lawn: ctx.newLawn, scope: ctx.scope || 'makeover', install: ctx.install,
-        }, { timeout: EDIT_TIMEOUT });
+        const { data: est } = await axios.post(`${API_ROOT}/pricing/estimate/`, estimateBody(layout, ctx), { timeout: EDIT_TIMEOUT });
         if (priceSeq.current[id] !== seq) return;   // a newer edit is being priced
         patchLayout(id, l => ({
           pricing: 'ok', total_cost: est.total, plant_cost: est.plant_cost, plant_breakdown: est.plant_breakdown, cost_estimate: est,
@@ -753,9 +816,42 @@ export default function AIGardenDesigner() {
     }, 450);
   };
 
+  const defaultCtx = () => ({ install, scope, newLawn: lawn !== 'keep', lot: [Number(lotWidth), Number(lotLength)] });
+  const estimateBody = (layout, ctx) => {
+    const counts = {};
+    layout.plants.forEach(p => { if (!p.is_existing) counts[p.plant_id] = (counts[p.plant_id] || 0) + 1; });
+    (layout.groundcover || []).forEach(g => { counts[g.plant_id] = (counts[g.plant_id] || 0) + Math.round(Number(g.area_sqm) || 0); });
+    const area = yardArea(ctx.survey, ctx.lot[0], ctx.lot[1]);   // the yard's own shape when it has one
+    return {
+      items: Object.entries(counts).map(([pid, quantity]) => ({ product_id: Number(pid), quantity })),
+      area_sqm: area,
+      lawn_sqm: ctx.install ? Math.min(area, Number(layout.garden_plan?.lawn_area) || 0) : 0,
+      new_lawn: ctx.newLawn, scope: ctx.scope || 'makeover', install: ctx.install,
+    };
+  };
+
+  // Plants only → installed by our crew (and back): same design, new terms, priced again by the server.
+  // The design then books the site visit; the office adjusts it and the customer approves the final one.
+  const installedEstimate = (scopeChoice) => {
+    const layout = layoutsRef.current.find(l => l.edit_id === activeLayout?.edit_id);
+    if (!layout) return Promise.reject(new Error('No design'));
+    const ctx = { ...(layout.price_ctx || defaultCtx()), install: true, scope: scopeChoice };
+    return axios.post(`${API_ROOT}/pricing/estimate/`, estimateBody(layout, ctx), { timeout: EDIT_TIMEOUT }).then(r => r.data);
+  };
+  const switchTerms = (installNow, scopeChoice) => {
+    const cur = activeLayout;
+    if (!cur) return;
+    const base = cur.price_ctx || defaultCtx();
+    patchLayout(cur.edit_id, {
+      price_ctx: { ...base, install: installNow, scope: scopeChoice || base.scope || 'makeover' },
+      terms_switched: true, pricing: 'pending',
+    });
+    reprice(cur.edit_id);
+  };
+
   const layoutBody = (layout, ctx) => ({
     plants: layout.plants, lot_width: ctx.lot[0], lot_length: ctx.lot[1],
-    garden_plan: layout.garden_plan || null, keep_clear_zones: ctx.keepClear || [],
+    garden_plan: layout.garden_plan || null, keep_clear_zones: ctx.keepClear || [], site_survey: ctx.survey || null,
   });
 
   const handlePlantsEdit = (nextPlants, opts = {}) => {
@@ -780,7 +876,9 @@ export default function AIGardenDesigner() {
   const restoreOriginal = (id) => {
     clearTimeout(priceTimers.current[id]);
     priceSeq.current[id] = (priceSeq.current[id] || 0) + 1;   // drop any price still on its way
-    patchLayout(id, l => (l.original ? { ...l.original, edited: false, original: null, pricing: 'ok', notes: [] } : {}));
+    const switched = layoutsRef.current.find(l => l.edit_id === id)?.terms_switched;
+    patchLayout(id, l => (l.original ? { ...l.original, edited: false, original: null, pricing: switched ? 'pending' : 'ok', notes: [] } : {}));
+    if (switched) reprice(id);   // the AI's plants, priced on the terms the customer chose (installed / plants only)
     setTidyNote('');
     setTidyPreview(null);
     setMirrorNote('');
@@ -794,7 +892,7 @@ export default function AIGardenDesigner() {
   const handleTidy = async () => {
     const cur = activeLayout;
     if (!cur || tidying) return;
-    const ctx = cur.price_ctx || { lot: [Number(lotWidth), Number(lotLength)], keepClear };
+    const ctx = cur.price_ctx || { lot: [Number(lotWidth), Number(lotLength)], keepClear, survey };
     setTidying(true);
     try {
       const { data } = await axios.post(`${API_ROOT}/layout-review/`, { ...layoutBody(cur, ctx), tidy: true }, { timeout: EDIT_TIMEOUT });
@@ -862,6 +960,9 @@ export default function AIGardenDesigner() {
   ] : [];
   const openPanel = (panel) => { setEditPanel(panel); setPanelError(''); };
   const costTerms = { install: activeLayout?.price_ctx?.install ?? install, scope: activeLayout?.price_ctx?.scope || scope };
+  // Their own ground needs the photo lined up (its pins); by default it's shown when we plant into the garden as it is
+  const canPhotoGround = !!imagePreview && !!photoSetup;
+  const groundMode = canPhotoGround ? (groundChoice ?? (costTerms.scope === 'existing' ? 'photo' : 'design')) : 'design';
   const addCost = (item) => itemCostToCustomer(rates, item, costTerms);
   const swapCost = (item) => (swapItem ? addCost(item) - addCost(swapItem) : 0);
 
@@ -875,7 +976,7 @@ export default function AIGardenDesigner() {
   const handleAdd = async (item) => {
     const cur = activeLayout;
     if (!cur || panelBusy) return;
-    const ctx = cur.price_ctx || { lot: [Number(lotWidth), Number(lotLength)], keepClear };
+    const ctx = cur.price_ctx || { lot: [Number(lotWidth), Number(lotLength)], keepClear, survey };
     setPanelBusy(true);
     setPanelError('');
     try {
@@ -900,14 +1001,14 @@ export default function AIGardenDesigner() {
         return;
       }
       const data = {
-        layouts: generatedLayouts, activeId, budgetRange, lotWidth, lotLength, featureQty, preferredPlants,
-        install, scope, lawn, sun, maintenance, keepClear, hadPhoto: !!imagePreview,
+        layouts: generatedLayouts, activeId, budgetRange, lotWidth, lotLength, featureQty, preferredPlants, plantQty,
+        install, scope, lawn, sun, maintenance, keepClear, survey, hadPhoto: !!imagePreview,
       };
       if (ownerId) saveAiSession(ownerId, data); else saveGuestDesign(data);
     }, 600);
     return () => clearTimeout(t);
-  }, [generatedLayouts, activeId, ownerId, budgetRange, lotWidth, lotLength, featureQty, preferredPlants,
-    install, scope, lawn, sun, maintenance, keepClear, imagePreview]);
+  }, [generatedLayouts, activeId, ownerId, budgetRange, lotWidth, lotLength, featureQty, preferredPlants, plantQty,
+    install, scope, lawn, sun, maintenance, keepClear, survey, imagePreview]);
 
   // Analyse the uploaded photo's average colour to warm/cool the 3D lighting
   useEffect(() => {
@@ -935,14 +1036,170 @@ export default function AIGardenDesigner() {
     setEditingCorners(key === 'ar' && !!imagePreview && !photoCorners);
   };
 
+  // What's saved for a design (booking and share links both save one)
+  const designPayloadFor = (layout, referenceImageUrl = '') => ({
+    name: layout.design_name,
+    placed_items: layout.plants,
+    plant_breakdown: layout.plant_breakdown || [],
+    // The pins and the beds/lawn plan travel with the design so the office and crew see the same garden
+    dimensions: { width: Number(lotWidth), length: Number(lotLength), ...(photoSetup && { photoCorners: photoSetup }),
+      ...((layout.price_ctx?.survey?.items?.length || layout.price_ctx?.survey?.sun || layout.price_ctx?.survey?.outline) && { siteSurvey: layout.price_ctx.survey }),
+      ...(layout.garden_plan?.lawn && { gardenPlan: { ...layout.garden_plan, newLawn: lawn !== 'keep' } }),
+      ...(layout.groundcover?.length && { groundcover: layout.groundcover }),
+      // The customer moved, turned or removed things after the AI designed it
+      ...(layout.edited && { editedByCustomer: true, customerEdits: {
+        ...editSummary(layout), notes: (layout.notes || []).slice(0, 10).map(n => n.message) } }) },
+    total_cost: layout.total_cost,
+    cost_estimate: layout.cost_estimate || {},
+    reference_image_url: referenceImageUrl,
+    status: 'draft',
+  });
+
+  // One saved copy per version of a design (no yard photo); edits make a new version
+  const designKey = (layout) => JSON.stringify([layout.design_name, layout.plants, layout.total_cost, layout.garden_plan, lotWidth, lotLength]);
+  const ensureSaved = (layout) => {
+    const key = designKey(layout);
+    const saved = savedDesignsRef.current;
+    if (!saved[key]) {
+      saved[key] = api.post('/designs/', designPayloadFor(layout)).then(r => r.data.id)
+        .catch((e) => { delete saved[key]; throw e; });   // a failed save can be tried again
+    }
+    return saved[key];
+  };
+
+  // Share: save this version of the design to the account (no yard photo), then get its public link
+  const handleShare = async () => {
+    const layout = activeLayout;
+    if (!layout || layout.pricing === 'pending' || layout.pricing === 'error') return;
+    if (!user) { setAuthFor('share'); setShowAuthModal(true); return; }
+    const key = designKey(layout);
+    const known = shareLinks[key];
+    if (known) { setShareSheet({ status: 'ready', name: layout.design_name, ...known }); return; }
+    setShareSheet({ status: 'working', name: layout.design_name });
+    try {
+      const designId = await ensureSaved(layout);
+      const share = await shareDesign(designId);
+      const entry = { designId, url: `${window.location.origin}${share.path}` };
+      setShareLinks(links => ({ ...links, [key]: entry }));
+      setShareSheet({ status: 'ready', name: layout.design_name, ...entry });
+    } catch (e) {
+      setShareSheet({ status: 'error', name: layout.design_name,
+        message: navigator.onLine === false ? 'No internet connection. Try again when you are back online.' : (e.message || 'Could not make the link.') });
+    }
+  };
+
+  // Signed in from the share button: share once the signed-in user is here (the modal calls back
+  // before React has re-rendered with them, so handleShare would still see a guest)
+  const [shareAfterSignIn, setShareAfterSignIn] = useState(false);
+  const shareNow = useEffectEvent(() => { setShareAfterSignIn(false); handleShare(); });
+  useEffect(() => {
+    if (shareAfterSignIn && user) shareNow();
+  }, [shareAfterSignIn, user]);
+
+  // Download the design as a .glb 3D file, exactly as the 3D view shows it (incl. growth stage)
+  const handleDownloadGlb = async () => {
+    const canvas = gardenCanvasRef.current;
+    if (!canvas || glbBusy || !activeLayout) return;
+    setGlbBusy(true);
+    try {
+      const blob = await canvas.exportGlb({ title: activeLayout.design_name });
+      const name = glbFileName(activeLayout.design_name);
+      saveBlob(blob, name);
+      toast({ id: 'glb', type: 'success', title: '3D file downloaded',
+        message: `${name} · ${fileSize(blob.size)}. Opens in Blender, SketchUp and online 3D viewers.` });
+    } catch (e) {
+      toast({ id: 'glb', type: 'error', title: "Couldn't make the 3D file", message: e.message || 'Please try again.' });
+    } finally {
+      setGlbBusy(false);
+    }
+  };
+
+  // PDF proposal: the design saved (once per version), with the picture of the tab that's open —
+  // the 3D overview, or the before & after on the yard photo — made here, the rest by the server
+  const handleProposal = async () => {
+    const layout = activeLayout;
+    const canvas = gardenCanvasRef.current;
+    if (!layout || pdfBusy || layout.pricing === 'pending' || layout.pricing === 'error') return;
+    setPdfBusy(true);
+    try {
+      const { canvasToJpeg } = await import('../data/photoPreview');
+      const form = new FormData();
+      if (canvas && activeView === 'ar' && imagePreview && poseStatus?.ok && !editingCorners) {
+        const { before, after } = await canvas.renderPhotoPreview({ maxSide: 1600 });
+        form.append('photo_before', await canvasToJpeg(before, 0.88), 'before.jpg');
+        form.append('photo_after', await canvasToJpeg(after, 0.88), 'after.jpg');
+      } else if (canvas && activeView !== 'ar') {
+        form.append('render', await canvasToJpeg(await canvas.renderOverview(), 0.88), 'render.jpg');
+      }
+      // CC BY models shown in the pictures are credited in the PDF
+      const names = new Set((layout.plant_breakdown || []).map(r => String(r.name || '').toLowerCase()));
+      const credits = MODEL_CREDITS.filter(c => names.has(c.product.toLowerCase()));
+      if (credits.length) form.append('credits', `3D models in the pictures: ${credits.map(c => `"${c.title}" by ${c.author} (${c.license.name})`).join('; ')}.`);
+      const designId = await ensureSaved(layout);
+      const { blob, fileName } = await downloadDesignProposal(designId, form);
+      saveBlob(blob, fileName);
+      toast({ id: 'proposal', type: 'success', title: 'PDF proposal downloaded',
+        message: `${fileName} · ${fileSize(blob.size)}. It's also saved in your account.` });
+    } catch (e) {
+      toast({ id: 'proposal', type: 'error', title: "Couldn't make the PDF",
+        message: navigator.onLine === false ? 'No internet connection. Try again when you are back online.' : (e.message || 'Please try again.') });
+    } finally {
+      setPdfBusy(false);
+    }
+  };
+
+  // Photo overlay: "Before & after" picture (their photo, and the same photo with the garden in it)
+  const handlePhotoPreview = async () => {
+    const canvas = gardenCanvasRef.current;
+    if (!canvas || photoBusy || !activeLayout) return;
+    setPhotoBusy(true);
+    try {
+      const { before, after } = await canvas.renderPhotoPreview();
+      const { composeBeforeAfter, canvasToJpeg } = await import('../data/photoPreview');
+      const picture = composeBeforeAfter({ before, after, title: activeLayout.design_name,
+        stage: GROWTH_STAGES.find(g => g.key === growthStage)?.label });
+      const blob = await canvasToJpeg(picture);
+      const name = designFileName(activeLayout.design_name, 'before-after', 'jpg');
+      saveBlob(blob, name);
+      // Phones: one more tap puts it straight into Photos / Messenger (sharing needs a fresh tap)
+      const file = new File([blob], name, { type: 'image/jpeg' });
+      const canShare = touch && navigator.canShare?.({ files: [file] });
+      toast({ id: 'photo-preview', type: 'success', title: 'Before & after picture saved', message: `${name} · ${fileSize(blob.size)}`,
+        ...(canShare && { action: { label: 'Share', onClick: () => navigator.share({ files: [file], title: activeLayout.design_name }).catch(() => {}) } }) });
+    } catch (e) {
+      toast({ id: 'photo-preview', type: 'error', title: "Couldn't make the picture", message: e.message || 'Please try again.' });
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
+
+  const handleStopSharing = async () => {
+    const designId = shareSheet?.designId;
+    if (!designId) return;
+    try {
+      await stopSharingDesign(designId);
+      setShareLinks(links => Object.fromEntries(Object.entries(links).filter(([, v]) => v.designId !== designId)));
+      setShareSheet(null);
+    } catch (e) {
+      setShareSheet(s => s && { ...s, status: 'error', message: e.message });
+    }
+  };
+
   const handleBookDesign = async () => {
     if (activeLayout?.pricing === 'pending' || activeLayout?.pricing === 'error') return;   // wait for the edited price
     if (activeLayout && activeLayout.plants && !(activeLayout.price_ctx?.install ?? install)) {
       // Plants only: put this design's plant list in the shop cart
+      // Quantities stop at what's in stock; the cart drawer says which ones fell short
+      const short = [];
       (activeLayout.plant_breakdown || []).forEach(row => {
         const product = catalog.find(p => String(p.id) === String(row.plant_id));
-        if (product) addToCart(product, row.quantity);
+        if (!product) return;
+        const r = addToCart(product, row.quantity);
+        if (r.limited) short.push(r.quantity > 0
+          ? { kind: 'reduced', name: product.name, quantity: r.quantity }
+          : { kind: 'soldout', name: product.name });
       });
+      addCartNotices(short);
       navigate('/shop?cart=open');
       return;
     }
@@ -956,6 +1213,7 @@ export default function AIGardenDesigner() {
         imagePreview: imagePreview || '/login-hero-bg.webp',
       };
       localStorage.setItem('pending_booking_context', JSON.stringify(context));
+      setAuthFor('book');
       setShowAuthModal(true);
       return;
     }
@@ -973,21 +1231,7 @@ export default function AIGardenDesigner() {
         const uploadRes = await axios.post(`${API_BASE_URL}/upload-design-image/`, imgForm, { headers: authHeader });
         referenceImageUrl = uploadRes.data.url || '';
       }
-      const designPayload = {
-        name: activeLayout.design_name,
-        placed_items: activeLayout.plants,
-        plant_breakdown: activeLayout.plant_breakdown || [],
-        // The pins and the beds/lawn plan travel with the design so the office and crew see the same garden
-        dimensions: { width: Number(lotWidth), length: Number(lotLength), ...(photoSetup && { photoCorners: photoSetup }),
-          ...(activeLayout.garden_plan?.lawn && { gardenPlan: { ...activeLayout.garden_plan, newLawn: lawn !== 'keep' } }),
-          // The customer moved, turned or removed things after the AI designed it
-          ...(activeLayout.edited && { editedByCustomer: true, customerEdits: {
-            ...editSummary(activeLayout), notes: (activeLayout.notes || []).slice(0, 10).map(n => n.message) } }) },
-        total_cost: activeLayout.total_cost,
-        cost_estimate: activeLayout.cost_estimate || {},
-        reference_image_url: referenceImageUrl,
-        status: 'draft',
-      };
+      const designPayload = designPayloadFor(activeLayout, referenceImageUrl);
       const designRes = await axios.post(`${API_BASE_URL}/designs/`, designPayload, { headers: authHeader });
       navigate('/my-bookings', {
         state: {
@@ -998,15 +1242,11 @@ export default function AIGardenDesigner() {
         },
       });
     } catch (err) {
+      // Stay here: booking without the design would leave the crew nothing to build from
+      // (this used to carry on to the booking form with no design attached, silently)
       console.error('Failed to save design:', err);
-      navigate('/my-bookings', {
-        state: {
-          designId: null,
-          designName: activeLayout.design_name,
-          totalCost: activeLayout.total_cost,
-          autoOpenModal: true,
-        },
-      });
+      toast({ id: 'book-design', type: 'error', title: "Couldn't save your design for booking",
+        message: err.response?.data?.error || 'Check your connection and try again. Your design is still here.' });
     } finally {
       setBookingLoading(false);
     }
@@ -1510,10 +1750,17 @@ export default function AIGardenDesigner() {
 
                 {/* The yard's conditions: which plants will thrive, how much care, the lawn */}
                 <div style={{ marginTop: '1.25rem', display: 'grid', gap: '0.9rem' }}>
-                  <ChoiceChips label="Sun on the garden" value={sun} onChange={setSun} touch={touch} options={[
-                    ['full', 'Full sun', '6+ hours of direct sun'], ['part', 'Part sun', '3–6 hours'],
-                    ['shade', 'Mostly shade', 'under 3 hours'], [null, 'Not sure', 'we check at the site visit'],
-                  ]} />
+                  {survey.sun ? (
+                    // Mark your yard → Sun & shade: worked out spot by spot, so the whole-yard answer isn't needed
+                    <p style={{ margin: 0, fontSize: '0.8rem', color: '#475569' }}>
+                      <b style={{ color: '#0F172A' }}>Sun on the garden:</b> worked out for every spot from which way your yard faces (in Mark your yard below).
+                    </p>
+                  ) : (
+                    <ChoiceChips label="Sun on the garden" value={sun} onChange={setSun} touch={touch} options={[
+                      ['full', 'Full sun', '6+ hours of direct sun'], ['part', 'Part sun', '3–6 hours'],
+                      ['shade', 'Mostly shade', 'under 3 hours'], [null, 'Not sure', 'we check at the site visit'],
+                    ]} />
+                  )}
                   <ChoiceChips label="Upkeep you want" value={maintenance} onChange={setMaintenance} touch={touch} options={[
                     ['low', 'Low', 'fewer, hardier plants'], ['medium', 'Medium', 'regular watering'],
                     ['high', 'I love gardening', 'richer planting'],
@@ -1541,6 +1788,10 @@ export default function AIGardenDesigner() {
                       <div style={{ fontSize: '0.75rem', color: '#94A3B8' }}>
                         PNG, JPG or WEBP · max 5MB
                       </div>
+                      <div style={{ fontSize: '0.72rem', color: '#64748B', marginTop: 8, lineHeight: 1.45, maxWidth: 420, marginInline: 'auto' }}>
+                        Best photo: from the house side, phone held level, showing <b>both back corners</b> and the <b>bottom of both side fences</b>.
+                        A long yard? Hold the phone sideways. A photo from an upstairs window works too.
+                      </div>
                       <input type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImageChange} />
                     </label>
 
@@ -1556,9 +1807,12 @@ export default function AIGardenDesigner() {
                       </div>
                     )}
                   </div>
-                  {imagePreview && (
-                    <ZonePicker imageUrl={imagePreview} scan={zoneScan} selected={keepClear} onChange={setKeepClear} />
-                  )}
+                  <YardSurvey imageUrl={imagePreview} lotWidth={lotWidth} lotLength={lotLength}
+                    pinSetup={photoSetup} pinMode={pinMode} onPinMode={setPinMode} onPins={setPhotoCorners}
+                    pinAnchors={pinAnchors} onPinAnchors={setPinAnchors}
+                    pinVantage={photoVantage} onPinVantage={setPhotoVantage} pinFront={photoFront} onPinFront={setPhotoFront}
+                    onLotSize={(w, l) => { setLotWidth(w); setLotLength(l); }}
+                    survey={survey} onSurvey={setSurvey} />
                 </div>
 
                 <hr style={styles.divider} />
@@ -1568,7 +1822,7 @@ export default function AIGardenDesigner() {
                   <label style={styles.sectionLabel}>Your Plants <span style={{ color: '#94A3B8', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>(optional)</span></label>
                   <p style={{ margin: '0 0 10px', fontSize: '0.78rem', color: '#64748B', lineHeight: 1.45 }}>
                     {selectedPlantObjects.length
-                      ? <>Every design will use <strong style={{ color: '#065F46' }}>only the {selectedPlantObjects.length} plant{selectedPlantObjects.length > 1 ? 's' : ''} you picked</strong>. Clear them all and we choose from the whole catalog.</>
+                      ? <>Every design uses <strong style={{ color: '#065F46' }}>only the {selectedPlantObjects.length} plant{selectedPlantObjects.length > 1 ? 's' : ''} you picked</strong>, and includes {selectedPlantObjects.length > 1 ? 'each of them' : 'it'} (if one can't fit, the design says why). Clear them all and we choose from the whole catalog.</>
                       : 'Pick plants and every design uses only those. Leave this empty and we choose from the whole catalog.'}
                   </p>
                   {missingLayers.length > 0 && (
@@ -1583,31 +1837,63 @@ export default function AIGardenDesigner() {
                         <div key={i} style={{ height: '60px', borderRadius: '12px', background: '#F1F5F9', animation: 'pulse 1.4s ease-in-out infinite' }} />
                       ))}
                     </div>
+                  ) : inventoryError ? (
+                    <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 12px', borderRadius: 10,
+                      border: '1px solid #FDE68A', background: '#FFFBEB', fontSize: '0.8rem', color: '#92400E', fontWeight: 600 }}>
+                      We couldn't load our plants just now (the connection dropped or the server is restarting).
+                      <button type="button" onClick={retryInventory}
+                        style={{ minHeight: 34, padding: '0 12px', borderRadius: 8, border: '1px solid #F59E0B', background: '#fff', color: '#92400E',
+                          fontWeight: 800, cursor: 'pointer', fontFamily: 'inherit' }}>
+                        Retry
+                      </button>
+                    </div>
                   ) : inventory.length === 0 ? (
                     <p style={{ fontSize: '0.8rem', color: '#94A3B8', fontStyle: 'italic' }}>No plants found in inventory.</p>
                   ) : (
                     <div style={styles.plantsGrid}>
-                      {inventory.map(plant => {
-                        const isSelected = preferredPlants.includes(String(plant.id));
+                      {inventory.filter(plant => !plant.is_groundcover).map(plant => {
+                        const id = String(plant.id);
+                        const isSelected = preferredPlants.includes(id);
+                        const stock = Math.max(0, Number(plant.stock_quantity) || 0);
+                        const max = Math.max(1, Math.min(300, stock));
+                        const room = isSelected ? roomFor(plant) : null;
+                        const qty = plantQty[id];
                         return (
-                          <button
-                            key={plant.id} type="button"
-                            onClick={() => handleTogglePlant(String(plant.id))}
-                            className="plant-card"
-                            style={styles.plantCard(isSelected)}
-                          >
-                            <PlantThumb item={plant} style={styles.plantPhoto} />
-                            <span style={styles.plantInfo}>
-                              <span style={styles.plantName(isSelected)}>{plant.name}</span>
-                              <span style={styles.plantPrice(isSelected)}>₱{Number(plant.unit_price).toLocaleString()}</span>
-                              <NeedChips plant={plant} />
-                            </span>
+                          // The card is the frame: the tap area picks the plant, the amount row lives inside it
+                          <div key={plant.id} className="plant-card" style={{ ...styles.plantCard(isSelected), cursor: 'default' }}>
+                            <button type="button" onClick={() => handleTogglePlant(id)} aria-pressed={isSelected}
+                              style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, width: '100%', minWidth: 0, padding: 0,
+                                border: 'none', background: 'transparent', font: 'inherit', textAlign: 'left', cursor: 'pointer' }}>
+                              <PlantThumb item={plant} style={styles.plantPhoto} />
+                              <span style={styles.plantInfo}>
+                                <span style={styles.plantName(isSelected)}>{plant.name}</span>
+                                <span style={styles.plantPrice(isSelected)}>₱{Number(plant.unit_price).toLocaleString()}</span>
+                                <NeedChips plant={plant} />
+                              </span>
+                            </button>
                             {isSelected && (
                               <span style={styles.plantCheck}>
                                 <Check size={10} color="#fff" />
                               </span>
                             )}
-                          </button>
+                            {isSelected && (
+                              <div style={{ paddingTop: 8, borderTop: '1px solid #D1FAE5', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.72rem', fontWeight: 700, color: '#065F46' }}>
+                                  How many
+                                  <input type="number" inputMode="numeric" min="1" max={max} step="1" placeholder="Let us decide"
+                                    value={qty ?? ''} onChange={e => setPlantAmount(id, e.target.value, max)}
+                                    aria-label={`How many ${plant.name} (leave empty and we decide)`}
+                                    style={{ flex: 1, minWidth: 0, height: 32, padding: '0 8px', borderRadius: 8, border: '1.5px solid #A7F3D0',
+                                      fontSize: '0.78rem', fontWeight: 700, color: '#065F46', background: '#fff', fontFamily: 'inherit' }} />
+                                </label>
+                                <span style={{ fontSize: '0.68rem', color: qty && room && qty > room ? '#B45309' : '#64748B', lineHeight: 1.35 }}>
+                                  {qty
+                                    ? (room && qty > room ? `More than fits easily (room for about ${room}); we'll fit what we can and tell you.` : `Room for about ${room ?? '?'} in your yard.`)
+                                    : `We'll choose. Room for about ${room ?? '?'}${stock < (room || 0) ? ` · ${stock} in stock` : ''}.`}
+                                </span>
+                              </div>
+                            )}
+                          </div>
                         );
                       })}
                     </div>
@@ -1660,11 +1946,29 @@ export default function AIGardenDesigner() {
                 </div>
 
                 {/* Garden features: seating and accent rocks, placed before any plant */}
+                {inventory.some(i => i.is_groundcover && Number(i.stock_quantity) > 0) && (
+                  <div style={{ marginTop: '1.5rem' }}>
+                    <label style={styles.sectionLabel}>Groundcover in the beds</label>
+                    <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', borderRadius: 12, cursor: 'pointer',
+                      border: `1.5px solid ${groundcoverOn ? '#6EE7B7' : '#E2E8F0'}`, background: groundcoverOn ? '#ECFDF5' : '#fff' }}>
+                      <input type="checkbox" checked={groundcoverOn} onChange={e => setGroundcoverOn(e.target.checked)}
+                        style={{ width: 18, height: 18, marginTop: 2, accentColor: '#059669', flexShrink: 0 }} />
+                      <span style={{ fontSize: '0.8rem', color: '#334155', lineHeight: 1.5 }}>
+                        <b>Fill the beds between plants with groundcover</b> (recommended). Plants are spaced for their grown size;
+                        groundcover such as {inventory.filter(i => i.is_groundcover).slice(0, 2).map(i => i.name.split(' (')[0]).join(' or ')} covers the
+                        soil between them within about a year, with a shade-loving one under the trees. Fewer weeds, no bare soil.
+                        Priced per m²; switch it off for mulched beds.
+                      </span>
+                    </label>
+                  </div>
+                )}
+
                 {featureItems.length > 0 && (
                   <div style={{ marginTop: '1.5rem' }}>
                     <label style={styles.sectionLabel}>Garden Features <span style={{ color: '#94A3B8', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>(optional)</span></label>
                     <p style={{ margin: '0 0 10px', fontSize: '0.78rem', color: '#64748B', lineHeight: 1.45 }}>
-                      A seating spot gets open ground and a path to the house; rocks go in small groups in the planting beds.
+                      A seating spot gets open ground and a path to the house; boulders go in small groups in the planting beds, and small
+                      garden stones (by the half dozen) in looser clusters along them.
                       They are placed first and paid for from your budget before the plants.
                     </p>
                     <div style={styles.plantsGrid}>
@@ -1672,7 +1976,9 @@ export default function AIGardenDesigner() {
                         const id = String(item.id);
                         const qty = featureQty[id] || 0;
                         const isSeat = FEATURE_KIND[item.category] === 'seat';
-                        const canAdd = isSeat ? seatTotal < MAX_SEATS : qty < MAX_ROCKS;
+                        const isStone = isSmallStone(item);
+                        const canAdd = (isSeat ? seatTotal < MAX_SEATS : qty < rockLimitOf(item)) && qty < (Number(item.stock_quantity) || 0);
+                        const unit = isSeat ? ['seat', 'seats'] : isStone ? ['stone', 'stones'] : ['rock', 'rocks'];
                         return (
                           // The card is the frame; the tap area and the counter both live inside it,
                           // so a selected card grows with its row instead of hanging a counter below it
@@ -1686,9 +1992,9 @@ export default function AIGardenDesigner() {
                               <PlantThumb item={item} style={styles.plantPhoto} />
                               <span style={styles.plantInfo}>
                                 <span style={styles.plantName(qty > 0)}>{item.name}</span>
-                                <span style={styles.plantPrice(qty > 0)}>₱{Number(item.unit_price).toLocaleString()} each</span>
+                                <span style={styles.plantPrice(qty > 0)}>₱{Number(item.unit_price).toLocaleString()} each{isStone ? ` · ₱${(Number(item.unit_price) * 12).toLocaleString()} a dozen` : ''}</span>
                                 <span style={{ display: 'flex', marginTop: 6 }}>
-                                  <span style={chip(isSeat ? '#6D28D9' : '#475569', isSeat ? '#EDE9FE' : '#F1F5F9')}>{isSeat ? 'Seating' : 'Accent rock'}</span>
+                                  <span style={chip(isSeat ? '#6D28D9' : '#475569', isSeat ? '#EDE9FE' : '#F1F5F9')}>{isSeat ? 'Seating' : isStone ? 'Garden stones' : 'Accent boulder'}</span>
                                 </span>
                               </span>
                             </button>
@@ -1696,12 +2002,12 @@ export default function AIGardenDesigner() {
                             {qty > 0 && (
                               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6,
                                 paddingTop: 8, borderTop: '1px solid #D1FAE5' }}>
-                                <button type="button" onClick={() => changeFeatureQty(item, -1)} aria-label={`One less ${item.name}`}
+                                <button type="button" onClick={() => changeFeatureQty(item, -1)} aria-label={isStone ? `${STONE_STEP} fewer ${item.name}` : `One less ${item.name}`}
                                   style={styles.stepBtn(true)}>−</button>
                                 <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#065F46', minWidth: 0 }} aria-live="polite">
-                                  {qty}<span style={{ fontWeight: 600, color: '#64748B', fontSize: '0.7rem' }}> {isSeat ? (qty > 1 ? 'seats' : 'seat') : (qty > 1 ? 'rocks' : 'rock')}</span>
+                                  {qty}<span style={{ fontWeight: 600, color: '#64748B', fontSize: '0.7rem' }}> {qty > 1 ? unit[1] : unit[0]}</span>
                                 </span>
-                                <button type="button" onClick={() => changeFeatureQty(item, 1)} disabled={!canAdd} aria-label={`One more ${item.name}`}
+                                <button type="button" onClick={() => changeFeatureQty(item, 1)} disabled={!canAdd} aria-label={isStone ? `${STONE_STEP} more ${item.name}` : `One more ${item.name}`}
                                   style={styles.stepBtn(canAdd)}>+</button>
                               </div>
                             )}
@@ -1709,6 +2015,12 @@ export default function AIGardenDesigner() {
                         );
                       })}
                     </div>
+                    {featureItems.some(i => FEATURE_KIND[i.category] === 'rock') && (
+                      <p style={{ margin: '8px 0 0', fontSize: '0.72rem', color: '#64748B' }}>
+                        Your yard (about {Math.round(yardArea(survey, Number(lotWidth), Number(lotLength)))} m²) takes up to {rockMax.boulders} of each
+                        boulder and {rockMax.stones} of each small stone: more would crowd the beds.
+                      </p>
+                    )}
                     {seatTotal >= MAX_SEATS && (
                       <p style={{ margin: '8px 0 0', fontSize: '0.72rem', color: '#64748B' }}>Up to {MAX_SEATS} seats make one seating spot.</p>
                     )}
@@ -1873,9 +2185,7 @@ export default function AIGardenDesigner() {
                           </div>
                         ) : (
                           <div style={{ fontSize: '0.7rem', color: '#64748B', marginTop: '4px', fontWeight: 600 }}>
-                            Designed for ₱{Number(design.target_budget).toLocaleString()} · {
-                              { Minimalist: 'low end', Symmetrical: 'middle', 'Lush / Organic': 'top' }[design.design_name] || 'within'
-                            } of your range
+                            Designed for your budget of ₱{Number(design.target_budget).toLocaleString()}
                           </div>
                         ))}
                       </div>
@@ -1884,7 +2194,8 @@ export default function AIGardenDesigner() {
                           const items = design.plants?.filter(p => !p.is_existing) || [];
                           const featureIds = new Set(featureItems.map(f => String(f.id)));
                           const nFeatures = items.filter(p => featureIds.has(String(p.plant_id))).length;
-                          return <span style={styles.plantListLabel}>Flora Arrangement · {items.length - nFeatures} plants{nFeatures ? ` · ${nFeatures} garden feature${nFeatures > 1 ? 's' : ''}` : ''}</span>;
+                          const gcM2 = (design.groundcover || []).reduce((n, g) => n + Number(g.area_sqm || 0), 0);
+                          return <span style={styles.plantListLabel}>Flora Arrangement · {items.length - nFeatures} plants{nFeatures ? ` · ${nFeatures} garden feature${nFeatures > 1 ? 's' : ''}` : ''}{gcM2 ? ` · ${gcM2} m² groundcover` : ''}</span>;
                         })()}
                         {(() => {
                           // A planting schedule: one row per plant with its quantity (the server's breakdown is
@@ -1902,7 +2213,7 @@ export default function AIGardenDesigner() {
                                   </span>
                                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
                                     {row.role && <span style={{ fontSize: '0.66rem', fontWeight: 700, color: '#64748B' }}>{row.role}</span>}
-                                    <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#0f172a', minWidth: 30, textAlign: 'right' }}>× {row.quantity}</span>
+                                    <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#0f172a', minWidth: 30, textAlign: 'right' }}>{row.unit ? `${row.quantity} ${row.unit}` : `× ${row.quantity}`}</span>
                                   </span>
                                 </div>
                               ))}
@@ -1983,8 +2294,8 @@ export default function AIGardenDesigner() {
                                     {(design.plant_breakdown || []).map((item, itemIdx) => (
                                       <tr key={itemIdx} style={{ borderBottom: '1px solid #F1F5F9' }}>
                                         <td style={{ padding: '8px 4px', fontWeight: 600, color: '#1E293B' }}><span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><PlantThumb item={catalog.find(i => String(i.id) === String(item.plant_id)) || catalog.find(i => i.name === item.name)} size={22} rounded={5} /> {item.name}</span></td>
-                                        <td style={{ padding: '8px 4px', textAlign: 'center', color: '#059669', fontWeight: 700 }}>{item.quantity}</td>
-                                        <td style={{ padding: '8px 4px', textAlign: 'right', color: '#64748B' }}>₱{Number(item.unit_price).toLocaleString()}</td>
+                                        <td style={{ padding: '8px 4px', textAlign: 'center', color: '#059669', fontWeight: 700 }}>{item.quantity}{item.unit ? ` ${item.unit}` : ''}</td>
+                                        <td style={{ padding: '8px 4px', textAlign: 'right', color: '#64748B' }}>₱{Number(item.unit_price).toLocaleString()}{item.unit ? ` / ${item.unit}` : ''}</td>
                                         <td style={{ padding: '8px 4px', textAlign: 'right', fontWeight: 700, color: '#0F172A' }}>₱{Number(item.subtotal).toLocaleString()}</td>
                                       </tr>
                                     ))}
@@ -2097,7 +2408,9 @@ export default function AIGardenDesigner() {
                         </div>
                         <p style={styles.previewSub}>
                           {activeView === 'ar' && editingCorners
-                            ? (pinMode === 'corners'
+                            ? (pinMode === 'points'
+                              ? 'Drag each yellow pin onto the corner or spot it names (you chose them in Mark your yard). The design moves with them.'
+                              : pinMode === 'corners'
                               ? 'Drag the 4 yellow pins onto the corners of your yard. The design moves with them.'
                               : 'Put the two "Back" pins on the far corners of your yard, and the "side" pins anywhere along the left and right edges (fence lines), as near you as you can see them.')
                             : activeView === 'ar'
@@ -2220,6 +2533,7 @@ export default function AIGardenDesigner() {
 
                     <div style={{ borderRadius: '12px', overflow: 'hidden', position: 'relative', height: phone ? 340 : 450 }}>
                       <ThreeGardenCanvas
+                        ref={gardenCanvasRef}
                         height={phone ? 340 : 450}
                         plants={activeLayout.plants}
                         gardenPlan={activeLayout.garden_plan}
@@ -2240,7 +2554,44 @@ export default function AIGardenDesigner() {
                         onSwapRequest={(uid) => openPanel({ mode: 'swap', uid })}
                         previewMoves={tidyPreview?.moves || null}
                         focus={focusReq}
+                        showGrid={showGrid}
+                        survey={activeLayout.price_ctx?.survey || survey}
+                        groundcover={activeLayout.groundcover}
+                        photoGround={activeView !== 'ar' && groundMode === 'photo'}
+                        onPhotoGround={setPhotoGroundStatus}
+                        lawnLook={lawnLook}
                       />
+                      {activeView !== 'ar' && (
+                        <div style={{ position: 'absolute', ...(phone ? { bottom: 10 } : { top: 10 }), right: 10, zIndex: 5,   /* phones: the growth picker spans the top */
+                          display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                          {canPhotoGround && (
+                            <div role="radiogroup" aria-label="Ground in the 3D view"
+                              style={{ display: 'inline-flex', padding: 3, borderRadius: 999, background: 'rgba(255,255,255,0.92)', boxShadow: '0 1px 4px rgba(0,0,0,0.18)' }}>
+                              {[['design', phone ? 'Design' : 'Design ground'], ['photo', phone ? 'My photo' : 'My yard photo']].map(([key, label]) => (
+                                <button key={key} type="button" role="radio" aria-checked={groundMode === key} onClick={() => setGroundChoice(key)}
+                                  title={key === 'photo' ? 'Your yard photo laid on the ground, under the new plants' : 'The new beds, lawn and paths of this design'}
+                                  style={{ minHeight: touch ? 38 : 28, padding: '0 10px', borderRadius: 999, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                                    fontSize: '0.72rem', fontWeight: 800, background: groundMode === key ? color.brand : 'transparent',
+                                    color: groundMode === key ? '#fff' : '#334155' }}>
+                                  {label}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          {groundMode === 'design' && activeLayout.garden_plan?.lawn && (
+                            <LawnLookSelect value={lawnLook} onChange={setLawnLook} touch={touch} short={phone} />
+                          )}
+                          <button type="button" onClick={() => setShowGrid(g => !g)} aria-pressed={showGrid}
+                            title="A 1 m grid over your lot, to judge distances"
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: 6,
+                              minHeight: touch ? 44 : 34, padding: '0 12px', borderRadius: 999, cursor: 'pointer', fontSize: '0.75rem', fontWeight: 800,
+                              fontFamily: 'inherit', border: `1.5px solid ${showGrid ? color.brand : 'rgba(255,255,255,0.9)'}`,
+                              background: showGrid ? '#ECFDF5' : 'rgba(255,255,255,0.92)', color: showGrid ? '#065F46' : '#334155',
+                              boxShadow: '0 1px 4px rgba(0,0,0,0.18)' }}>
+                            <Grid3x3 size={14} aria-hidden="true" /> {phone ? 'Grid' : '1 m grid'}
+                          </button>
+                        </div>
+                      )}
                       {!(activeView === 'ar' && editingCorners) && (
                         <GrowthStagePicker value={growthStage} onChange={setGrowthStage} short={phone}
                           style={{ position: 'absolute', top: 10, left: 10, zIndex: 5 }} />
@@ -2269,11 +2620,37 @@ export default function AIGardenDesigner() {
                       )}
                     </div>
 
+                    {activeView !== 'ar' && groundMode === 'photo' && photoGroundStatus && photoGroundStatus.state !== 'off' && (
+                      <p role="status" style={{ margin: '8px 2px 0', fontSize: '0.75rem', lineHeight: 1.5,
+                        color: photoGroundStatus.state === 'failed' ? '#b45309' : color.muted }}>
+                        {photoGroundStatus.state === 'working' ? 'Laying your yard photo on the ground…'
+                          : photoGroundStatus.state === 'failed'
+                            ? (photoGroundStatus.reason === 'pins'
+                              ? 'Your photo\'s pins don\'t line up with the yard yet. Open the Photo Overlay Preview and tap "Line up with my yard".'
+                              : photoGroundStatus.reason === 'outside'
+                                ? 'Your photo doesn\'t show this yard\'s ground. Check the pins in the Photo Overlay Preview.'
+                                : 'We couldn\'t read your photo here. The Photo Overlay Preview still shows it.')
+                            : <>
+                              {costTerms.scope === 'existing'
+                                ? 'Your own ground from your photo: we plant into it as it is. '
+                                : 'Your ground today, from your photo, with the new plants on it. The dashed line is where the new lawn edge goes. '}
+                              Your photo shows {Math.round((photoGroundStatus.coverage || 0) * 100)}% of the lot (the rest is plain ground). Upright things in it, like walls and trunks, look stretched: it's one photo, not a scan.
+                            </>}
+                      </p>
+                    )}
+
+                    {activeView !== 'ar' && hasSurvey(activeLayout.price_ctx?.survey || survey) && (
+                      <p style={{ margin: '8px 2px 0', fontSize: '0.75rem', lineHeight: 1.5, color: color.muted }}>
+                        {yardSummary(activeLayout.price_ctx?.survey || survey, (activeLayout.plants || []).filter(p => p.is_existing).length)}
+                        {' '}Walls and the house turn see-through when they'd hide the garden.
+                      </p>
+                    )}
+
                     {activeView === 'ar' && imagePreview && editingCorners && (
                       <div role="radiogroup" aria-label="Front corners of the yard"
                         style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10, fontSize: '0.8rem', color: color.muted }}>
-                        <span style={{ fontWeight: 600 }}>The front corners of my yard are</span>
-                        {[['edges', 'out of the photo'], ['corners', 'in the photo']].map(([mode, label]) => (
+                        <span style={{ fontWeight: 600 }}>{pinMode === 'points' ? 'Pins on the spots you chose in Mark your yard · or use' : 'The front corners of my yard are'}</span>
+                        {[['fences', 'out of the photo'], ['corners', 'in the photo']].map(([mode, label]) => (
                           <button key={mode} type="button" role="radio" aria-checked={pinMode === mode}
                             onClick={() => { if (pinMode !== mode) { setPinMode(mode); setPhotoCorners(defaultPins(mode)); } }}
                             style={{ minHeight: touch ? 44 : 32, padding: '5px 12px', borderRadius: 8, cursor: 'pointer', fontWeight: 700,
@@ -2286,10 +2663,27 @@ export default function AIGardenDesigner() {
                       </div>
                     )}
 
+                    {activeView === 'ar' && imagePreview && !editingCorners && poseStatus?.ok && (
+                      <div style={{ display: 'flex', justifyContent: phone ? 'stretch' : 'flex-start', marginTop: 10 }}>
+                        <button type="button" onClick={handlePhotoPreview} disabled={photoBusy} aria-busy={photoBusy}
+                          title="Your yard photo next to the same photo with this garden in it"
+                          style={{
+                            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                            width: phone ? '100%' : 'auto', minHeight: touch ? 44 : 38, padding: '8px 16px',
+                            background: color.brand, color: '#fff', fontWeight: 700, fontSize: '0.8rem',
+                            border: 'none', borderRadius: `${radius.button}px`, cursor: photoBusy ? 'wait' : 'pointer', opacity: photoBusy ? 0.7 : 1,
+                          }}>
+                          <ImageDown size={15} /> {photoBusy ? 'Making your picture…' : 'Save before & after picture'}
+                        </button>
+                      </div>
+                    )}
+
                     {activeView === 'ar' && imagePreview && poseStatus && (() => {
                       const note = !poseStatus.ok
                         ? (poseStatus.reason === 'upside_down'
-                          ? (poseStatus.mode === 'corners'
+                          ? (poseStatus.mode === 'points'
+                            ? 'Those pins put the camera under the ground: check that each pin is on the spot it names.'
+                            : poseStatus.mode === 'corners'
                             ? 'The "Back" pins go on the far side of the yard (higher in the photo), the "Front" pins on the near side.'
                             : 'The "Back" pins go on the far corners of the yard (higher in the photo); the side pins nearer you, lower down.')
                           : 'Those pins don\'t outline the yard: check that no two sides cross.')
@@ -2298,7 +2692,7 @@ export default function AIGardenDesigner() {
                             ? `These pins fit a yard about ${lotWidth} × ${poseStatus.suggestedLength} m, but the size above is ${lotWidth} × ${lotLength} m. Fix the size (then generate again), or move a pin.`
                             : `The pins don't match a ${lotWidth} × ${lotLength} m yard. Check the yard size above, or move a pin.`)
                           : poseStatus.heightWarn
-                            ? `These pins put the camera about ${poseStatus.cameraHeight.toFixed(1)} m above the ground. If you took the photo standing in the yard, check the yard width (${lotWidth} m) or move the "Back" pins onto the far corners.`
+                            ? `These pins put the camera about ${poseStatus.cameraHeight.toFixed(1)} m above the ground. If you took the photo ${vantageOf(photoSetup).label.toLowerCase()}, ${poseStatus.mode === 'points' ? 'check that each pin is on the spot it names, and the yard size.' : `check the yard width (${lotWidth} m) or move the "Back" pins onto the far corners.`}`
                             : poseStatus.guessed && !editingCorners
                               ? 'This is a rough placement. Tap "Line up with my yard" and drag the pins onto your yard for an exact match.'
                               : null;
@@ -2372,8 +2766,73 @@ export default function AIGardenDesigner() {
                       </p>
                     )}
 
-                    {/* Book This Design CTA */}
-                    <div style={{ marginTop: '1.25rem', display: 'flex', justifyContent: phone ? 'stretch' : 'flex-end' }}>
+                    {!(activeLayout.price_ctx?.install ?? install) && activeLayout.pricing !== 'pending' && (
+                      <InstallOffer
+                        priceKey={`${activeLayout.edit_id}|${activeLayout.plants.length}|${activeLayout.total_cost}`}
+                        plantsOnlyTotal={activeLayout.pricing === 'error' ? 0 : Number(activeLayout.total_cost) || 0}
+                        fetchEstimate={installedEstimate}
+                        onChoose={(sc) => switchTerms(true, sc)}
+                        disabled={bookingLoading}
+                      />
+                    )}
+                    {activeLayout.terms_switched && (activeLayout.price_ctx?.install ?? install) && (
+                      <p style={{ margin: '1rem 0 0', fontSize: '0.8rem', color: '#64748b' }}>
+                        Installed by our crew ({activeLayout.price_ctx?.scope === 'existing' ? 'planted into your yard as it is' : 'full makeover'}).{' '}
+                        <button type="button" onClick={() => switchTerms(false)}
+                          style={{ background: 'none', border: 'none', padding: 0, color: color.brandDeep, fontWeight: 700, textDecoration: 'underline', cursor: 'pointer', fontSize: 'inherit' }}>
+                          Switch back to plants only
+                        </button>
+                      </p>
+                    )}
+                    {/* Share + Book This Design CTA (phones: Book on top, both full width) */}
+                    <div style={{ marginTop: '1.25rem', display: 'flex', flexWrap: 'wrap', gap: 10, flexDirection: phone ? 'column-reverse' : 'row', justifyContent: phone ? 'stretch' : 'flex-end' }}>
+                      <button
+                        type="button"
+                        onClick={handleShare}
+                        disabled={activeLayout.pricing === 'pending' || activeLayout.pricing === 'error'}
+                        title="Send a link so others can turn this design around in 3D"
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                          width: phone ? '100%' : 'auto', padding: phone ? '12px 18px' : '10px 20px',
+                          background: color.white, color: color.brandDeep, fontWeight: 700, fontSize: '0.85rem',
+                          border: `1.5px solid ${color.border}`, borderRadius: `${radius.button}px`, cursor: 'pointer',
+                          opacity: activeLayout.pricing === 'pending' || activeLayout.pricing === 'error' ? 0.6 : 1,
+                        }}
+                      >
+                        <Link2 size={15} /> Share this design
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleProposal}
+                        disabled={pdfBusy || activeLayout.pricing === 'pending' || activeLayout.pricing === 'error'}
+                        aria-busy={pdfBusy}
+                        title="A printable proposal: pictures, site plan, plant list, price estimate and care tips"
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                          width: phone ? '100%' : 'auto', padding: phone ? '12px 18px' : '10px 20px',
+                          background: color.white, color: color.brandDeep, fontWeight: 700, fontSize: '0.85rem',
+                          border: `1.5px solid ${color.border}`, borderRadius: `${radius.button}px`,
+                          cursor: pdfBusy ? 'wait' : 'pointer', opacity: pdfBusy || activeLayout.pricing === 'pending' || activeLayout.pricing === 'error' ? 0.6 : 1,
+                        }}
+                      >
+                        <FileText size={15} /> {pdfBusy ? 'Making your PDF…' : 'PDF proposal'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDownloadGlb}
+                        disabled={glbBusy}
+                        aria-busy={glbBusy}
+                        title="A 3D file of this design (.glb) for Blender, SketchUp or a 3D viewer"
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                          width: phone ? '100%' : 'auto', padding: phone ? '12px 18px' : '10px 20px',
+                          background: color.white, color: color.brandDeep, fontWeight: 700, fontSize: '0.85rem',
+                          border: `1.5px solid ${color.border}`, borderRadius: `${radius.button}px`,
+                          cursor: glbBusy ? 'wait' : 'pointer', opacity: glbBusy ? 0.7 : 1,
+                        }}
+                      >
+                        <Download size={15} /> {glbBusy ? 'Preparing 3D file…' : '3D file (.glb)'}
+                      </button>
                       <button
                         type="button"
                         onClick={handleBookDesign}
@@ -2419,9 +2878,11 @@ export default function AIGardenDesigner() {
       {showAuthModal && (
         <GuestAuthModal
           onClose={() => setShowAuthModal(false)}
-          onAuthSuccess={() => { setShowAuthModal(false); handleBookDesign(); }}
+          onAuthSuccess={() => { setShowAuthModal(false); if (authFor === 'share') setShareAfterSignIn(true); else handleBookDesign(); }}
         />
       )}
+
+      <ShareDesignDialog sheet={shareSheet} onClose={() => setShareSheet(null)} onStop={handleStopSharing} onRetry={handleShare} />
     </>
   );
 }
