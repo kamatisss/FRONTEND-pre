@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { Home, Calendar, CalendarDays, Archive, LayoutDashboard, CalendarPlus, LogOut, Clock, ShoppingBag } from 'lucide-react';
 
 const NavigationBar = () => {
-    const { user, logoutUser } = useAuth();
+    const { user, signOut } = useAuth();
 
     if (!user) return null;
 
@@ -92,7 +92,7 @@ const NavigationBar = () => {
             </ul>
 
             <button
-                onClick={logoutUser}
+                onClick={signOut}
                 className="mt-auto flex items-center justify-center w-full px-4 py-3 bg-red-500/10 text-red-400 hover:bg-red-500/20 hover:text-red-300 rounded-xl text-sm font-bold transition-all duration-300 border border-red-500/20 shadow-sm"
             >
                 <LogOut size={16} className="mr-2" />

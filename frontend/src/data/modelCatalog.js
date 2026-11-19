@@ -1,4 +1,4 @@
-import { MEDIA_BASE_URL as MEDIA_ROOT } from '../config';
+import { API_BASE_URL, MEDIA_BASE_URL as MEDIA_ROOT } from '../config';
 // ─── Static 3D model catalog ──────────────────────────────────────────────────
 // Core catalog .glb files ship with the frontend in `public/models/<category>/`
 // and are served from the same origin as the app (no CORS, no backend round-trip).
@@ -38,11 +38,18 @@ const MODEL_ALIASES = {
 };
 
 // The bundled models as picker options (Inventory page), grouped by their folder. To add a model:
-// put the .glb in public/models/<category>/ and add one line to MODEL_CATALOG above.
+// put the .glb in public/models/<category>/ and add one line to MODEL_CATALOG above. (The office can
+// also upload a .glb on the Inventory page; those come from the backend: uploadedModelOption below.)
 const titleCase = (file) => file.replace(/\.glb$/, '').replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
 export const MODEL_OPTIONS = Object.entries(MODEL_CATALOG).map(([file, path]) => ({
   file, path, label: titleCase(file), category: path.split('/')[2] === 'plants' ? 'plant' : path.split('/')[2],
 }));
+
+// An uploaded model (GET /api/inventory-models/) as a picker option, shaped like MODEL_OPTIONS
+export const uploadedModelOption = (m) => ({
+  file: m.file_name, path: resolveModelUrl(m.file_name), label: m.label, category: m.category,
+  uploaded: true, id: m.id, size: m.size_bytes, usedBy: m.used_by || [],
+});
 
 const MEDIA_BASE_URL = MEDIA_ROOT;
 
@@ -55,8 +62,10 @@ const MEDIA_BASE_URL = MEDIA_ROOT;
  *
  *   1. Known catalog models  → frontend public path (`/models/plants/bamboo.glb`)
  *   2. Already a public path → returned as-is
- *   3. Anything else (models uploaded by staff via the Inventory Dashboard that
- *      are not bundled with the frontend) → served from backend media
+ *   3. A bare file name that isn't bundled → a model the office uploaded on the Inventory page,
+ *      served by the backend (`/api/model-files/<name>`, model_uploads.py: it sends the CORS
+ *      headers the browser needs, which PythonAnywhere's /media/ mapping doesn't)
+ *   4. Anything else → served from backend media
  */
 export function resolveModelUrl(rawUrl) {
   if (!rawUrl || typeof rawUrl !== 'string') return null;
@@ -70,6 +79,6 @@ export function resolveModelUrl(rawUrl) {
 
   if (rawUrl.startsWith('/models/') || /^https?:\/\//.test(rawUrl)) return rawUrl;
   if (rawUrl.startsWith('/')) return `${MEDIA_BASE_URL}${rawUrl}`;
-  // Bare file name / modelType with no matching file — nothing loadable
-  return /\.gl(b|tf)$/i.test(rawUrl) ? `${MEDIA_BASE_URL}/media/models/${rawUrl}` : null;
+  // Bare .glb name that isn't bundled: an uploaded model. Anything else (modelType etc.): nothing loadable
+  return /^[a-z0-9][a-z0-9_-]*\.glb$/i.test(rawUrl) ? `${API_BASE_URL}/model-files/${rawUrl.toLowerCase()}` : null;
 }

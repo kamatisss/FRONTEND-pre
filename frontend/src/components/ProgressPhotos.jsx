@@ -2,6 +2,7 @@ import React, { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { Camera, Trash2, ChevronDown, ChevronUp, Upload, CloudUpload } from 'lucide-react';
 import { listProgressPhotos, deleteProgressPhoto } from '../services/api';
 import { sendPhoto, pendingPhotos } from '../crew/outbox';
+import { PHOTO_ACCEPT, photoProblem } from '../services/fileCheck';
 import { useOutbox, useKeptPhoto } from '../crew/useOutbox';
 
 const PHASES = [
@@ -120,10 +121,17 @@ export default function ProgressPhotos({ booking, user, toast, canUpload = true,
               <input
                 key={inputKey}
                 type="file"
-                accept="image/*"
+                accept={PHOTO_ACCEPT}
                 capture="environment"
                 disabled={busy}
-                onChange={e => setFile(e.target.files?.[0] || null)}
+                onChange={async (e) => {
+                  // Refused here, before the slow upload on mobile data, rather than by the server after it
+                  const picked = e.target.files?.[0] || null;
+                  const problem = picked ? await photoProblem(picked) : null;
+                  setError(problem);
+                  setFile(problem ? null : picked);
+                  if (problem) setInputKey(k => k + 1);
+                }}
                 className="w-full text-sm text-slate-600 px-2 py-2.5 border border-slate-200 rounded-lg bg-white cursor-pointer"
               />
               <input

@@ -12,6 +12,7 @@ import {
   listPortfolio, listPortfolioCandidates, createPortfolioEntry, updatePortfolioEntry,
   deletePortfolioEntry, portfolioAction, uploadPortfolioPhoto, updatePortfolioPhoto, deletePortfolioPhoto,
 } from '../services/api';
+import { PHOTO_ACCEPT, photoProblem } from '../services/fileCheck';
 
 // Must match PRICE_BANDS in backend/apps/library/portfolio.py
 const PRICE_BANDS = ['Under ₱25K', '₱25K – ₱50K', '₱50K – ₱100K', '₱100K – ₱250K', '₱250K – ₱500K', '₱500K and up'];
@@ -553,7 +554,12 @@ function PortfolioEditor({ project, onChange, onDeleted, onClose, flash }) {
           {/* Upload extra photo */}
           <div className="border border-dashed border-slate-300 rounded-xl p-3 flex flex-col gap-2 justify-center bg-slate-50">
             <p className="text-[11px] font-bold text-slate-500 m-0 flex items-center gap-1"><Upload size={12} /> Add a photo</p>
-            <input key={upload.key} type="file" accept="image/*" onChange={e => setUpload(u => ({ ...u, file: e.target.files?.[0] || null }))}
+            <input key={upload.key} type="file" accept={PHOTO_ACCEPT} onChange={async (e) => {
+              const picked = e.target.files?.[0] || null;
+              const problem = picked ? await photoProblem(picked) : null;   // checked by its bytes, before uploading
+              if (problem) { flash(problem, 'error'); setUpload(u => ({ ...u, file: null, key: u.key + 1 })); return; }
+              setUpload(u => ({ ...u, file: picked }));
+            }}
               className="text-[11px] w-full" />
             <select value={upload.kind} onChange={e => setUpload(u => ({ ...u, kind: e.target.value }))} className="text-[11px] px-1.5 py-1 border border-slate-200 rounded bg-white">
               {KINDS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}

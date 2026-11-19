@@ -37,6 +37,7 @@ const UserDashboard = lazy(() => import("./components/UserDashboard"));
 const AdminSettings = lazy(() => import("./components/AdminSettings"));
 const ActivityLog = lazy(() => import("./components/ActivityLog"));
 const Reports = lazy(() => import("./components/Reports"));
+const ProjectsBoard = lazy(() => import("./components/ProjectsBoard"));
 const Shop = lazy(() => import("./components/Shop"));
 const PortfolioManager = lazy(() => import("./components/PortfolioManager"));
 const ReviewModeration = lazy(() => import("./components/ReviewModeration"));
@@ -266,6 +267,17 @@ function App() {
                 }
               />
 
+              {/* Office & owner: every project, its stage, crew, dates, money and delays */}
+              <Route
+                path="/manage-projects"
+                element={
+                  <RoleProtectedRoute allowedRoles={['staff', 'admin']}>
+                    <DashboardLayout>
+                      <ProjectsBoard />
+                    </DashboardLayout>
+                  </RoleProtectedRoute>
+                }
+              />
               {/* Owner: money in, balances owed, crew output */}
               <Route
                 path="/admin-reports"

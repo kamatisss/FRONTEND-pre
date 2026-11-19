@@ -66,6 +66,42 @@ export const getInventoryItems = async (category = null, { archived = false } = 
   return res.data;
 };
 
+/**
+ * 3D models the office uploads (BACKEND model_uploads.py). Each file is checked on the server: real
+ * binary glTF 2.0, self-contained, no Draco/KTX2, within the size cap.
+ *   GET    /api/inventory-models/       → { models, used_bytes, limit_bytes, max_file_bytes, storage }
+ *   DELETE /api/inventory-models/:id/   only when no inventory item uses it (409 otherwise)
+ * Uploading depends on `storage`:
+ *   "r2"      POST upload-url/ → PUT the file straight to Cloudflare R2 (never through our server)
+ *             → POST confirm/ (the server checks the file in R2 and adds it to the list)
+ *   "server"  POST /api/inventory-models/ with the file (no R2 set up)
+ */
+export const getUploadedModels = async () => (await api.get('/inventory-models/')).data;
+
+export const uploadModel = async ({ file, label, category }, onProgress, storage = 'server') => {
+  if (storage === 'r2') {
+    const { data: start } = await api.post('/inventory-models/upload-url/',
+      { label, category, size: file.size, file_name: file.name });
+    // Plain axios, not `api`: the signed link is the only permission R2 needs (no login token sent to it)
+    await axios.put(start.upload_url, file, {
+      headers: { 'Content-Type': 'model/gltf-binary' },
+      onUploadProgress: (e) => onProgress?.(e.total ? e.loaded / e.total : 0),
+    });
+    return (await api.post('/inventory-models/confirm/', { token: start.token })).data;
+  }
+  const data = new FormData();
+  data.append('file', file);
+  data.append('label', label);
+  data.append('category', category);
+  const res = await api.post('/inventory-models/', data, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    onUploadProgress: (e) => onProgress?.(e.total ? e.loaded / e.total : 0),
+  });
+  return res.data;
+};
+
+export const deleteUploadedModel = async (id) => { await api.delete(`/inventory-models/${id}/`); };
+
 export const getInventoryItem = async (id) => {
   const res = await api.get(`/inventory/${id}/`);
   return res.data;

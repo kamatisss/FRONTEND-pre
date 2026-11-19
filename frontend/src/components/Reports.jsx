@@ -24,6 +24,17 @@ const REPORTS = [
 ];
 const BAR = '#059669';        // one series, one hue (emerald-600): magnitude only, the title names it
 const BAR_TRACK = '#d1fae5';
+const BAR_PARTIAL = '#82ccb4'; // the same hue lighter: a week the period only partly covers (fewer days)
+
+// Round axis steps (1, 2, 2.5, 5 × 10ⁿ) so gridlines land on numbers people read at a glance
+function niceTicks(max, count = 4) {
+  if (!max) return [0];
+  const raw = max / count;
+  const pow = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * pow).find(s => s >= raw);
+  return Array.from({ length: Math.ceil(max / step) + 1 }, (_, i) => i * step);
+}
+const pesoShort = (n) => n >= 1e6 ? `₱${(n / 1e6).toFixed(1).replace(/\.0$/, '')}M` : n >= 1e3 ? `₱${(n / 1e3).toFixed(1).replace(/\.0$/, '')}K` : `₱${n}`;
 
 const peso = (n) => `₱${Number(n || 0).toLocaleString('en-PH', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -83,19 +94,24 @@ function DailyChart({ days, channels }) {
       w.total += d.total;
       channels.forEach(c => { w[c.key] += d[c.key]; });
       w.end = d.date;
+      w.days = (w.days || 0) + 1;
     });
-    return weeks.map(w => ({ ...w, label: `${fmtDate(w.date)} – ${fmtDate(w.end)}`, short: fmtDate(w.date) }));
+    // The last 7-day block is short when the period isn't a whole number of weeks: say so
+    return weeks.map(w => ({ ...w, partial: w.days < 7, label: `${fmtDate(w.date)} – ${fmtDate(w.end)}${w.days < 7 ? ` (${w.days} days)` : ''}`, short: fmtDate(w.date) }));
   }, [days, channels]);
-  const max = Math.max(1, ...buckets.map(b => b.total));
+  const highest = Math.max(0, ...buckets.map(b => b.total));
+  const ticks = niceTicks(highest);
+  const max = Math.max(1, ticks.at(-1));
   const labelEvery = Math.ceil(buckets.length / 10);
   const weekly = days.length > 62;
+  const hasPartial = buckets.some(b => b.partial);
 
   return (
     <section className="bg-white border border-slate-200 rounded-2xl p-4 md:p-5">
       <div className="flex items-start justify-between gap-3 mb-4">
         <div>
           <h3 className="m-0 text-[15px] font-extrabold text-slate-900">Money received per {weekly ? 'week' : 'day'}</h3>
-          <p className="m-0 text-sm text-slate-500">All channels, before refunds. Highest: {peso(max === 1 ? 0 : max)}</p>
+          <p className="m-0 text-sm text-slate-500">All channels, before refunds. Highest: {peso(highest)}</p>
         </div>
         <button type="button" onClick={() => setAsTable(v => !v)} aria-pressed={asTable}
           className="h-9 px-3 rounded-lg border border-slate-200 bg-white text-slate-600 text-sm font-semibold cursor-pointer flex items-center gap-1.5 shrink-0">
@@ -122,15 +138,24 @@ function DailyChart({ days, channels }) {
           </table>
         </div>
       ) : (
-        <div className="relative">
-          <div className="flex items-end gap-[2px] h-48 border-b border-slate-300" role="img"
+        <div className="relative pl-12">
+          {/* Y axis: recessive hairline gridlines with peso labels, so a bar's height can be read */}
+          <div className="absolute left-0 right-0 top-0 h-48 pointer-events-none" aria-hidden="true">
+            {ticks.map(t => (
+              <div key={t} className="absolute left-0 right-0 flex items-center" style={{ bottom: `${(t / max) * 100}%`, transform: 'translateY(50%)' }}>
+                <span className="w-11 pr-2 text-right text-[11px] text-slate-500 tabular-nums">{pesoShort(t)}</span>
+                <span className={`flex-1 h-px ${t === 0 ? 'bg-slate-300' : 'bg-slate-100'}`} />
+              </div>
+            ))}
+          </div>
+          <div className="relative flex items-end gap-[2px] h-48" role="img"
             aria-label={`Money received per ${weekly ? 'week' : 'day'}; use Table for exact figures`}>
             {buckets.map((b, i) => (
               <button key={b.date} type="button" aria-label={`${b.label}: ${peso(b.total)}`}
                 onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)} onFocus={() => setHover(i)} onBlur={() => setHover(null)}
                 className="relative flex-1 h-full flex items-end p-0 border-none bg-transparent cursor-default min-w-0 group">
                 <span className="block w-full rounded-t-[4px] transition-opacity"
-                  style={{ height: `${(b.total / max) * 100}%`, minHeight: b.total > 0 ? 2 : 0, background: BAR, opacity: hover === null || hover === i ? 1 : 0.45 }} />
+                  style={{ height: `${(b.total / max) * 100}%`, minHeight: b.total > 0 ? 2 : 0, background: b.partial ? BAR_PARTIAL : BAR, opacity: hover === null || hover === i ? 1 : 0.45 }} />
               </button>
             ))}
           </div>
@@ -141,9 +166,11 @@ function DailyChart({ days, channels }) {
               </span>
             ))}
           </div>
+          {hasPartial && <p className="m-0 mt-2 text-xs text-slate-500">Lighter bar: a week with fewer than 7 days in this period (fewer days, not a drop).</p>}
           {hover !== null && (
+            // Over the hovered bar: the plot starts after the 3rem axis gutter
             <div className="absolute top-0 z-10 bg-white border border-slate-200 rounded-xl shadow-lg px-3 py-2 text-sm pointer-events-none"
-              style={{ left: `${Math.min(Math.max((hover + 0.5) / buckets.length * 100, 15), 85)}%`, transform: 'translateX(-50%)' }}>
+              style={{ left: `calc(3rem + (100% - 3rem) * ${Math.min(Math.max((hover + 0.5) / buckets.length, 0.15), 0.85)})`, transform: 'translateX(-50%)' }}>
               <p className="m-0 font-bold text-slate-900 whitespace-nowrap">{buckets[hover].label} · {peso(buckets[hover].total)}</p>
               {channels.filter(c => buckets[hover][c.key]).map(c => (
                 <p key={c.key} className="m-0 text-slate-600 whitespace-nowrap">{c.label}: <b className="text-slate-900">{peso(buckets[hover][c.key])}</b></p>
@@ -211,6 +238,7 @@ function BalanceTable({ rows, finished }) {
               <td className="py-2.5 px-3 text-slate-700">{r.customer}</td>
               <td className={`py-2.5 px-3 whitespace-nowrap ${finished && r.days_since_job > 60 ? 'text-red-700 font-semibold' : 'text-slate-600'}`}>
                 {fmtDate(r.job_date, { month: 'short', day: 'numeric', year: 'numeric' })}{finished ? ` · ${r.days_since_job}d ago` : ` · ${r.status}`}
+                {r.job_date_estimated && <span className="block text-xs font-medium text-slate-500" title="Finished before sign-off dates were recorded: this is the scheduled start">scheduled date</span>}
               </td>
               <td className="py-2.5 px-3 text-right tabular-nums text-slate-600">{peso(r.paid)} <span className="text-slate-400">/ {peso(r.total)}</span></td>
               <td className="py-2.5 px-3 text-right tabular-nums font-bold text-slate-900">{peso(r.balance)}{r.requested ? <span className="block text-xs font-medium text-slate-500">{peso(r.requested)} requested</span> : null}</td>
@@ -233,7 +261,7 @@ function BalancesReport({ data }) {
       </div>
       <section className="bg-white border border-slate-200 rounded-2xl p-4 md:p-5">
         <h3 className="m-0 text-[15px] font-extrabold text-slate-900">How long finished jobs have been unpaid</h3>
-        <p className="m-0 mb-4 text-sm text-slate-500">Counted from the job date. The older a balance, the harder it is to collect.</p>
+        <p className="m-0 mb-4 text-sm text-slate-500">Counted from the day the job was signed off (older jobs: their scheduled date). The older a balance, the harder it is to collect.</p>
         <BarList rows={data.aging} note={r => `${r.count} job${r.count === 1 ? '' : 's'}`} />
       </section>
       <section className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
@@ -279,7 +307,7 @@ function CrewReport({ data }) {
         </table>
       </div>
       <p className="m-0 px-4 py-3 text-xs text-slate-500 border-t border-slate-100">
-        Jobs count by their scheduled date; a job worked by two crew members counts for both, with its full value.
+        Finished jobs count in the period they were signed off (older ones: their scheduled date); open jobs by their scheduled date. A job worked by two crew members counts for both, with its full value.
         Hours come from clock-in and clock-out on the Attendance page.
       </p>
     </section>

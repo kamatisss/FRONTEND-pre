@@ -28,8 +28,10 @@ const FONTS = 'fonts';
 // Cross-site responses (backend photos, Google Fonts) are "opaque": browsers count each one as
 // several MB of storage quota, so those caches stay small
 const LIMITS = { [ASSETS]: 150, [MODELS]: 40, [SITE]: 60, [PHOTOS]: 40, [FONTS]: 12 };
-// Public product photos from the backend; crew/attendance photos are left alone (private)
-const PUBLIC_MEDIA = /\/media\/(thumbnails|images|gardens|portfolio)\//;
+// Public product photos: from the backend (/media/thumbnails/…) or, since the move to Render, straight
+// from Cloudflare R2's media bucket (https://pub-….r2.dev/thumbnails/…, no /media/ in the path).
+// Crew/attendance photos (attendance_proofs/, project_progress/) are left alone (private).
+const PUBLIC_MEDIA = /^\/(?:media\/)?(?:thumbnails|images|gardens|portfolio)\//;
 
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
@@ -130,7 +132,10 @@ self.addEventListener('fetch', (event) => {
     if (/\.(png|jpe?g|webp|svg|ico|webmanifest)$/.test(url.pathname)) return event.respondWith(staleWhileRevalidate(request, SITE));
     return;   // anything else from the site: straight to the network
   }
-  if (PUBLIC_MEDIA.test(url.pathname)) return event.respondWith(staleWhileRevalidate(request, PHOTOS));
+  // Images only: the pattern now matches any other site's /thumbnails/… path, never an API answer
+  if (request.destination === 'image' && PUBLIC_MEDIA.test(url.pathname)) {
+    return event.respondWith(staleWhileRevalidate(request, PHOTOS));
+  }
   if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com') {
     return event.respondWith(staleWhileRevalidate(request, FONTS));
   }

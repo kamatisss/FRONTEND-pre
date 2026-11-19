@@ -14,7 +14,7 @@ import { color, cardStyle, inputStyle, labelStyle, radius } from './ui/tokens';
 import { useCart } from '../context/CartContext';
 import { lotPlantsToStudioItems } from '../data/sampleGarden';
 import { API_BASE_URL as API_ROOT } from '../config';
-import { plantBudgetFromAllIn, itemCostToCustomer, isSmallStone, layoutSpacing, layoutLayer, rockLimits } from '../data/pricing';
+import { plantBudgetFromAllIn, itemCostToCustomer, isSmallStone, layoutSpacing, layoutLayer, rockLimits, featureKind, featureLimits } from '../data/pricing';
 import ThreeGardenCanvas from './ThreeGardenCanvas';
 import { yardSummary, hasSurvey } from '../data/yardScene';
 import { useDesign } from '../context/DesignContext';
@@ -37,6 +37,7 @@ import { editSummary } from '../data/designEdits';
 import { mirrorEdit } from '../data/mirrorEdit';
 
 import InstallOffer from './InstallOffer';
+import { PHOTO_ACCEPT, photoProblem } from '../services/fileCheck';
 const LOADING_PHASES = [
   'Analyzing your garden space…',
   'Composing Symmetrical layout…',
@@ -46,8 +47,16 @@ const LOADING_PHASES = [
   'Finalizing your garden options…',
 ];
 
-// Garden features the AI Designer places (mirrors garden_ai.FEATURE_CATEGORIES / MAX_SEATS; rocks: rockLimits by yard size)
-const FEATURE_KIND = { furniture: 'seat', hardscape: 'rock' };
+// Garden features the AI Designer places (mirrors garden_ai.FEATURE_CATEGORIES / MAX_SEATS; rocks: rockLimits, pots,
+// lights and water features: featureLimits by yard size). Kind = featureKind (the item's feature_type, else by category).
+// first: how many a tap selects (a pair of pots frames the way in; a few lights start a walkway)
+const FEATURE_INFO = {
+  seat: { label: 'Seating', unit: ['seat', 'seats'], fg: '#6D28D9', bg: '#EDE9FE', first: 1 },
+  rock: { label: 'Accent boulder', unit: ['rock', 'rocks'], fg: '#475569', bg: '#F1F5F9', first: 3 },
+  pot: { label: 'Pot / planter', unit: ['pot', 'pots'], fg: '#9A3412', bg: '#FFEDD5', first: 2 },
+  light: { label: 'Garden light', unit: ['light', 'lights'], fg: '#A16207', bg: '#FEF9C3', first: 4 },
+  water: { label: 'Water feature', unit: ['water feature', 'water features'], fg: '#0369A1', bg: '#E0F2FE', first: 1 },
+};
 const MAX_SEATS = 2;
 const ROCK_GROUP = 3;
 // Small garden stones (data/pricing isSmallStone): ordered half a dozen at a time, from a dozen
@@ -58,8 +67,8 @@ const STONE_FIRST = 12;
 // (layout_engine.PlantSpec.layer): tall at the back, low along the borders
 const roleOf = (item) => {
   if (!item) return null;
-  if (item.category === 'furniture') return 'Seating';
-  if (item.category === 'hardscape') return 'Accent';
+  const kind = featureKind(item);
+  if (kind) return kind === 'rock' ? 'Accent' : FEATURE_INFO[kind].label;
   const grown = Math.max(Number(item.real_world_size) || 1, Number(item.mature_height) || 0);
   return grown >= 2.5 ? 'Tall · back' : grown >= 0.8 ? 'Medium' : 'Low · border';
 };
@@ -330,7 +339,7 @@ export default function AIGardenDesigner() {
     getInventoryItems()
       .then(data => {
         if (!alive) return;
-        setFeatureItems((data || []).filter(i => FEATURE_KIND[i.category] && i.model_file && Number(i.stock_quantity) > 0));
+        setFeatureItems((data || []).filter(i => FEATURE_INFO[featureKind(i)] && i.model_file && Number(i.stock_quantity) > 0));
       })
       .catch(() => {});
     return () => { alive = false; };
@@ -347,14 +356,15 @@ export default function AIGardenDesigner() {
       return Object.keys(kept).length === Object.keys(prev).length ? prev : kept;
     });
   }, [featureItems]);
-  const seatTotal = featureItems.filter(i => FEATURE_KIND[i.category] === 'seat')
+  const seatTotal = featureItems.filter(i => featureKind(i) === 'seat')
     .reduce((n, i) => n + (featureQty[String(i.id)] || 0), 0);
   const toggleFeature = (item) => {
     const id = String(item.id);
     setFeatureQty(prev => {
       const next = { ...prev };
       if (next[id]) delete next[id];
-      else next[id] = FEATURE_KIND[item.category] === 'seat' ? 1 : isSmallStone(item) ? Math.min(STONE_FIRST, Number(item.stock_quantity) || 0) : ROCK_GROUP;
+      else next[id] = isSmallStone(item) ? Math.min(STONE_FIRST, Number(item.stock_quantity) || 0)
+        : Math.min(FEATURE_INFO[featureKind(item)].first, limitOf(item), Number(item.stock_quantity) || 0) || 1;
       return next;
     });
   };
@@ -362,7 +372,7 @@ export default function AIGardenDesigner() {
     const id = String(item.id);
     setFeatureQty(prev => {
       const stone = isSmallStone(item);
-      const max = FEATURE_KIND[item.category] === 'seat' ? (prev[id] || 0) + MAX_SEATS - seatTotal : rockLimitOf(item);
+      const max = featureKind(item) === 'seat' ? (prev[id] || 0) + MAX_SEATS - seatTotal : limitOf(item);
       const qty = Math.min(max, Math.min(Number(item.stock_quantity) || 0, (prev[id] || 0) + delta * (stone ? STONE_STEP : 1)));
       const next = { ...prev };
       if (qty <= 0) delete next[id]; else next[id] = qty;
@@ -392,6 +402,8 @@ export default function AIGardenDesigner() {
   const [groundcoverOn, setGroundcoverOn] = useState(true);
   const [selectedImage, setSelectedImage] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
+  const [photoError, setPhotoError] = useState('');   // why the picked file can't be used (not a photo, too big…)
+  const [photoOver, setPhotoOver] = useState(false);  // a file is being dragged over the drop zone
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [generatedLayouts, setGeneratedLayouts] = useState([]);
@@ -472,6 +484,9 @@ export default function AIGardenDesigner() {
   // How many of one kind of rock the yard takes (garden_ai.rock_limits): its own shape's area when it has one
   const rockMax = rockLimits(yardArea(survey, Number(lotWidth), Number(lotLength)));
   const rockLimitOf = (item) => (isSmallStone(item) ? rockMax.stones : rockMax.boulders);
+  const featMax = featureLimits(yardArea(survey, Number(lotWidth), Number(lotLength)));
+  // Most of one feature for this yard: rocks by size, pots / lights / water features by kind (seats: MAX_SEATS in all)
+  const limitOf = (item) => { const k = featureKind(item); return k === 'rock' ? rockLimitOf(item) : featMax[k] ?? MAX_SEATS; };
   // A smaller yard: bring rocks already chosen down to what it takes
   useEffect(() => {
     if (!featureItems.length) return;
@@ -480,13 +495,13 @@ export default function AIGardenDesigner() {
       const next = { ...prev };
       featureItems.forEach(item => {
         const id = String(item.id);
-        if (FEATURE_KIND[item.category] !== 'rock' || !next[id]) return;
-        const cap = isSmallStone(item) ? rockMax.stones : rockMax.boulders;
+        if (featureKind(item) === 'seat' || !next[id]) return;
+        const cap = limitOf(item);
         if (next[id] > cap) { next[id] = cap; changed = true; }
       });
       return changed ? next : prev;
     });
-  }, [featureItems, rockMax.stones, rockMax.boulders]);
+  }, [featureItems, rockMax.stones, rockMax.boulders, featMax.pot, featMax.light, featMax.water]);   // eslint-disable-line react-hooks/exhaustive-deps
   const [seed, setSeed] = useState(0);          // "Show other variations"
   const [notice, setNotice] = useState('');     // e.g. AI unavailable → smart layouts
   const scanFileRef = React.useRef(null);
@@ -640,16 +655,20 @@ export default function AIGardenDesigner() {
   };
 
 
-  const handleImageChange = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      setSelectedImage(file);
-      setImagePreview(URL.createObjectURL(file));
-      setPhotoCorners(null);   // a new photo needs its own pins
-      setPhotoLens(null);
-      scanFileRef.current = file;   // the photo now on screen (its lens reading can arrive after a newer photo)
-      readFocal35(file).then(mm => { if (scanFileRef.current === file) setPhotoLens(mm); });
-    }
+  // Picked or dropped: checked by its bytes first (services/fileCheck.js), so a PDF, a renamed file or an
+  // iPhone HEIC gets a plain answer here instead of a broken preview and a wasted AI scan
+  const takePhoto = async (file) => {
+    if (!file) return;
+    const problem = await photoProblem(file, 15);
+    setPhotoError(problem || '');
+    if (problem) return;
+    if (imagePreview) URL.revokeObjectURL(imagePreview);
+    setSelectedImage(file);
+    setImagePreview(URL.createObjectURL(file));
+    setPhotoCorners(null);   // a new photo needs its own pins
+    setPhotoLens(null);
+    scanFileRef.current = file;   // the photo now on screen (its lens reading can arrive after a newer photo)
+    readFocal35(file).then(mm => { if (scanFileRef.current === file) setPhotoLens(mm); });
   };
 
   const handleRemoveImage = () => {
@@ -956,7 +975,7 @@ export default function AIGardenDesigner() {
   const addSections = editPanel?.mode === 'add' ? [
     { label: 'Your plants', options: catalog.filter(c => (c.category || 'plant') === 'plant' && isPick(c) && inStock(c)) },
     { label: 'More plants', options: catalog.filter(c => (c.category || 'plant') === 'plant' && !isPick(c) && inStock(c)) },
-    { label: 'Seating & rocks', options: catalog.filter(c => (c.category || 'plant') !== 'plant' && inStock(c)) },
+    { label: 'Garden features', options: catalog.filter(c => (c.category || 'plant') !== 'plant' && inStock(c)) },
   ] : [];
   const openPanel = (panel) => { setEditPanel(panel); setPanelError(''); };
   const costTerms = { install: activeLayout?.price_ctx?.install ?? install, scope: activeLayout?.price_ctx?.scope || scope };
@@ -1778,7 +1797,9 @@ export default function AIGardenDesigner() {
                 <div style={{ marginBottom: '1.75rem' }}>
                   <label style={styles.sectionLabel}>Reference Photo <span style={{ color: '#94A3B8', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>(optional)</span></label>
                   <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
-                    <label className="upload-zone" style={{ ...styles.uploadZone, flex: 1 }}>
+                    <label className="upload-zone" style={{ ...styles.uploadZone, flex: 1, ...(photoOver ? { borderColor: '#10B981', background: '#ECFDF5' } : {}) }}
+                      onDragOver={(e) => { e.preventDefault(); setPhotoOver(true); }} onDragLeave={() => setPhotoOver(false)}
+                      onDrop={(e) => { e.preventDefault(); setPhotoOver(false); takePhoto(e.dataTransfer.files?.[0]); }}>
                       <div style={styles.uploadIcon}>
                         <Upload size={16} color="#10B981" />
                       </div>
@@ -1786,13 +1807,17 @@ export default function AIGardenDesigner() {
                         Drop a photo of your garden space
                       </div>
                       <div style={{ fontSize: '0.75rem', color: '#94A3B8' }}>
-                        PNG, JPG or WEBP · max 5MB
+                        JPG, PNG or WebP · max 15 MB
                       </div>
                       <div style={{ fontSize: '0.72rem', color: '#64748B', marginTop: 8, lineHeight: 1.45, maxWidth: 420, marginInline: 'auto' }}>
                         Best photo: from the house side, phone held level, showing <b>both back corners</b> and the <b>bottom of both side fences</b>.
                         A long yard? Hold the phone sideways. A photo from an upstairs window works too.
                       </div>
-                      <input type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImageChange} />
+                      <input type="file" accept={PHOTO_ACCEPT} style={{ display: 'none' }}
+                        onChange={(e) => { takePhoto(e.target.files?.[0]); e.target.value = ''; }} />
+                      {photoError && (
+                        <div role="alert" style={{ marginTop: 8, fontSize: '0.78rem', fontWeight: 600, color: '#B91C1C' }}>{photoError}</div>
+                      )}
                     </label>
 
                     {imagePreview && (
@@ -1968,17 +1993,20 @@ export default function AIGardenDesigner() {
                     <label style={styles.sectionLabel}>Garden Features <span style={{ color: '#94A3B8', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>(optional)</span></label>
                     <p style={{ margin: '0 0 10px', fontSize: '0.78rem', color: '#64748B', lineHeight: 1.45 }}>
                       A seating spot gets open ground and a path to the house; boulders go in small groups in the planting beds, and small
-                      garden stones (by the half dozen) in looser clusters along them.
+                      garden stones (by the half dozen) in looser clusters along them. A water feature goes where the eye lands across the
+                      lawn, pots frame the way in and the seating, and garden lights line the walkways and the edge of the lawn.
                       They are placed first and paid for from your budget before the plants.
                     </p>
                     <div style={styles.plantsGrid}>
                       {featureItems.map(item => {
                         const id = String(item.id);
                         const qty = featureQty[id] || 0;
-                        const isSeat = FEATURE_KIND[item.category] === 'seat';
+                        const kind = featureKind(item);
+                        const info = FEATURE_INFO[kind];
+                        const isSeat = kind === 'seat';
                         const isStone = isSmallStone(item);
-                        const canAdd = (isSeat ? seatTotal < MAX_SEATS : qty < rockLimitOf(item)) && qty < (Number(item.stock_quantity) || 0);
-                        const unit = isSeat ? ['seat', 'seats'] : isStone ? ['stone', 'stones'] : ['rock', 'rocks'];
+                        const canAdd = (isSeat ? seatTotal < MAX_SEATS : qty < limitOf(item)) && qty < (Number(item.stock_quantity) || 0);
+                        const unit = isStone ? ['stone', 'stones'] : info.unit;
                         return (
                           // The card is the frame; the tap area and the counter both live inside it,
                           // so a selected card grows with its row instead of hanging a counter below it
@@ -1994,7 +2022,7 @@ export default function AIGardenDesigner() {
                                 <span style={styles.plantName(qty > 0)}>{item.name}</span>
                                 <span style={styles.plantPrice(qty > 0)}>₱{Number(item.unit_price).toLocaleString()} each{isStone ? ` · ₱${(Number(item.unit_price) * 12).toLocaleString()} a dozen` : ''}</span>
                                 <span style={{ display: 'flex', marginTop: 6 }}>
-                                  <span style={chip(isSeat ? '#6D28D9' : '#475569', isSeat ? '#EDE9FE' : '#F1F5F9')}>{isSeat ? 'Seating' : isStone ? 'Garden stones' : 'Accent boulder'}</span>
+                                  <span style={chip(info.fg, info.bg)}>{isStone ? 'Garden stones' : info.label}</span>
                                 </span>
                               </span>
                             </button>
@@ -2015,10 +2043,15 @@ export default function AIGardenDesigner() {
                         );
                       })}
                     </div>
-                    {featureItems.some(i => FEATURE_KIND[i.category] === 'rock') && (
+                    {featureItems.some(i => featureKind(i) === 'rock') && (
                       <p style={{ margin: '8px 0 0', fontSize: '0.72rem', color: '#64748B' }}>
                         Your yard (about {Math.round(yardArea(survey, Number(lotWidth), Number(lotLength)))} m²) takes up to {rockMax.boulders} of each
                         boulder and {rockMax.stones} of each small stone: more would crowd the beds.
+                      </p>
+                    )}
+                    {featureItems.some(i => ['light', 'water'].includes(featureKind(i)) && featureQty[String(i.id)]) && (
+                      <p style={{ margin: '8px 0 0', fontSize: '0.72rem', color: '#64748B' }}>
+                        Garden lights and water features need an outdoor power point within reach; we confirm it at the site visit.
                       </p>
                     )}
                     {seatTotal >= MAX_SEATS && (

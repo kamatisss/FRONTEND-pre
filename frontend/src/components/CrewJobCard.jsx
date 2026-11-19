@@ -9,6 +9,7 @@ import { SERVICE, TIME, statusOf, dayLabel, clockTime, navUrl as mapsUrl, telOf 
 import { productImage } from '../data/productImage';
 import { sendAction, sendPhoto, pendingPhotos } from '../crew/outbox';
 import { useOutbox } from '../crew/useOutbox';
+import { PHOTO_ACCEPT, photoProblem } from '../services/fileCheck';
 
 import { CrewDesignStatus } from './DesignApproval';
 /*
@@ -139,6 +140,9 @@ function FieldStages({ booking, api, headers, onChanged, onTheJob }) {
 
   const finishWithPhoto = async (stage, file) => {
     if (!file) return;
+    // A wrong file is refused now, not queued in the offline outbox to fail on the server later
+    const problem = await photoProblem(file);
+    if (problem) { setError(e => ({ ...e, [stage.key]: problem })); return; }
     setBusy(stage.key); setError(e => ({ ...e, [stage.key]: '' }));
     try {
       // The proof is saved as a progress photo too (cleaned of GPS data, shown to the office).
@@ -210,7 +214,7 @@ function FieldStages({ booking, api, headers, onChanged, onTheJob }) {
             </div>
             {!isDone && onTheJob && (
               <>
-                <input ref={el => { inputs.current[stage.key] = el; }} type="file" accept="image/*" capture="environment" hidden
+                <input ref={el => { inputs.current[stage.key] = el; }} type="file" accept={PHOTO_ACCEPT} capture="environment" hidden
                   onChange={e => { finishWithPhoto(stage, e.target.files?.[0]); e.target.value = ''; }} />
                 <button type="button" disabled={saving} onClick={() => inputs.current[stage.key]?.click()}
                   className="mt-3 w-full min-h-[48px] rounded-xl bg-slate-900 hover:bg-slate-700 text-white text-sm font-bold border-none cursor-pointer inline-flex items-center justify-center gap-2 disabled:opacity-60">

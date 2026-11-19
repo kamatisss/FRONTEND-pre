@@ -12,6 +12,7 @@ import { useLiveCounts } from './ui/useLiveCounts';
 import { downloadWithAuth } from './ui/download';
 import { esc, openPrintWindow, printedAt } from './ui/printWindow';
 import ProgressPhotos from './ProgressPhotos';
+import ProjectTimeline from './ProjectTimeline';
 
 import { OfficeDesignApproval } from './DesignApproval';
 /* Staff bookings, organised as work queues plus a weekly dispatch calendar.
@@ -489,6 +490,7 @@ export default function BookingQueue({ api, headers, toast, onCounts, onOpenDesi
 function BookingDrawer({ api, authHeaders, toast, open, busy, stamp, onClose, onStatus, onChanged, onOpenDesign, onOpenBilling }) {
   const [booking, setBooking] = useState(open.initial || null);
   const [failed, setFailed]   = useState(false);
+  const [reload, setReload]   = useState(0);
   const closeRef = useRef(null);
   const crewRef  = useRef(null);
 
@@ -500,7 +502,7 @@ function BookingDrawer({ api, authHeaders, toast, open, busy, stamp, onClose, on
       .then(b => { if (!cancelled) setBooking(b); })
       .catch(() => { if (!cancelled) setFailed(true); });
     return () => { cancelled = true; };
-  }, [api, authHeaders, open.id, stamp]);
+  }, [api, authHeaders, open.id, stamp, reload]);
 
   useEffect(() => {
     closeRef.current?.focus();
@@ -608,11 +610,14 @@ function BookingDrawer({ api, authHeaders, toast, open, busy, stamp, onClose, on
               </section>
             )}
 
-            {['Preparing', 'Installing', 'For Review', 'Finished'].includes(b.status) && (
+            {(b.tracker || ['Preparing', 'Installing', 'For Review', 'Finished'].includes(b.status)) && b.status !== 'Cancelled' && (
               <section>
                 <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2">Progress</h3>
-                <ProgressBar pct={b.progress_pct} />
-                <div className="mt-3"><ProgressPhotos booking={b} toast={toast} canUpload={false} /></div>
+                <ProjectTimeline api={api} authHeaders={authHeaders} toast={toast} booking={b}
+                  onChanged={() => { setReload(n => n + 1); onChanged(); }} />
+                {['Preparing', 'Installing', 'For Review', 'Finished'].includes(b.status) && (
+                  <div className="mt-4"><ProgressPhotos booking={b} toast={toast} canUpload={false} /></div>
+                )}
               </section>
             )}
 

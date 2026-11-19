@@ -2,8 +2,11 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { customerLinks, useStaffLinks } from './navLinks';
+import StaffNav from './StaffNav';
 import NotificationBell from './ui/NotificationBell';
-import { LogOut, Leaf, ChevronDown, Menu, X, Download, LayoutDashboard, ShoppingCart, UserRound } from 'lucide-react';
+import {
+  LogOut, Leaf, ChevronDown, Menu, X, Download, LayoutDashboard, ShoppingCart, UserRound, ShieldCheck, Briefcase, HardHat, Globe,
+} from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useCart } from '../context/CartContext';
 import { useInstall } from '../pwa/useInstall';
@@ -11,7 +14,7 @@ import InstallAppSheet from './ui/InstallAppSheet';
 import { dashboardPath } from '../data/roleHome';
 
 /* ─── Avatar: shows first letter of first name, with green gradient ─── */
-function Avatar({ user }) {
+function Avatar({ user, size = 36 }) {
   const letter = (user?.first_name || user?.username || '?')[0].toUpperCase();
 
   // Deterministic hue from username so it's consistent per user
@@ -21,15 +24,15 @@ function Avatar({ user }) {
   return (
     <div
       style={{
-        width: 36,
-        height: 36,
+        width: size,
+        height: size,
         borderRadius: '50%',
         background: `linear-gradient(135deg, hsl(${hue},72%,38%) 0%, hsl(${hue + 20},80%,52%) 100%)`,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         fontWeight: 800,
-        fontSize: 15,
+        fontSize: Math.round(size * 0.42),
         color: 'white',
         flexShrink: 0,
         boxShadow: `0 0 0 2px white, 0 0 0 3.5px hsl(${hue},72%,48%)`,
@@ -42,109 +45,64 @@ function Avatar({ user }) {
   );
 }
 
-/* ─── Dropdown menu for the profile section ─── */
+/* ─── Profile menu (the one account place for every role: the sidebar has none) ───
+ * Who you are (name, email, your exact role), then where to go, then sign out. A real menu: announced as
+ * one, Escape closes it and puts focus back on the button, every item shows keyboard focus. On phones it
+ * spans the width under the bar instead of hanging off the avatar. */
+const ROLE_CHIP = {
+  admin: { text: 'Admin', Icon: ShieldCheck, cls: 'bg-violet-50 text-violet-700 border-violet-200' },
+  OFFICE_ADMIN: { text: 'Office admin', Icon: Briefcase, cls: 'bg-sky-50 text-sky-700 border-sky-200' },
+  FIELD_CREW: { text: 'Field crew', Icon: HardHat, cls: 'bg-amber-50 text-amber-800 border-amber-200' },
+  staff: { text: 'Staff', Icon: Briefcase, cls: 'bg-sky-50 text-sky-700 border-sky-200' },
+};
+function roleChip(user) {
+  if (user?.is_superuser) return ROLE_CHIP.admin;
+  if (user?.is_staff) return ROLE_CHIP[user?.staff_role] || ROLE_CHIP.staff;
+  return null;   // customers: no badge
+}
+
 function ProfileDropdown({ user, logoutUser, onClose, onInstall, canInstall }) {
   const navigate = useNavigate();
   const displayName = user?.first_name
     ? `${user.first_name}${user.last_name ? ' ' + user.last_name : ''}`
     : user?.username;
+  // Second line: the email, or nothing when it would only repeat the name
+  const secondLine = user?.email || (displayName !== user?.username ? `@${user?.username}` : '');
+  const chip = roleChip(user);
+  const go = (to) => { onClose(); navigate(to); };
 
   return (
-    <div style={{
-      position: 'absolute',
-      top: 'calc(100% + 10px)',
-      right: 0,
-      width: 224,
-      background: 'white',
-      border: '1px solid #e2e8f0',
-      borderRadius: 16,
-      boxShadow: '0 8px 32px rgba(15,23,42,0.12), 0 2px 8px rgba(15,23,42,0.06)',
-      overflow: 'hidden',
-      zIndex: 200,
-      animation: 'tn-dropdown-in 0.18s cubic-bezier(0.22,1,0.36,1)',
-    }}>
-      {/* Profile header */}
-      <div style={{
-        padding: '16px 16px 12px',
-        borderBottom: '1px solid #f1f5f9',
-        background: 'linear-gradient(135deg, #ecfdf5 0%, #f0fdf4 100%)',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <Avatar user={user} />
-          <div style={{ overflow: 'hidden' }}>
-            <div style={{
-              fontSize: 14,
-              fontWeight: 800,
-              color: '#0f172a',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-            }}>
-              {displayName}
-            </div>
-            <div style={{
-              fontSize: 12,
-              color: '#64748b',
-              fontWeight: 500,
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-            }}>
-              {user?.email || '@' + user?.username}
-            </div>
-          </div>
+    <div id="tn-profile-menu" role="menu" aria-label="Account"
+      className="fixed left-3 right-3 top-[64px] sm:absolute sm:left-auto sm:right-0 sm:top-[calc(100%+8px)] sm:w-72 z-[200] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl"
+      style={{ animation: 'tn-dropdown-in 0.18s cubic-bezier(0.22,1,0.36,1)', boxShadow: '0 12px 40px rgba(15,23,42,0.14), 0 2px 8px rgba(15,23,42,0.06)' }}>
+      {/* Who */}
+      <div className="flex items-center gap-3 px-4 pt-4 pb-3.5">
+        <Avatar user={user} size={44} />
+        <div className="min-w-0 flex-1">
+          <p className="m-0 text-[15px] font-extrabold text-slate-900 truncate leading-tight">{displayName}</p>
+          {secondLine && <p className="m-0 mt-0.5 text-xs text-slate-500 truncate">{secondLine}</p>}
+          {chip && (
+            <span className={`mt-1.5 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-bold ${chip.cls}`}>
+              <chip.Icon size={12} /> {chip.text}
+            </span>
+          )}
         </div>
-        {(user?.is_staff || user?.is_superuser) && (
-          <div style={{
-            marginTop: 10,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4,
-            padding: '3px 10px',
-            borderRadius: 100,
-            background: '#dcfce7',
-            border: '1px solid #bbf7d0',
-            fontSize: 11,
-            fontWeight: 700,
-            color: '#16a34a',
-            letterSpacing: '0.3px',
-          }}>
-            {user?.is_superuser ? '⚡ Admin' : '🛡 Staff'}
-          </div>
-        )}
       </div>
 
-      {/* Menu items */}
-      <div style={{ padding: '8px 0' }}>
-        <DropItem icon={<LayoutDashboard size={15} />} label="My dashboard" onClick={() => { onClose(); navigate(dashboardPath(user)); }} />
-        <DropItem icon={<UserRound size={15} />} label="My account" onClick={() => { onClose(); navigate('/account'); }} />
-        {canInstall && <DropItem icon={<Download size={15} />} label="Install app" onClick={() => { onClose(); onInstall(); }} />}
+      {/* Where */}
+      <div className="border-t border-slate-100 p-1.5">
+        <DropItem icon={LayoutDashboard} label="My dashboard" hint="Your home screen" onClick={() => go(dashboardPath(user))} />
+        <DropItem icon={UserRound} label="My account" hint="Details, password and privacy" onClick={() => go('/account')} />
+        {/* Staff check what customers see; customers get back to the main site */}
+        <DropItem icon={Globe} label="View website" hint={user?.is_staff || user?.is_superuser ? 'See what customers see' : 'Our projects and services'} onClick={() => go('/')} />
+        {canInstall && <DropItem icon={Download} label="Install app" hint="Open it from your home screen" onClick={() => { onClose(); onInstall(); }} />}
       </div>
 
-      {/* Logout */}
-      <div style={{ padding: '0 0 8px', borderTop: '1px solid #f1f5f9' }}>
-        <button
-          onClick={() => { logoutUser(); onClose(); }}
-          style={{
-            width: '100%',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            padding: '10px 16px',
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-            fontSize: 14,
-            fontWeight: 600,
-            color: '#ef4444',
-            textAlign: 'left',
-            marginTop: 4,
-            transition: 'background 0.15s',
-          }}
-          onMouseEnter={e => e.currentTarget.style.background = '#fef2f2'}
-          onMouseLeave={e => e.currentTarget.style.background = 'none'}
-        >
-          <LogOut size={15} />
+      {/* Leave */}
+      <div className="border-t border-slate-100 p-1.5">
+        <button type="button" role="menuitem" onClick={() => { onClose(); logoutUser(); }}
+          className="w-full flex items-center gap-3 rounded-xl px-3 py-2.5 border-none bg-transparent cursor-pointer text-left text-sm font-bold text-red-600 hover:bg-red-50 focus-visible:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300">
+          <span className="w-8 h-8 rounded-lg bg-red-50 inline-flex items-center justify-center shrink-0"><LogOut size={16} /></span>
           Sign out
         </button>
       </div>
@@ -152,30 +110,17 @@ function ProfileDropdown({ user, logoutUser, onClose, onInstall, canInstall }) {
   );
 }
 
-function DropItem({ icon, label, onClick }) {
+function DropItem({ icon: Icon, label, hint, onClick }) {
   return (
-    <button
-      onClick={onClick}
-      style={{
-        width: '100%',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        padding: '9px 16px',
-        background: 'none',
-        border: 'none',
-        cursor: 'pointer',
-        fontSize: 14,
-        fontWeight: 600,
-        color: '#334155',
-        textAlign: 'left',
-        transition: 'background 0.15s, color 0.15s',
-      }}
-      onMouseEnter={e => { e.currentTarget.style.background = '#f8fafc'; e.currentTarget.style.color = '#10b981'; }}
-      onMouseLeave={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = '#334155'; }}
-    >
-      <span style={{ color: '#94a3b8' }}>{icon}</span>
-      {label}
+    <button type="button" role="menuitem" onClick={onClick}
+      className="group w-full flex items-center gap-3 rounded-xl px-3 py-2 border-none bg-transparent cursor-pointer text-left hover:bg-slate-50 focus-visible:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60">
+      <span className="w-8 h-8 rounded-lg bg-slate-100 text-slate-500 group-hover:bg-emerald-50 group-hover:text-emerald-700 inline-flex items-center justify-center shrink-0 transition-colors">
+        <Icon size={16} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-semibold text-slate-800 leading-tight">{label}</span>
+        {hint && <span className="block text-xs text-slate-500 leading-snug truncate">{hint}</span>}
+      </span>
     </button>
   );
 }
@@ -211,7 +156,7 @@ function CartButton() {
    MAIN TOPNAVBAR COMPONENT
 ══════════════════════════════════════════════════════════════ */
 const TopNavbar = () => {
-  const { user, logoutUser } = useAuth();
+  const { user, signOut } = useAuth();
   const location = useLocation();
   const [dropOpen, setDropOpen] = useState(false);
   // "Install app": the browser's own prompt (Android / desktop), or the steps on iPhone
@@ -220,6 +165,7 @@ const TopNavbar = () => {
   const startInstall = async () => { if (await install() === 'steps') setInstallSteps(true); };
   const [menu, setMenu] = useState({ open: false, path: location.pathname });
   const dropRef = useRef(null);
+  const profileBtn = useRef(null);
   const staffLinks = useStaffLinks(user);
 
   // The phone menu closes itself on navigation (it remembers the page it opened on).
@@ -237,6 +183,14 @@ const TopNavbar = () => {
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
+
+  // Escape closes the profile menu and puts focus back on its button
+  useEffect(() => {
+    if (!dropOpen) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') { setDropOpen(false); profileBtn.current?.focus(); } };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dropOpen]);
 
   // No page scroll behind the open menu; Escape closes it
   useEffect(() => {
@@ -413,8 +367,13 @@ const TopNavbar = () => {
         <NotificationBell />
         <div ref={dropRef} style={{ position: 'relative' }}>
           <button
+            ref={profileBtn}
+            type="button"
             onClick={() => setDropOpen(!dropOpen)}
             className="tn-profile-btn"
+            aria-label={`Account menu for ${user?.first_name || user?.username}`}
+            aria-haspopup="menu"
+            aria-controls="tn-profile-menu"
             aria-expanded={dropOpen}
           >
             <Avatar user={user} />
@@ -427,7 +386,7 @@ const TopNavbar = () => {
           {dropOpen && (
             <ProfileDropdown
               user={user}
-              logoutUser={logoutUser}
+              logoutUser={signOut}
               onClose={() => setDropOpen(false)}
               canInstall={canInstall}
               onInstall={startInstall}
@@ -462,7 +421,9 @@ const TopNavbar = () => {
               fontFamily: "'Inter', system-ui, sans-serif", animation: 'tn-menu-in 0.18s ease-out',
             }}
           >
-            {menuLinks.map(({ to, label, icon, active }) => { const Icon = icon; return (
+            {/* Staff: the same groups as the desktop sidebar. Customers: their short flat list */}
+            {isAdminOrStaff ? <StaffNav links={staffLinks} variant="drawer" onNavigate={closeMenu} />
+              : menuLinks.map(({ to, label, icon, active }) => { const Icon = icon; return (
               <Link key={label} to={to} onClick={closeMenu} className={`tn-menu-link${active ? ' active' : ''}`}>
                 <Icon size={18} style={{ color: active ? '#059669' : '#94a3b8', flexShrink: 0 }} />
                 {label}
@@ -478,7 +439,7 @@ const TopNavbar = () => {
               )}
               <button
                 type="button"
-                onClick={() => { closeMenu(); logoutUser(); }}
+                onClick={() => { closeMenu(); signOut(); }}
                 className="tn-menu-link"
                 style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontFamily: 'inherit' }}
               >

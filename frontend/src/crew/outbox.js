@@ -204,7 +204,9 @@ export function flushOutbox() {
         items.splice(i, 1);
         sent.push(entry);
       } else if (result.status === 401) {
-        items[i] = { ...items[i], error: 'Sign in again to send this.' };
+        // Usually an access token that expired while offline: AuthContext renews it when the signal is
+        // back and the next try (20 s) goes through. Don't tell them to sign out: that wipes the outbox.
+        items[i] = { ...items[i], error: 'Renewing your sign-in. This sends by itself once you have signal.' };
         setOutbox(items);
         break;
       } else if (result.status >= 500 || result.status === 429 || result.status === 409) {

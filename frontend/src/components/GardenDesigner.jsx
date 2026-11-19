@@ -32,6 +32,7 @@ import { useIsPhone } from './ui/useMediaQuery';
 import { saveStudioDraft, loadStudioDraft, clearStudioDraft, trackFunnel } from '../services/guestSession';
 import { DEFAULT_TIME_OF_DAY, TIME_PRESETS } from '../data/studioLight';
 import { MEDIA_BASE_URL as MEDIA_ROOT } from '../config';
+import { PHOTO_ACCEPT, photoProblem } from '../services/fileCheck';
 
 import { loadDesignForStudio } from '../data/studioDesign';
 // ─────────────────────────────────────────────────────────────────────────────
@@ -555,13 +556,12 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
   // ── Image Upload ──────────────────────────────────────────
   const handleImageUpload = async (e) => {
     const file = e.target.files[0];
+    e.target.value = '';   // picking the same file again after an error still triggers this
     if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      dispatch({ type: 'SET_ERROR', payload: 'Please upload a JPG, PNG, or WebP image.' });
-      return;
-    }
-    if (file.size > 15 * 1024 * 1024) {
-      dispatch({ type: 'SET_ERROR', payload: 'File must be under 15MB.' });
+    // Checked by its bytes, not the type the browser reports (a renamed file or an iPhone HEIC fooled that)
+    const problem = await photoProblem(file, 15);
+    if (problem) {
+      dispatch({ type: 'SET_ERROR', payload: problem });
       return;
     }
 
@@ -820,7 +820,7 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
               <label style={{ ...S.uploadBtn, flexShrink: 0 }} title="Upload Photo" aria-label="Upload Photo">
                 <Upload size={16} />
                 {!phone && 'Upload Photo'}
-                <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp"
+                <input ref={fileInputRef} type="file" accept={PHOTO_ACCEPT}
                   onChange={handleImageUpload} disabled={state.loading} hidden />
               </label>
             )}

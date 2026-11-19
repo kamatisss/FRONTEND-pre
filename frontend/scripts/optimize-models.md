@@ -1,5 +1,9 @@
 # Optimizing 3D models
 
+Models uploaded by staff on the Inventory page ("Upload from device") are compressed automatically in the
+browser with the same two passes (src/services/modelCompress.js), so these steps are only for models you
+bundle with the app in `public/models/`.
+
 The catalog models in `public/models/` are compressed to load fast (101 MB → 19 MB, no
 visible difference). Originals are kept in `models-original/` (not deployed).
 

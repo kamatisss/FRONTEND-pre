@@ -23,7 +23,7 @@ const hoursBetween = (a, b) => Math.max(0, (new Date(b) - new Date(a)) / 36e5);
 const fmtHours = (h) => (h < 1 ? `${Math.round(h * 60)} min` : `${h.toFixed(1)} h`);
 
 export default function CrewMe({ user, activeAttendance, api, headers, toast, refreshActiveAttendance, onChanged }) {
-  const { logoutUser } = useAuth();
+  const { signOut } = useAuth();   // warns first if work is still waiting to send
   const [logs, setLogs] = useState(null);
   const [busy, setBusy] = useState(false);
   const token = headers?.Authorization;
@@ -155,7 +155,7 @@ export default function CrewMe({ user, activeAttendance, api, headers, toast, re
         <ChevronRight size={18} className="text-slate-400" />
       </Link>
 
-      <button type="button" onClick={logoutUser}
+      <button type="button" onClick={signOut}
         className="w-full min-h-[52px] rounded-2xl bg-white border border-slate-200 text-red-600 text-sm font-bold cursor-pointer inline-flex items-center justify-center gap-2 hover:bg-red-50">
         <LogOut size={16} /> Sign out
       </button>

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ChevronRight, ShoppingBag, Wallet, CalendarCheck, CheckCircle2, RotateCcw, Users,
-  Package, PenTool, Receipt, ClipboardCheck, Banknote, HardHat, Clock,
+  Package, PenTool, Receipt, ClipboardCheck, Banknote, HardHat, Clock, AlertTriangle,
 } from 'lucide-react';
 import api from '../services/api';
 
@@ -18,7 +18,7 @@ const TONE = {
   blue: 'bg-blue-50 text-blue-700',
 };
 const ICON = {
-  needs_refund: RotateCcw, review: ClipboardCheck, awaiting: CalendarCheck, dispatch: HardHat,
+  needs_refund: RotateCcw, review: ClipboardCheck, delayed_projects: AlertTriangle, awaiting: CalendarCheck, dispatch: HardHat,
   to_pack: Package, designs: PenTool, low_stock: Package, unpaid: Receipt, cash: Banknote, open_shifts: Clock,
 };
 const peso = (n) => `₱${Number(n || 0).toLocaleString('en-PH', { maximumFractionDigits: 0 })}`;

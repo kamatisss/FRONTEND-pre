@@ -24,6 +24,7 @@ import {
   Briefcase,
 } from "lucide-react";
 import { API_BASE_URL as API_ROOT } from '../config';
+import { PHOTO_ACCEPT, photoProblem } from '../services/fileCheck';
 
 /* ─── Design tokens — matches Staff Dashboard light theme ─────────────── */
 const GREEN       = "#10b981";
@@ -440,9 +441,14 @@ const StaffAttendance = () => {
     setFileFallback(false); setCameraError(null);
   };
 
-  const handleFileChange = (e) => {
+  const handleFileChange = async (e) => {
     const file = e.target.files[0];
+    e.target.value = '';
     if (!file) return;
+    // Only a real photo is proof of presence (the server checks again and keeps only a clean JPEG)
+    const problem = await photoProblem(file);
+    if (problem) { setErrorMsg(problem); return; }
+    setErrorMsg('');
     const reader = new FileReader();
     reader.onloadend = () => setPreviewImage(reader.result);
     reader.readAsDataURL(file);
@@ -1276,7 +1282,7 @@ const StaffAttendance = () => {
                     }}
                   >
                     {previewImage ? "Change Photo" : "Select Image Proof"}
-                    <input type="file" accept="image/*" capture="environment" onChange={handleFileChange} style={{ display: "none" }} />
+                    <input type="file" accept={PHOTO_ACCEPT} capture="environment" onChange={handleFileChange} style={{ display: "none" }} />
                   </label>
                 </div>
               )}

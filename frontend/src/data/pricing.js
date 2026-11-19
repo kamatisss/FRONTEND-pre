@@ -50,7 +50,16 @@ export function rockLimits(areaSqm) {
   const a = Math.max(0, Number(areaSqm) || 0);
   return { boulders: Math.max(3, Math.min(30, Math.round(a / 12))), stones: Math.max(24, Math.min(300, Math.round(a))) };
 }
-export const isSmallStone = (item) => item?.category === 'hardscape' && (Number(item.real_world_size) || 1) < SMALL_STONE;
+// garden_ai.feature_limits: most pots, garden lights and water features (each kind) for a yard of this area (m²)
+export function featureLimits(areaSqm) {
+  const a = Math.max(0, Number(areaSqm) || 0);
+  return { pot: Math.max(2, Math.min(12, Math.round(a / 10))), light: Math.max(4, Math.min(30, Math.round(a / 6))), water: a >= 150 ? 2 : 1 };
+}
+// What a furniture / hardscape item is in a design (layout_engine.feature_kind): its feature_type, else by category
+export const featureKind = (item) => item?.feature_type || ({ furniture: 'seat', hardscape: 'rock' })[item?.category] || null;
+// (a rock: a small pot or garden light under 35 cm is not a stone)
+export const isSmallStone = (item) => item?.category === 'hardscape' && (Number(item.real_world_size) || 1) < SMALL_STONE
+  && (item.feature_type || 'rock') === 'rock';
 
 export function labourLayer(item) {
   if (item?.is_groundcover) return 'low';   // pricing.layer_of 'groundcover': planting_low per m²

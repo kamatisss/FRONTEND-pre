@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { ArrowDownRight, ArrowUpRight, AlertTriangle, Star, Table2, BarChart3, Download } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { API_BASE_URL as API_ROOT } from '../config';
@@ -14,9 +15,10 @@ const API_BASE_URL = API_ROOT;
    every chart, so identity never changes between views.
    ═══════════════════════════════════════════════════════════════════════ */
 
+// partial: the same hue at 55% on white, for a period the range only partly covers (first / last bar)
 const SERIES = {
-  landscape: { key: 'landscape', label: 'Landscape services', color: '#2a78d6', track: '#cde2fb' },
-  ecommerce: { key: 'ecommerce', label: 'E-commerce', color: '#eb6834', track: '#fbdccf' },
+  landscape: { key: 'landscape', label: 'Landscape services', color: '#2a78d6', track: '#cde2fb', partial: '#8ab5e8' },
+  ecommerce: { key: 'ecommerce', label: 'E-commerce', color: '#eb6834', track: '#fbdccf', partial: '#f4ac8f' },
 };
 
 const RANGES = [
@@ -35,6 +37,9 @@ const pesoCompact = (v) => {
   return `₱${Math.round(n)}`;
 };
 const parseDay = (iso) => { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d); };
+const shortDay = (iso) => parseDay(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+// "partial: Nov 1–19" for a bucket the range only partly covers (the API says which days it holds)
+const partialNote = (d) => (d.partial ? `partial: ${shortDay(d.from)}–${shortDay(d.to)}` : '');
 // withYear: the axis marks the first tick and each January so a 12-month span
 // that repeats a month name (Oct '25 … Oct '26) stays unambiguous
 const periodLabel = (iso, granularity, long = false, withYear = false) => {
@@ -48,11 +53,13 @@ const periodLabel = (iso, granularity, long = false, withYear = false) => {
   return withYear ? `${month} '${String(d.getFullYear()).slice(2)}` : month;
 };
 
-function niceScale(max, tickCount = 4) {
-  if (!max) return { max: 1000, ticks: [0, 250, 500, 750, 1000] };
+// integer: counts (requests, orders) get whole-number ticks, never 2.5
+function niceScale(max, tickCount = 4, integer = false) {
+  if (!max) return integer ? { max: 4, ticks: [0, 1, 2, 3, 4] } : { max: 1000, ticks: [0, 250, 500, 750, 1000] };
   const raw = max / tickCount;
   const pow = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 2.5, 5, 10].map((m) => m * pow).find((s) => s >= raw);
+  const steps = integer ? [1, 2, 5, 10] : [1, 2, 2.5, 5, 10];
+  const step = Math.max(integer ? 1 : 0, steps.map((m) => m * pow).find((s) => s >= raw));
   const top = Math.ceil(max / step) * step;
   return { max: top, ticks: Array.from({ length: Math.round(top / step) + 1 }, (_, i) => i * step) };
 }
@@ -106,7 +113,7 @@ function TooltipRows({ title, rows }) {
 }
 
 /* ── Stat tile ──────────────────────────────────────────────────────── */
-function StatTile({ label, value, delta, compare, sub, swatch, hero = false }) {
+function StatTile({ label, value, delta, compare, sub, swatch, hero = false, link = null }) {
   const hasDelta = delta !== null && delta !== undefined;
   const up = hasDelta && delta >= 0;
   return (
@@ -123,12 +130,13 @@ function StatTile({ label, value, delta, compare, sub, swatch, hero = false }) {
         </div>
       )}
       {sub && <div className="ia-tile-sub">{sub}</div>}
+      {link && <Link to={link.to} className="ia-tile-link">{link.label}</Link>}
     </div>
   );
 }
 
 /* ── Revenue share: one 100% bar, two segments with a 2px surface gap ─ */
-function ShareBar({ landscape, ecommerce, tooltip }) {
+function ShareBar({ landscape, ecommerce, tooltip, title = 'Share of earned income' }) {
   const total = landscape + ecommerce;
   const parts = [
     { ...SERIES.landscape, value: landscape },
@@ -141,9 +149,9 @@ function ShareBar({ landscape, ecommerce, tooltip }) {
         {total === 0 ? <div className="ia-share-empty" /> : parts.filter((p) => p.value > 0).map((p) => (
           <div key={p.key} className="ia-share-seg" tabIndex={0}
             style={{ flexGrow: p.value, background: p.color }}
-            onPointerMove={(e) => tooltip.show(e, <TooltipRows title="Share of earned income"
+            onPointerMove={(e) => tooltip.show(e, <TooltipRows title={title}
               rows={[{ label: p.label, value: `${peso(p.value)} · ${((p.value / total) * 100).toFixed(1)}%`, color: p.color }]} />)}
-            onFocus={(e) => tooltip.show(e, <TooltipRows title="Share of earned income"
+            onFocus={(e) => tooltip.show(e, <TooltipRows title={title}
               rows={[{ label: p.label, value: `${peso(p.value)} · ${((p.value / total) * 100).toFixed(1)}%`, color: p.color }]} />)}
             onPointerLeave={tooltip.hide} onBlur={tooltip.hide} />
         ))}
@@ -162,15 +170,22 @@ function ShareBar({ landscape, ecommerce, tooltip }) {
   );
 }
 
-/* ── Trend: grouped columns per period, one shared y-axis ───────────── */
-function TrendChart({ data, granularity, tooltip }) {
+/* ── Trend: grouped columns per period, one shared y-axis ─────────────
+   series: two { key, label, color, partial } (key = the field on each period row). Used for earned
+   income, collected money and demand counts; the colors always follow the stream (blue = landscape,
+   orange = shop). legend: name the series under the chart when no share bar above does it. */
+const INCOME_SERIES = [SERIES.landscape, SERIES.ecommerce];
+
+function TrendChart({ data, granularity, tooltip, series = INCOME_SERIES, fmt = peso, fmtAxis = pesoCompact,
+  integer = false, label = 'Earned income per period by service', legend = false }) {
   const [ref, width] = useWidth();
   const [hovered, setHovered] = useState(null);
+  const [a, b] = series;
   const height = 280;
   const m = { top: 12, right: 8, bottom: 30, left: 52 };
   const plotW = Math.max(0, width - m.left - m.right);
   const plotH = height - m.top - m.bottom;
-  const { max, ticks } = niceScale(Math.max(0, ...data.flatMap((d) => [d.landscape, d.ecommerce])));
+  const { max, ticks } = niceScale(Math.max(0, ...data.flatMap((d) => [d[a.key], d[b.key]])), 4, integer);
   const band = data.length ? plotW / data.length : 0;
   const barW = Math.max(2, Math.min(24, (band * 0.7 - 2) / 2));
   const y = (v) => m.top + plotH - (v / max) * plotH;
@@ -185,22 +200,23 @@ function TrendChart({ data, granularity, tooltip }) {
     return `M${x},${m.top + plotH} V${top + r} Q${x},${top} ${x + r},${top} H${x + barW - r} Q${x + barW},${top} ${x + barW},${top + r} V${m.top + plotH} Z`;
   };
 
+  const hasPartial = data.some((d) => d.partial);
   const tipFor = (d) => (
-    <TooltipRows title={periodLabel(d.period, granularity, true)} rows={[
-      { label: SERIES.landscape.label, value: peso(d.landscape), color: SERIES.landscape.color },
-      { label: SERIES.ecommerce.label, value: peso(d.ecommerce), color: SERIES.ecommerce.color },
+    <TooltipRows title={`${periodLabel(d.period, granularity, true)}${d.partial ? ` · ${partialNote(d)}` : ''}`} rows={[
+      { label: a.label, value: fmt(d[a.key]), color: a.color },
+      { label: b.label, value: fmt(d[b.key]), color: b.color },
     ]} />
   );
 
   return (
     <div ref={ref} style={{ width: '100%' }}>
       {width > 0 && (
-        <svg width={width} height={height} role="img" aria-label="Earned income per period by service">
+        <svg width={width} height={height} role="img" aria-label={label}>
           {ticks.map((t) => (
             <g key={t}>
               <line x1={m.left} x2={width - m.right} y1={y(t)} y2={y(t)}
                 stroke={t === 0 ? 'var(--ia-axis)' : 'var(--ia-grid)'} strokeWidth="1" />
-              <text x={m.left - 8} y={y(t)} dy="0.32em" textAnchor="end" className="ia-axis-text">{pesoCompact(t)}</text>
+              <text x={m.left - 8} y={y(t)} dy="0.32em" textAnchor="end" className="ia-axis-text">{fmtAxis(t)}</text>
             </g>
           ))}
           {data.map((d, i) => {
@@ -210,8 +226,9 @@ function TrendChart({ data, granularity, tooltip }) {
             return (
               <g key={d.period}>
                 {hovered === i && <rect x={gx} y={m.top} width={band} height={plotH} fill="var(--ia-hover)" />}
-                {d.landscape > 0 && <path d={column(x1, d.landscape)} fill={SERIES.landscape.color} />}
-                {d.ecommerce > 0 && <path d={column(x2, d.ecommerce)} fill={SERIES.ecommerce.color} />}
+                {/* A period the range only partly covers is drawn lighter: it isn't a slump, it's fewer days */}
+                {d[a.key] > 0 && <path d={column(x1, d[a.key])} fill={d.partial ? a.partial : a.color} />}
+                {d[b.key] > 0 && <path d={column(x2, d[b.key])} fill={d.partial ? b.partial : b.color} />}
                 {i % labelEvery === 0 && (
                   <text x={gx + band / 2} y={height - 10} textAnchor="middle" className="ia-axis-text">
                     {periodLabel(d.period, granularity, false, i === 0 || parseDay(d.period).getMonth() === 0)}
@@ -219,7 +236,7 @@ function TrendChart({ data, granularity, tooltip }) {
                 )}
                 {/* Hit target: the whole period band, not just the painted columns */}
                 <rect x={gx} y={m.top} width={band} height={plotH} fill="transparent" tabIndex={0}
-                  aria-label={`${periodLabel(d.period, granularity, true)}: Landscape ${peso(d.landscape)}, E-commerce ${peso(d.ecommerce)}`}
+                  aria-label={`${periodLabel(d.period, granularity, true)}${d.partial ? ` (${partialNote(d)})` : ''}: ${a.label} ${fmt(d[a.key])}, ${b.label} ${fmt(d[b.key])}`}
                   onPointerMove={(e) => { setHovered(i); tooltip.show(e, tipFor(d)); }}
                   onFocus={(e) => { setHovered(i); tooltip.show(e, tipFor(d)); }}
                   onPointerLeave={() => { setHovered(null); tooltip.hide(); }}
@@ -228,6 +245,21 @@ function TrendChart({ data, granularity, tooltip }) {
             );
           })}
         </svg>
+      )}
+      {(legend || hasPartial) && (
+        <div className="ia-legend">
+          {legend && series.map((s) => (
+            <span key={s.key} className="ia-legend-item"><span className="ia-swatch" style={{ background: s.color }} />{s.label}</span>
+          ))}
+          {/* Explains the lighter bars */}
+          {hasPartial && (
+            <span className="ia-legend-item ia-muted">
+              <span className="ia-swatch" style={{ background: a.partial }} />
+              <span className="ia-swatch" style={{ background: b.partial, marginLeft: -4 }} />
+              Lighter bars: only part of that {granularity} is in the range (fewer days, not a drop)
+            </span>
+          )}
+        </div>
       )}
     </div>
   );
@@ -241,7 +273,7 @@ const csvCell = (v) => {
 };
 
 function exportAnalyticsCsv(analytics) {
-  const { trend, granularity, range, start, end, landscape: L, ecommerce: E } = analytics;
+  const { trend, granularity, range, start, end, landscape: L, ecommerce: E, collected: C, owed: O, demand: D } = analytics;
   const money = (v) => Number(v).toFixed(2);  // plain numbers so spreadsheets can sum them
   const pct = (v) => (v === null || v === undefined ? '' : v);
   const rangeLabel = RANGES.find((r) => r.key === range)?.label ?? range;
@@ -255,26 +287,44 @@ function exportAnalyticsCsv(analytics) {
     ['Generated', new Date().toISOString().slice(0, 10)]);
 
   section('Summary', ['Metric', 'Landscape services', 'E-commerce'], [
-    ['Earned income (PHP)', money(L.earned), money(E.earned)],
+    ['Earned income (PHP), counted in full on sign-off / payment', money(L.earned), money(E.earned)],
+    ['Collected (PHP), money received net of refunds', money(C.landscape.amount), money(C.ecommerce.amount)],
+    ['Collected change vs previous period (%)', pct(C.landscape.change_pct), pct(C.ecommerce.change_pct)],
     ['Change vs previous period (%)', pct(L.earned_change_pct), pct(E.earned_change_pct)],
     ['Completed projects / paid orders', L.earned_count, E.earned_count],
     ['Average value (PHP)', money(L.avg_value), money(E.avg_value)],
-    ['Pending pipeline (PHP)', money(L.pipeline), money(E.pipeline)],
-    ['In progress / unpaid', L.pipeline_count, E.pipeline_count],
+    ['Pending pipeline, open now (PHP)', money(L.pipeline), money(E.pipeline)],
+    ['Open now, any date', L.pipeline_count, E.pipeline_count],
+    ['Open and due in the range', L.open_due_count, E.open_due_count],
     ['Cancelled', L.cancelled_count, E.cancelled_count],
-    ['Completion rate (%)', pct(L.completion_rate), pct(E.completion_rate)],
+    ['Completion rate (%): done / (done + cancelled + open and due)', pct(L.completion_rate), pct(E.completion_rate)],
     ['Unpriced bookings (counted as 0)', L.unpriced_count, ''],
+    ['Owed on finished jobs, now (PHP)', money(O.finished), ''],
+    ['Unpaid on open projects, not due yet (PHP)', money(O.open), ''],
   ]);
 
   const sum = (key) => trend.reduce((acc, d) => acc + d[key], 0);
   section('Income comparison',
-    ['Period', 'Period start', 'Landscape services (PHP)', 'E-commerce (PHP)', 'Total (PHP)'], [
+    ['Period', 'Days from', 'Days to', 'Partial period', 'Earned: landscape (PHP)', 'Earned: e-commerce (PHP)', 'Earned: total (PHP)',
+      'Collected: landscape (PHP)', 'Collected: e-commerce (PHP)', 'Collected: total (PHP)'], [
       ...trend.map((d) => [
-        periodLabel(d.period, granularity, true), d.period,
+        periodLabel(d.period, granularity, true), d.from, d.to, d.partial ? 'yes' : 'no',
         money(d.landscape), money(d.ecommerce), money(d.landscape + d.ecommerce),
+        money(d.landscape_collected), money(d.ecommerce_collected), money(d.landscape_collected + d.ecommerce_collected),
       ]),
-      ['Total', '', money(sum('landscape')), money(sum('ecommerce')), money(sum('landscape') + sum('ecommerce'))],
+      ['Total', '', '', '', money(sum('landscape')), money(sum('ecommerce')), money(sum('landscape') + sum('ecommerce')),
+        money(sum('landscape_collected')), money(sum('ecommerce_collected')), money(sum('landscape_collected') + sum('ecommerce_collected'))],
     ]);
+
+  section('Demand (by the day each request or order was made)', ['Period', 'Booking requests', 'Shop orders (not cancelled)'], [
+    ...trend.map((d) => [periodLabel(d.period, granularity, true), d.requests, d.orders]),
+    ['Total', D.requests, D.orders],
+  ]);
+  section('Booking requests made in the range: status today', ['Outcome', 'Requests', 'Share (%)'], [
+    ['Confirmed', D.confirmed, pct(D.confirmed_pct)],
+    ['Still waiting', D.waiting, pct(D.waiting_pct)],
+    ['Cancelled', D.cancelled, pct(D.cancelled_pct)],
+  ]);
 
   section('Landscape income by service (completed projects)', ['Service', 'Income (PHP)', 'Projects'],
     analytics.landscape_by_service.map((r) => [r.label, money(r.value), r.count]));
@@ -302,20 +352,21 @@ function exportAnalyticsCsv(analytics) {
   URL.revokeObjectURL(url);
 }
 
-function TrendTable({ data, granularity }) {
+function TrendTable({ data, granularity, series = INCOME_SERIES, fmt = peso, total = true }) {
+  const [a, b] = series;
   return (
     <div className="ia-table-wrap">
       <table className="ia-table">
         <thead>
-          <tr><th>Period</th><th>Landscape services</th><th>E-commerce</th><th>Total</th></tr>
+          <tr><th>Period</th><th>{a.label}</th><th>{b.label}</th>{total && <th>Total</th>}</tr>
         </thead>
         <tbody>
           {data.map((d) => (
             <tr key={d.period}>
-              <td>{periodLabel(d.period, granularity, true)}</td>
-              <td>{peso(d.landscape)}</td>
-              <td>{peso(d.ecommerce)}</td>
-              <td><strong>{peso(d.landscape + d.ecommerce)}</strong></td>
+              <td>{periodLabel(d.period, granularity, true)}{d.partial && <span className="ia-muted"> ({partialNote(d)})</span>}</td>
+              <td>{fmt(d[a.key])}</td>
+              <td>{fmt(d[b.key])}</td>
+              {total && <td><strong>{fmt(d[a.key] + d[b.key])}</strong></td>}
             </tr>
           ))}
         </tbody>
@@ -371,9 +422,10 @@ function ServiceHealth({ series, stats, rating, doneLabel, openLabel }) {
         aria-label={`${series.label} completion rate`}>
         <div style={{ width: `${rate ?? 0}%`, background: series.color }} />
       </div>
+      {/* The three counts the rate is made of (they add up to its denominator) */}
       <div className="ia-health-counts">
         <span><strong>{stats.earned_count}</strong> {doneLabel}</span>
-        <span><strong>{stats.pipeline_count}</strong> {openLabel}</span>
+        <span><strong>{stats.open_due_count}</strong> {openLabel}</span>
         <span><strong>{stats.cancelled_count}</strong> cancelled</span>
       </div>
       <div className="ia-health-metric ia-health-rating">
@@ -393,6 +445,105 @@ function ServiceHealth({ series, stats, rating, doneLabel, openLabel }) {
   );
 }
 
+/* ── Earned vs collected: the same chart, two measures ──────────────── */
+const MEASURES = {
+  earned: {
+    label: 'Earned', series: INCOME_SERIES, share: 'Share of earned income',
+    chartLabel: 'Earned income per period by service',
+    note: 'Earned counts a project in full on the day it is signed off and a shop order when it is paid or delivered, whether or not the money is in yet.',
+  },
+  collected: {
+    label: 'Collected',
+    series: [{ ...SERIES.landscape, key: 'landscape_collected' }, { ...SERIES.ecommerce, key: 'ecommerce_collected' }],
+    share: 'Share of money collected', chartLabel: 'Money collected per period by service',
+    note: 'Collected is money actually received, net of refunds: project payments, shop orders paid online and cash on delivery. Same figures as Reports → Money in.',
+  },
+};
+
+/* ── Demand: requests and orders by the day they were made ─────────── */
+// Requests are landscape demand (blue), orders are shop demand (orange): identity follows the stream
+const DEMAND_SERIES = [
+  { ...SERIES.landscape, key: 'requests', label: 'Booking requests' },
+  { ...SERIES.ecommerce, key: 'orders', label: 'Shop orders' },
+];
+// What became of the requests: one hue, ordinal (validated --ordinal), cancelled in neutral gray
+const OUTCOMES = [
+  { key: 'confirmed', label: 'Confirmed', color: '#1c5cab' },
+  { key: 'waiting', label: 'Still waiting', color: '#86b6ef' },
+  { key: 'cancelled', label: 'Cancelled', color: '#898781' },
+];
+const count = (v) => Number(v || 0).toLocaleString('en-PH');
+
+function OutcomeBar({ demand, tooltip }) {
+  const parts = OUTCOMES.map((o) => ({ ...o, value: demand[o.key], pct: demand[`${o.key}_pct`] }));
+  const tip = (p) => <TooltipRows title="Booking requests made in this range"
+    rows={[{ label: p.label, value: `${count(p.value)} · ${p.pct ?? 0}%`, color: p.color }]} />;
+  return (
+    <div>
+      <div className="ia-share" role="img"
+        aria-label={parts.map((p) => `${p.label} ${p.value} (${p.pct ?? 0}%)`).join(', ')}>
+        {!demand.requests ? <div className="ia-share-empty" /> : parts.filter((p) => p.value > 0).map((p) => (
+          <div key={p.key} className="ia-share-seg" tabIndex={0} style={{ flexGrow: p.value, background: p.color }}
+            onPointerMove={(e) => tooltip.show(e, tip(p))} onFocus={(e) => tooltip.show(e, tip(p))}
+            onPointerLeave={tooltip.hide} onBlur={tooltip.hide} />
+        ))}
+      </div>
+      <div className="ia-legend ia-legend-share">
+        {parts.map((p) => (
+          <div key={p.key} className="ia-legend-item">
+            <span className="ia-swatch" style={{ background: p.color }} />
+            <span>{p.label}</span>
+            <strong>{p.pct === null || p.pct === undefined ? '—' : `${p.pct}%`}</strong>
+            <span className="ia-muted">{count(p.value)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DemandCard({ data, compare, tooltip }) {
+  const [showTable, setShowTable] = useState(false);
+  const d = data.demand;
+  return (
+    <div className="ia-card ia-section">
+      <div className="ia-section-head">
+        <div>
+          <h3>Demand</h3>
+          <p className="ia-muted">New booking requests and shop orders, by the day they were made, per {data.granularity}. An early sign of the income to come.</p>
+        </div>
+        <div className="ia-actions">
+          <button className="ia-ghost-btn" onClick={() => setShowTable((v) => !v)}>
+            {showTable ? <><BarChart3 size={14} /> View chart</> : <><Table2 size={14} /> View table</>}
+          </button>
+        </div>
+      </div>
+
+      <div className="ia-tiles ia-tiles-compact">
+        <StatTile label="Booking requests" swatch={SERIES.landscape.color} value={count(d.requests)}
+          delta={d.requests_change_pct} compare={compare} />
+        <StatTile label="Confirmed" value={d.confirmed_pct === null ? '—' : `${d.confirmed_pct}%`}
+          sub={`${count(d.confirmed)} of ${count(d.requests)} requests`} />
+        <StatTile label="Cancelled" value={d.cancelled_pct === null ? '—' : `${d.cancelled_pct}%`}
+          sub={`${count(d.cancelled)} of ${count(d.requests)} requests`} />
+        <StatTile label="Shop orders" swatch={SERIES.ecommerce.color} value={count(d.orders)}
+          delta={d.orders_change_pct} compare={compare} sub="Not cancelled" />
+      </div>
+
+      <h4 className="ia-subhead">What became of the requests</h4>
+      <OutcomeBar demand={d} tooltip={tooltip} />
+      <p className="ia-muted ia-footnote">Each request&apos;s status today: recent ones may simply not be confirmed yet.</p>
+
+      <div style={{ marginTop: 20 }}>
+        {showTable
+          ? <TrendTable data={data.trend} granularity={data.granularity} series={DEMAND_SERIES} fmt={count} total={false} />
+          : <TrendChart data={data.trend} granularity={data.granularity} tooltip={tooltip} series={DEMAND_SERIES}
+              fmt={count} fmtAxis={count} integer legend label="Booking requests and shop orders per period" />}
+      </div>
+    </div>
+  );
+}
+
 /* ═══ Main component ═══════════════════════════════════════════════════ */
 export default function IncomeAnalytics() {
   const { authTokens } = useAuth();
@@ -402,6 +553,7 @@ export default function IncomeAnalytics() {
   const refetching = !!authTokens && loadedRange !== range;
   const [error, setError] = useState('');
   const [showTable, setShowTable] = useState(false);
+  const [measure, setMeasure] = useState('earned');
   const tooltip = useTooltip();
 
   useEffect(() => {
@@ -451,20 +603,27 @@ export default function IncomeAnalytics() {
 
           {/* KPI tiles */}
           <div className="ia-tiles">
-            <StatTile hero label="Total earned income"
+            <StatTile hero label="Earned"
               value={peso(data.landscape.earned + data.ecommerce.earned)}
-              sub={`${data.landscape.earned_count + data.ecommerce.earned_count} completed jobs & paid orders`} />
-            <StatTile label="Landscape services" swatch={SERIES.landscape.color}
+              sub={`${data.landscape.earned_count + data.ecommerce.earned_count} signed-off jobs & paid orders, counted in full whether paid or not`} />
+            <StatTile hero label="Collected"
+              value={peso(data.collected.total)} delta={data.collected.total_change_pct} compare={rangeMeta.compare}
+              sub={`Money actually received, net of refunds · ${peso(data.collected.landscape.amount)} projects · ${peso(data.collected.ecommerce.amount)} shop`} />
+            <StatTile label="Owed on finished jobs · now"
+              value={peso(data.owed.finished)}
+              sub={`${data.owed.finished_count} finished project${data.owed.finished_count === 1 ? '' : 's'} not fully paid · ${peso(data.owed.open)} more on ${data.owed.open_count} open projects, not due yet`}
+              link={data.owed.finished_count ? { to: '/manage-projects?scope=finished&owing=1', label: 'See who owes →' } : null} />
+            <StatTile label="Pending pipeline · now"
+              value={peso(data.landscape.pipeline + data.ecommerce.pipeline)}
+              sub={`${peso(data.landscape.pipeline)} in ${data.landscape.pipeline_count} open projects · ${peso(data.ecommerce.pipeline)} in ${data.ecommerce.pipeline_count} unpaid orders (any date; the range doesn't change it)`} />
+            <StatTile label="Earned · Landscape services" swatch={SERIES.landscape.color}
               value={peso(data.landscape.earned)} delta={data.landscape.earned_change_pct}
               compare={rangeMeta.compare}
               sub={`${data.landscape.earned_count} completed · avg ${peso(data.landscape.avg_value)} per project`} />
-            <StatTile label="E-commerce" swatch={SERIES.ecommerce.color}
+            <StatTile label="Earned · E-commerce" swatch={SERIES.ecommerce.color}
               value={peso(data.ecommerce.earned)} delta={data.ecommerce.earned_change_pct}
               compare={rangeMeta.compare}
               sub={`${data.ecommerce.earned_count} paid orders · avg ${peso(data.ecommerce.avg_value)} per order`} />
-            <StatTile label="Pending pipeline"
-              value={peso(data.landscape.pipeline + data.ecommerce.pipeline)}
-              sub={`${peso(data.landscape.pipeline)} in open projects · ${peso(data.ecommerce.pipeline)} in unpaid orders`} />
           </div>
 
           {data.landscape.unpriced_count > 0 && (
@@ -478,14 +637,31 @@ export default function IncomeAnalytics() {
             </div>
           )}
 
+          {data.landscape.finish_date_estimated_count > 0 && (
+            <div className="ia-notice">
+              <AlertTriangle size={16} />
+              <span>
+                <strong>{data.landscape.finish_date_estimated_count} finished project{data.landscape.finish_date_estimated_count > 1 ? 's are' : ' is'} dated by the scheduled start</strong>
+                {' '}because {data.landscape.finish_date_estimated_count > 1 ? 'they were' : 'it was'} finished before sign-off dates were recorded.
+                Projects signed off from now on count on the day they&apos;re signed off.
+              </span>
+            </div>
+          )}
+
           {/* Share + trend */}
           <div className="ia-card ia-section">
             <div className="ia-section-head">
               <div>
                 <h3>Income comparison</h3>
-                <p className="ia-muted">Earned income by service, per {data.granularity}</p>
+                <p className="ia-muted">{MEASURES[measure].label} {measure === 'earned' ? 'income' : 'money'} by service, per {data.granularity}</p>
               </div>
               <div className="ia-actions">
+                <div className="ia-segmented ia-segmented-sm" role="tablist" aria-label="Measure">
+                  {Object.entries(MEASURES).map(([k, mm]) => (
+                    <button key={k} role="tab" aria-selected={measure === k}
+                      className={measure === k ? 'ia-seg-active' : ''} onClick={() => setMeasure(k)}>{mm.label}</button>
+                  ))}
+                </div>
                 <button className="ia-ghost-btn" onClick={() => setShowTable((v) => !v)}>
                   {showTable ? <><BarChart3 size={14} /> View chart</> : <><Table2 size={14} /> View table</>}
                 </button>
@@ -496,14 +672,21 @@ export default function IncomeAnalytics() {
               </div>
             </div>
 
-            <ShareBar landscape={data.landscape.earned} ecommerce={data.ecommerce.earned} tooltip={tooltip} />
+            <p className="ia-muted ia-footnote ia-measure-note">{MEASURES[measure].note}</p>
+
+            <ShareBar tooltip={tooltip} title={MEASURES[measure].share}
+              landscape={measure === 'earned' ? data.landscape.earned : data.collected.landscape.amount}
+              ecommerce={measure === 'earned' ? data.ecommerce.earned : data.collected.ecommerce.amount} />
 
             <div style={{ marginTop: 24 }}>
               {showTable
-                ? <TrendTable data={data.trend} granularity={data.granularity} />
-                : <TrendChart data={data.trend} granularity={data.granularity} tooltip={tooltip} />}
+                ? <TrendTable data={data.trend} granularity={data.granularity} series={MEASURES[measure].series} />
+                : <TrendChart data={data.trend} granularity={data.granularity} tooltip={tooltip}
+                    series={MEASURES[measure].series} label={MEASURES[measure].chartLabel} />}
             </div>
           </div>
+
+          <DemandCard data={data} compare={rangeMeta.compare} tooltip={tooltip} />
 
           {/* Breakdowns */}
           <div className="ia-grid-3">
@@ -530,12 +713,12 @@ export default function IncomeAnalytics() {
           <div className="ia-grid-2">
             <div className="ia-card ia-section">
               <h3>Fulfilment & satisfaction</h3>
-              <p className="ia-muted">Completion rate for this period · ratings are all-time</p>
+              <p className="ia-muted">Of the work dated in this period up to today: how much is done. Work booked for later isn&apos;t due yet and isn&apos;t counted. Ratings are all-time.</p>
               <div className="ia-health-grid">
                 <ServiceHealth series={SERIES.landscape} stats={data.landscape}
-                  rating={data.satisfaction.landscape} doneLabel="completed" openLabel="in progress" />
+                  rating={data.satisfaction.landscape} doneLabel="completed" openLabel="still open" />
                 <ServiceHealth series={SERIES.ecommerce} stats={data.ecommerce}
-                  rating={data.satisfaction.ecommerce} doneLabel="paid" openLabel="unpaid" />
+                  rating={data.satisfaction.ecommerce} doneLabel="paid" openLabel="still unpaid" />
               </div>
             </div>
             <div className="ia-card ia-section">
@@ -590,6 +773,15 @@ const IA_STYLES = `
 .ia-tile-value { font-size: 26px; font-weight: 650; margin: 6px 0 4px; letter-spacing: -0.01em; }
 .ia-tile-hero .ia-tile-value { font-size: 34px; }
 .ia-tile-sub { font-size: 12px; color: var(--ia-muted); line-height: 1.45; }
+.ia-tile-link { display: inline-block; margin-top: 6px; font-size: 12px; font-weight: 700; color: #047857; text-decoration: none; }
+.ia-tile-link:hover { text-decoration: underline; }
+.ia-tiles-compact { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.ia-tiles-compact .ia-tile { padding: 12px 14px; border-color: var(--ia-grid); }
+.ia-tiles-compact .ia-tile-value { font-size: 22px; }
+.ia-subhead { margin: 4px 0 10px; font-size: 13px; font-weight: 700; color: var(--ia-text-2); }
+.ia-section p.ia-footnote { margin: 8px 0 0; font-size: 12px; }
+.ia-section p.ia-measure-note { margin: 0 0 14px; }
+.ia-segmented-sm button { padding: 5px 12px; font-size: 12px; }
 .ia-delta { display: flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 700; margin-bottom: 4px; }
 .ia-delta .ia-muted { font-weight: 500; margin-left: 4px; }
 .ia-up { color: var(--ia-good); }

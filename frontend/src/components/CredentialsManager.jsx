@@ -1,6 +1,7 @@
 import React, { useEffect, useEffectEvent, useState } from 'react';
 import { Plus, FileText, Trash2, Pencil, X, AlertTriangle, EyeOff, ExternalLink } from 'lucide-react';
 import { listCredentials, saveCredential, deleteCredential } from '../services/api';
+import { DOCUMENT_ACCEPT, documentProblem } from '../services/fileCheck';
 
 /*
  * Office admin: the business's permits, registrations and awards shown on the
@@ -122,6 +123,8 @@ function CredentialForm({ initial, onClose, onSaved, flash }) {
   const [form,       setForm]       = useState(initial);
   const [file,       setFile]       = useState(null);
   const [removeFile, setRemoveFile] = useState(false);
+  const [fileProblem, setFileProblem] = useState('');   // why the picked file was refused
+  const [fileKey,    setFileKey]    = useState(0);      // bumped to clear a refused file from the input
   const [busy,       setBusy]       = useState(false);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
@@ -195,7 +198,15 @@ function CredentialForm({ initial, onClose, onSaved, flash }) {
                 {' · '}<button type="button" onClick={() => setRemoveFile(true)} className="text-red-600 bg-transparent border-none p-0 cursor-pointer text-xs">remove</button>
               </p>
             )}
-            <input type="file" accept=".pdf,image/jpeg,image/png,image/webp" onChange={e => { setFile(e.target.files?.[0] || null); setRemoveFile(false); }} className="text-xs w-full" />
+            <input key={fileKey} type="file" accept={DOCUMENT_ACCEPT} onChange={async (e) => {
+              const picked = e.target.files?.[0] || null;
+              // Checked by its bytes: these can be shown on the public site, so a renamed file never gets in
+              const problem = picked ? await documentProblem(picked) : null;
+              setFileProblem(problem || '');
+              if (problem) { setFile(null); setFileKey(k => k + 1); return; }
+              setFile(picked); setRemoveFile(false);
+            }} className="text-xs w-full" />
+            {fileProblem && <p role="alert" className="m-0 mt-1 text-xs font-semibold text-red-700">{fileProblem}</p>}
             <label className="flex items-center gap-2 text-xs text-slate-600 mt-1.5 cursor-pointer">
               <input type="checkbox" checked={form.show_document} onChange={e => set('show_document', e.target.checked)} /> Let visitors view the document
             </label>

@@ -25,7 +25,8 @@ export default function StudioFunnelCard() {
             <Box size={18} color="#10b981" /> Free 3D Studio funnel
           </h3>
           <p style={{ margin: '4px 0 0', fontSize: 13, color: '#64748b' }}>
-            Visitors who tried the Studio without an account, and what they did next. Each step counts once per visit.
+            Visits that opened the Studio without an account in this period, and what those same visits did next.
+            Each step counts once per visit; percentages are of the visits that opened it. Steps are optional, so they don&apos;t have to shrink in order.
           </p>
         </div>
         <div style={{ display: 'flex', gap: 4, background: '#f1f5f9', padding: 4, borderRadius: 10 }}>
@@ -59,7 +60,7 @@ export default function StudioFunnelCard() {
           <p style={{ margin: '16px 0 0', fontSize: 14, color: '#334155' }}>
             {data.conversion_rate === null
               ? 'No Studio visits recorded in this period yet.'
-              : <>Studio → account conversion: <b style={{ color: '#047857' }}>{data.conversion_rate}%</b> of visitors signed up or signed in.</>}
+              : <>Studio → account conversion: <b style={{ color: '#047857' }}>{data.conversion_rate}%</b> ({data.converted} of {data.steps[0].count} visits signed up or signed in).</>}
           </p>
         </>
       )}
