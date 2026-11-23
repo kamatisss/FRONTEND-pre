@@ -32,7 +32,8 @@ export function mirrorEdit(prev, next, width) {
   const after = new Map(next.filter(live).map((p) => [p.uid, p]));
   const changed = [...before.keys()].filter((u) => {
     const a = before.get(u), b = after.get(u);
-    return !b || String(a.plant_id) !== String(b.plant_id) || a.x !== b.x || a.z !== b.z || (a.rotation || 0) !== (b.rotation || 0);
+    return !b || String(a.plant_id) !== String(b.plant_id) || a.x !== b.x || a.z !== b.z || (a.rotation || 0) !== (b.rotation || 0)
+      || (a.size || '') !== (b.size || '');
   });
   if (changed.length !== 1 || [...after.keys()].some((u) => !before.has(u))) return none;
   const uid = changed[0];
@@ -48,5 +49,14 @@ export function mirrorEdit(prev, next, width) {
     update = { ...update, x: Math.round((width - Number(now.x)) * 1000) / 1000, z: now.z };
   }
   if ((old.rotation || 0) !== (now.rotation || 0)) update.rotation = (360 - (Number(now.rotation) || 0)) % 360;
-  return { plants: next.map((p) => (p.uid === partner.uid ? { ...p, ...update } : p)), partner };
+  const resized = (old.size || '') !== (now.size || '');   // specimen ↔ standard size: the pair stays matched
+  return {
+    plants: next.map((p) => {
+      if (p.uid !== partner.uid) return p;
+      const out = { ...p, ...update };
+      if (resized) { delete out.size; if (now.size) out.size = now.size; }
+      return out;
+    }),
+    partner,
+  };
 }

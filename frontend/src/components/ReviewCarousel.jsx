@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Star, ShieldCheck, ChevronLeft, ChevronRight, Quote, MessageCircle, ArrowRight, Pin } from 'lucide-react';
+import { Star, ShieldCheck, ChevronLeft, ChevronRight, Quote, MessageCircle, ArrowRight, Pin, MessageSquareQuote } from 'lucide-react';
+import SectionEyebrow from './SectionEyebrow';
 import { getReviewHighlights } from '../services/api';
 
 /*
@@ -46,8 +47,8 @@ function Summary({ label, data }) {
       </div>
       <div className="gs-rc-bars" aria-label={`${label} rating distribution`}>
         {Object.entries(data.distribution).map(([star, count]) => (
-          <div key={star} className="gs-rc-bar-row" title={`${count} × ${star}★`}>
-            <span>{star}★</span>
+          <div key={star} className="gs-rc-bar-row" title={`${count} reviews with ${star} stars`}>
+            <span className="gs-rc-bar-star">{star}<Star size={10} aria-hidden="true" /></span>
             <div className="gs-rc-bar"><div style={{ width: `${(count / max) * 100}%` }} /></div>
             <span className="gs-rc-bar-count">{count}</span>
           </div>
@@ -172,7 +173,9 @@ export default function ReviewCarousel() {
         .gs-rc-avg { font-size: 32px; font-weight: 900; color: #0f172a; letter-spacing: -1px; line-height: 1; }
         .gs-rc-summary-label { font-size: 12px; color: #64748b; margin: 2px 0 0; font-weight: 600; }
         .gs-rc-bars { display: flex; flex-direction: column; gap: 3px; }
-        .gs-rc-bar-row { display: grid; grid-template-columns: 22px 1fr 34px; align-items: center; gap: 6px; font-size: 11px; color: #64748b; font-weight: 600; }
+        .gs-rc-bar-star { display: inline-flex; align-items: center; gap: 2px; }
+        .gs-rc-bar-star svg { color: #10b981; fill: #10b981; }
+        .gs-rc-bar-row { display: grid; grid-template-columns: 26px 1fr 34px; align-items: center; gap: 6px; font-size: 11px; color: #64748b; font-weight: 600; }
         .gs-rc-bar { height: 6px; background: #f1f5f9; border-radius: 99px; overflow: hidden; }
         .gs-rc-bar > div { height: 100%; background: #10b981; border-radius: 99px; }
         .gs-rc-bar-count { text-align: right; }
@@ -257,7 +260,7 @@ export default function ReviewCarousel() {
       <div className="gs-container">
         <div className="gs-rc-head">
           <div>
-            <div className="gs-section-eyebrow" style={{ marginBottom: 16 }}>Customer stories</div>
+            <SectionEyebrow icon={MessageSquareQuote} label="Customer stories" />
             <h2 className="gs-section-title" style={{ margin: 0 }}>Loved by homeowners</h2>
             <p style={{ fontSize: 16, color: '#64748b', maxWidth: 460, margin: '12px 0 0', lineHeight: 1.65 }}>
               Real reviews from finished garden projects and delivered shop orders.

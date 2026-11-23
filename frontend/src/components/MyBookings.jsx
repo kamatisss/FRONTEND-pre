@@ -14,38 +14,20 @@ import AddressPicker from './AddressPicker';
 import { addressReady, toPayload, rememberAddress, firstError } from '../data/address';
 
 import { CustomerDesignApproval } from './DesignApproval';
+import { projectProgress } from '../data/customerDashboard';
 import { useMe, phoneDiffers, saveMyPhone } from '../services/me';
 import SavePhoneToggle from './ui/SavePhoneToggle';
 import { normalizePhMobile } from '../services/checkout';
-const getActiveStep = (status, hasDesign) => {
-    switch (status) {
-        case 'Pending':
-            return hasDesign ? 3 : 1;
-        case 'Preparing':
-            return 4;
-        case 'Installing':
-        case 'For Review':  // crew finished, awaiting office sign-off
-            return 5;
-        case 'Finished':
-        case 'Completed':
-            return 6;
-        default:
-            return -1;
-    }
-};
-
-const BookingMilestoneTracker = ({ status, hasDesign }) => {
-    const activeStep = getActiveStep(status, hasDesign);
-    
-    const steps = [
-        { label: 'Request Submitted', desc: 'Booking request sent' },
-        { label: 'AI Layout Created', desc: 'AI design generated' },
-        { label: 'Staff Review', desc: 'Reviewing layout details' },
-        { label: 'Finalized Studio Plan', desc: 'Ready in 3D Studio' },
-        { label: 'Dispatched', desc: 'Crew prepared & routed' },
-        { label: 'Work in Progress', desc: 'Installation active on site' },
-        { label: 'Completed', desc: 'Project signed off' }
-    ];
+// Same stages as the dashboard (data/customerDashboard.js projectProgress): the furthest of the office's
+// project stage and the crew's booking status; Design only for jobs with a design; consultations are
+// Requested → Visit → Done. A finished job shows every step done.
+const BookingMilestoneTracker = ({ booking }) => {
+    const status = booking.status;
+    const progress = projectProgress(booking);
+    const finished = progress.phase.key === 'done';
+    const activeStep = finished ? progress.steps.length : progress.index;
+    const steps = progress.steps.map(st => ({ label: st.label }));
+    const caption = progress.help; // the stage itself is in the labels (phones: the line above) and the Project stage box
 
     if (status === 'Cancelled') {
         return (
@@ -97,7 +79,7 @@ const BookingMilestoneTracker = ({ status, hasDesign }) => {
                             position: 'absolute',
                             top: '20px',
                             left: '7%',
-                            width: `${(activeStep / (steps.length - 1)) * 86}%`,
+                            width: `${(Math.min(activeStep, steps.length - 1) / (steps.length - 1)) * 86}%`,
                             height: '4px',
                             background: '#059669',
                             zIndex: 1,
@@ -180,28 +162,19 @@ const BookingMilestoneTracker = ({ status, hasDesign }) => {
                                 }}>
                                     {step.label}
                                 </div>
-                                <div className="stepper-desc" style={{
-                                    fontSize: '0.7rem',
-                                    color: '#94A3B8',
-                                    fontWeight: 500,
-                                }}>
-                                    {step.desc}
-                                </div>
+
                             </div>
                         </div>
                     );
                 })}
             </div>
-            {activeStep >= 0 && (
-                <div className="stepper-mobile-caption" style={{ display: 'none', marginTop: '12px', textAlign: 'center' }}>
-                    <div style={{ fontSize: '0.8rem', fontWeight: 800, color: '#059669' }}>
-                        Step {Math.min(activeStep + 1, steps.length)} of {steps.length} · {steps[Math.min(activeStep, steps.length - 1)].label}
-                    </div>
-                    <div style={{ fontSize: '0.72rem', color: '#64748B', fontWeight: 500, marginTop: '2px' }}>
-                        {steps[Math.min(activeStep, steps.length - 1)].desc}
-                    </div>
+            {/* What this step means for the customer (phones also get "Step N of M") */}
+            <div style={{ marginTop: '14px', textAlign: 'center' }}>
+                <div className="stepper-mobile-caption" style={{ display: 'none', fontSize: '0.8rem', fontWeight: 800, color: '#059669' }}>
+                    {finished ? `All ${steps.length} steps done` : `Step ${activeStep + 1} of ${steps.length} · ${progress.stage}`}
                 </div>
-            )}
+                <div style={{ fontSize: '0.8rem', color: '#475569', fontWeight: 500, marginTop: '2px' }}>{caption}</div>
+            </div>
         </div>
     );
 };
@@ -569,6 +542,7 @@ const MyBookings = () => {
     const [bookings,         setBookings]         = useState([]);
     const [loading,          setLoading]          = useState(true);
     const [reviewedIds,      setReviewedIds]      = useState(new Set());
+    const [reviewsChecked,   setReviewsChecked]   = useState(false); // ?rate= waits for this
     const [ratingModal,      setRatingModal]      = useState(null); // bookingId or null
     const [reviewSuccessIds, setReviewSuccessIds] = useState(new Set());
     const [showNewBookingModal, setShowNewBookingModal] = useState(false);
@@ -577,6 +551,14 @@ const MyBookings = () => {
     const location = useLocation();
     // The "final design is ready" notification links here with ?review=<booking id>
     const reviewParam = new URLSearchParams(location.search).get('review');
+    // The dashboard's "Leave a review" links here with ?rate=<booking id>
+    const rateParam = Number(new URLSearchParams(location.search).get('rate')) || null;
+    const [rateOpened, setRateOpened] = useState(false);
+    if (rateParam && !rateOpened && !loading && reviewsChecked) {
+        const target = bookings.find(b => b.id === rateParam && ['Finished', 'Completed'].includes(b.status));
+        setRateOpened(true);
+        if (target && !reviewedIds.has(target.id)) setRatingModal(target.id);
+    }
 
     // Automatically open the booking modal if user is redirected from AI Designer page
     useEffect(() => {
@@ -616,6 +598,7 @@ const MyBookings = () => {
                 setReviewedIds(new Set(data.map(r => r.booking)));
             }
         } catch { /* non-critical */ }
+        setReviewsChecked(true);
     };
 
     const fetchMyPortfolio = async () => {
@@ -797,7 +780,7 @@ const MyBookings = () => {
                 </div>
 
                 {/* Milestone Tracker */}
-                <BookingMilestoneTracker status={b.status} hasDesign={!!(b.design || b.design_details)} />
+                <BookingMilestoneTracker booking={b} />
 
                 {/* Final design to approve (design_review.py) */}
                 <CustomerDesignApproval booking={b} initiallyOpen={reviewParam === String(b.id)}

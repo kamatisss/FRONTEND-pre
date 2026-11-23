@@ -20,6 +20,7 @@ import { grownHeight, layoutSpacing } from '../data/pricing';
 import { setSway } from '../data/plantSway';
 import PlacedObject from './PlacedObject';
 import AssetLibrarySidebar from './AssetLibrarySidebar';
+import StudioItemPanel from './StudioItemPanel';
 import StudioItemTray from './StudioItemTray';
 import ProjectSummaryPanel from './ProjectSummaryPanel';
 import SaveLoadPanel from './SaveLoadPanel';
@@ -31,6 +32,7 @@ import StudioAITeaser from './StudioAITeaser';
 import { useIsPhone } from './ui/useMediaQuery';
 import { saveStudioDraft, loadStudioDraft, clearStudioDraft, trackFunnel } from '../services/guestSession';
 import { DEFAULT_TIME_OF_DAY, TIME_PRESETS } from '../data/studioLight';
+import { sunDirection, SUN_SEASONS, surveyFacing } from '../data/sunPath';
 import { MEDIA_BASE_URL as MEDIA_ROOT } from '../config';
 import { PHOTO_ACCEPT, photoProblem } from '../services/fileCheck';
 
@@ -87,7 +89,14 @@ function getSkyColors(t) {
   };
 }
 
-function getSunPosition(timeOfDay) {
+// solar: { day, facing } puts the sun on its real path over this yard (data/sunPath.js: Quezon's latitude,
+// the backend's sun path), so the shadows fall where they will; facing null = the back taken to face north.
+// The Studio's lot is centred on the origin with the same axes as the lot (back of the yard at −z).
+function getSunPosition(timeOfDay, solar = null) {
+  if (solar) {
+    const d = sunDirection(timeOfDay, solar.day, solar.facing ?? 0);
+    return [d.dx * 100, d.dy * 100, d.dz * 100];
+  }
   // 12:00 -> elevation 90 (straight up)
   // 06:00 -> elevation 0 (horizon)
   // 18:00 -> elevation 0 (horizon)
@@ -161,7 +170,7 @@ function LotFraming({ width, length, onFogRange }) {
   return null;
 }
 
-function SkyDome({ timeOfDay }) {
+function SkyDome({ timeOfDay, solar = null }) {
   const materialRef = useRef();
   const [uniforms] = useState(() => ({
     top: { value: new THREE.Color() }, horizon: { value: new THREE.Color() },
@@ -171,14 +180,14 @@ function SkyDome({ timeOfDay }) {
     const u = materialRef.current?.uniforms;
     if (!u) return;
     const { sky, horizon } = getSkyColors(timeOfDay);
-    const [x, y, z] = getSunPosition(timeOfDay);
+    const [x, y, z] = getSunPosition(timeOfDay, solar);
     u.top.value.copy(sky);
     u.horizon.value.copy(horizon);
     u.sunDir.value.set(x, y, z).normalize();
     const elevation = y / 100;
     u.sunGlow.value = THREE.MathUtils.clamp((elevation + 0.05) * 6, 0, 1);
     u.sunColor.value.set(elevation > 0.35 ? '#fff4e0' : '#ffc890');
-  }, [timeOfDay]);
+  }, [timeOfDay, solar]);
   return (
     <mesh renderOrder={-1} frustumCulled={false}>
       <sphereGeometry args={[400, 32, 16]} />
@@ -191,7 +200,7 @@ function SkyDome({ timeOfDay }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // SUN LIGHT
 // ─────────────────────────────────────────────────────────────────────────────
-function SunLight({ timeOfDay = DEFAULT_TIME_OF_DAY }) {
+function SunLight({ timeOfDay = DEFAULT_TIME_OF_DAY, solar = null }) {
   const lightRef = useRef();
   useFrame(() => {
     if (!lightRef.current) return;
@@ -200,7 +209,11 @@ function SunLight({ timeOfDay = DEFAULT_TIME_OF_DAY }) {
     lightRef.current.intensity = Math.max(0, sunIntensity);
     lightRef.current.color.copy(ambient).lerp(new THREE.Color('#fffaf0'), 0.7);
   });
-  const position = useMemo(() => getSunPosition(timeOfDay), [timeOfDay]);
+  // (the light itself stays just above the ground: a sun under the horizon would light the plants from below)
+  const position = useMemo(() => {
+    const [x, y, z] = getSunPosition(timeOfDay, solar);
+    return [x, Math.max(2, y), z];
+  }, [timeOfDay, solar]);
   const { sunIntensity } = useMemo(() => getSkyColors(timeOfDay), [timeOfDay]);
   return (
     <directionalLight
@@ -536,6 +549,7 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
 
   // The customer's lot: drawn in 3D, enforced for placement, used by the estimate (data/lot.js)
   const lot = lotOf(state.dimensions);
+  const selectedItem = state.selectedItemId ? state.placedItems.find(i => i.id === state.selectedItemId) : null;
   // The placed plants for the groundcover's shade (lot metres from the back-left corner; grown height and spread)
   const groundPlants = useMemo(() => {
     const W = lot.width, L = lot.length;
@@ -546,6 +560,12 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
   }, [state.placedItems, state.products, lot.width, lot.length]);
   const [fogRange, setFogRange] = useState([18, 55]);   // follows the lot framing (LotFraming)
   const [showGrid, setShowGrid] = useState(false);
+  // The sun's real path over the yard: the season picked in the Light drawer (a view setting) and the facing
+  // marked in Mark your yard (dimensions.sunFacing, carried from the AI Designer; null = north assumed)
+  const [sunSeason, setSunSeason] = useState('mar');
+  const sunFacing = state.dimensions?.sunFacing ?? surveyFacing(state.dimensions?.siteSurvey);
+  const sunDay = SUN_SEASONS.find(x => x.key === sunSeason)?.day ?? 80;
+  const solar = useMemo(() => ({ day: sunDay, facing: sunFacing }), [sunDay, sunFacing]);
   const [lawnLook, setLawnLook] = useLawnLook();   // how long the grass looks (remembered in this browser)
   const outside = itemsOutsideLot(state.placedItems, lot);
   // A shaped yard: only items beyond the whole lot can be fixed by enlarging it
@@ -761,6 +781,25 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
                   <input type="range" min="6" max="20" step="0.1" value={state.timeOfDay}
                     onChange={e => dispatch({ type: 'SET_TIME_OF_DAY', payload: +e.target.value })}
                     style={S.sliderInput} aria-label="Time of day" />
+                  <div role="radiogroup" aria-label="Time of year" style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+                    {SUN_SEASONS.map(x => {
+                      const on = sunSeason === x.key;
+                      return (
+                        <button key={x.key} type="button" role="radio" aria-checked={on} aria-label={x.label}
+                          onClick={() => setSunSeason(x.key)}
+                          style={{ flex: 1, minHeight: 36, borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: 'pointer',
+                            border: on ? '1.5px solid #6ee7b7' : '1px solid #E5E7EB', background: on ? '#ECFDF5' : '#fff',
+                            color: on ? '#065F46' : '#4B5563' }}>
+                          {x.short}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p style={{ margin: '8px 0 0', fontSize: 12, lineHeight: 1.45, color: '#6B7280' }}>
+                    {sunFacing != null
+                      ? 'The real sun over your yard: its shadows fall where they will. Move the years slider to see the shade grow.'
+                      : 'The real sun at our latitude, with the back of the yard taken to face north. Designs from the AI Designer bring the direction you marked.'}
+                  </p>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 6, marginTop: 10 }}>
                     {TIME_PRESETS.map(p => {
                       const on = Math.abs(state.timeOfDay - p.hour) < 0.2;
@@ -859,12 +898,12 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
                 if (!isPlacing) dispatch({ type: 'DESELECT_ALL' });
               }}
             >
-              <SkyDome timeOfDay={state.timeOfDay} />
+              <SkyDome timeOfDay={state.timeOfDay} solar={solar} />
 
               <fog attach="fog" args={[getSkyColors(state.timeOfDay).fog, fogRange[0], fogRange[1]]} />
 
               <DynamicAmbience timeOfDay={state.timeOfDay} />
-              <SunLight timeOfDay={state.timeOfDay} />
+              <SunLight timeOfDay={state.timeOfDay} solar={solar} />
               {/* Removed the secondary static directionalLight to let SunLight and Environment control lighting */}
               {/* Reflections only: at full strength the "park" map washed the whole garden out */}
               <SwayClock />
@@ -953,6 +992,12 @@ export default function GardenDesigner({ guest = false, onGate = () => {} }) {
               <GrowthStagePicker value={state.growthStage} short={phone}
                 onChange={(key) => dispatch({ type: 'SET_GROWTH_STAGE', payload: key })} />
             </div>
+          )}
+
+          {/* The selected item's details and Move / Turn / Remove, docked outside the plant (a sheet on phones;
+              hidden there while a tool drawer is open) */}
+          {!isPlacing && selectedItem && !(phone && openDrawer) && (
+            <StudioItemPanel key={selectedItem.id} item={selectedItem} lot={lot} phone={phone} />
           )}
 
           {/* Placement controls overlay */}

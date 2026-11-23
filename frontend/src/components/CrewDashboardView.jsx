@@ -17,7 +17,10 @@ import PushAlertsCard from './PushAlertsCard';
 import { SERVICE, TIME, TIME_SHORT, statusOf, dayLabel, clockTime, groupJobs, navUrl, telOf, todayIso } from '../data/crewJobs';
 import { API_BASE_URL as API_ROOT } from '../config';
 import OutboxBar from '../crew/OutboxBar';
-import { useOutbox } from '../crew/useOutbox';
+import JobChangesCard from '../crew/JobChangesCard';
+import { reportSync } from '../crew/syncReport';
+import { useOutbox, useJobPack } from '../crew/useOutbox';
+import { autoPackAllowed, packJobs, packedWorkOrder } from '../crew/jobPack';
 import { cachedGet, flushOutbox, sendAction, withPendingAttendance, withPendingDeliveries } from '../crew/outbox';
 
 import SettingOutPlan from './SettingOutPlan';
@@ -89,7 +92,7 @@ function Empty({ icon: Icon, title, sub }) {
 
 export default function CrewDashboardView({
   bookings, loading, serverAttendance, refreshActiveAttendance, authTokens, user, actionLoading, toast,
-  updateBookingStatus, reloadBookings, savedAt,
+  reloadBookings, savedAt,   // sign-off goes through the outbox (submitForSignOff), not updateBookingStatus
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -190,20 +193,68 @@ export default function CrewDashboardView({
     return () => { window.removeEventListener('offline', goOffline); window.removeEventListener('online', goOnline); };
   }, [toast, reloadBookings, fetchDeliveries, refreshActiveAttendance]);
 
-  const handleDownloadJobSheet = async (bookingId) => {
+  // Tell the office what this phone still holds (crew/syncReport.js): whenever there's signal and the outbox
+  // changes, and every few minutes while the app is open (it skips repeats itself)
+  useEffect(() => {
+    if (!online) return undefined;
+    reportSync();
+    const timer = setInterval(() => reportSync(), 5 * 60 * 1000);
+    const onVisible = () => { if (document.visibilityState === 'visible') reportSync(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
+  }, [online, outbox]);
+
+  // Job pack (crew/jobPack.js): with fresh job data and signal, save what today's and tomorrow's jobs need
+  // offline (catalog, 3D models, yard photo, work order). Only jobs that changed; not on save-data phones.
+  const pack = useJobPack();
+  useEffect(() => {
+    if (!online || savedAt || !bookings?.length || !autoPackAllowed()) return;
+    packJobs(bookings).catch(() => {});
+  }, [bookings, online, savedAt]);
+  const packNow = () => {
+    if (!online) { toast('No signal. Save for offline when you have signal.', 'error'); return; }
+    packJobs(bookings, { force: true }).then((m) => {
+      const missing = Object.values(m.jobs).filter(j => !j.ready).length;
+      toast(missing ? `Saved, but ${missing} job${missing === 1 ? ' is' : 's are'} missing something. Try again on Wi-Fi.` : 'Your next jobs are saved for offline.', missing ? 'error' : undefined);
+    });
+  };
+
+  // Submit for sign-off through the outbox: with no signal it waits on the phone (after any photos still
+  // waiting) and the server checks the job again when it arrives. A refusal then shows in the outbox bar.
+  const [signingOff, setSigningOff] = useState(null);
+  const submitForSignOff = async (id) => {
+    setSigningOff(id);
     try {
-      const r = await fetch(`${API}/bookings/${bookingId}/generate_pdf/`, { headers });
-      if (!r.ok) { toast('Could not make the work order.', 'error'); return; }
-      const url = URL.createObjectURL(await r.blob());
+      const res = await sendAction({ label: `Submit job #${id} for sign-off`, path: `/bookings/${id}/update_status/`, method: 'PATCH',
+        body: { status: 'For Review' }, kind: 'sign_off', ref: { bookingId: id } });
+      if (res.queued) toast(`Saved on this phone: job #${id} goes to the office for sign-off when you have signal.`);
+      else { toast('Submitted. The office will check the work and sign it off.'); await reloadBookings?.(); }
+    } catch (e) {
+      toast(e.message || 'Could not submit for sign-off.', 'error');
+    }
+    setSigningOff(null);
+  };
+
+  const handleDownloadJobSheet = async (bookingId) => {
+    const download = (blob) => {
+      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = `work-order-${bookingId}.pdf`;
       document.body.appendChild(a);
       a.click();
       a.remove();
-      URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    };
+    try {
+      const r = await fetch(`${API}/bookings/${bookingId}/generate_pdf/`, { headers });
+      if (!r.ok) { toast('Could not make the work order.', 'error'); return; }
+      download(await r.blob());
     } catch {
-      toast('No connection: could not download the work order.', 'error');
+      // No signal: the copy saved with the job pack, if there is one
+      const saved = await packedWorkOrder(bookingId).catch(() => null);
+      if (saved) { download(saved); toast('No signal: opened the work order saved on this phone.'); }
+      else toast("No connection, and this work order isn't saved on the phone yet.", 'error');
     }
   };
 
@@ -395,9 +446,10 @@ export default function CrewDashboardView({
           )}
           <CrewJobCard booking={job} todayIso={today} activeAttendance={activeAttendance}
             refreshActiveAttendance={refreshActiveAttendance} api={API} headers={headers} toast={toast} user={user}
-            submitting={actionLoading === job.id} onSubmit={(id) => updateBookingStatus(id, 'For Review')}
+            submitting={actionLoading === job.id || signingOff === job.id} onSubmit={submitForSignOff}
             onOpenDesign={(design, view) => { setDesignModal(design); setModalView(view === true ? 'ar' : view || '3d'); }}
-            onWorkOrder={handleDownloadJobSheet} onChanged={reloadBookings} onFindIt={findJob} />
+            onWorkOrder={handleDownloadJobSheet} onChanged={reloadBookings} onFindIt={findJob}
+            pack={pack.jobs?.[job.id]} onPackNow={packNow} />
         </>
       )}
     </div>
@@ -416,7 +468,7 @@ export default function CrewDashboardView({
               <span><b>No signal.</b> Your work is saved and sent later.</span>
             </div>
             <p className="m-0 mb-4 px-1 text-xs text-slate-600 leading-snug">
-              Your jobs are saved on this phone. Starting or ending a job, photos, deliveries and problem reports are sent when the signal is back. "On my way" needs signal.
+              Your jobs are saved on this phone. Starting or ending a job, photos, stages, sign-off, deliveries and problem reports are sent, in order, when the signal is back. "On my way" can go as a text message.
             </p>
           </>
         )}
@@ -426,6 +478,7 @@ export default function CrewDashboardView({
           </p>
         )}
         <OutboxBar online={online} />
+        <JobChangesCard onOpenJob={openJob} />
         {/* Say plainly when the office can see where you are (on shift only) */}
         {onShift && (
           <p role="status" className={`m-0 mb-3 px-3 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 ${tracking.problem ? 'bg-amber-50 text-amber-800' : 'bg-emerald-50 text-emerald-800'}`}>

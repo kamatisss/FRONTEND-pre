@@ -1,11 +1,12 @@
 import * as THREE from 'three';
+import { stageYears } from './modelSizing';
 
 // ─── Growing part by part ──────────────────────────────────────────────────────
 // Uniform scaling makes a young plant a toy copy of the adult. These profiles grow the parts of
 // multi-part models the way the plant grows (models with one mesh keep simple scaling):
 //   stem:   materials of the trunk. A Christmas palm (Adonidia) gets taller by its TRUNK: its crown is
 //           nearly full size when young and changes little after, and the trunk thickens only a little.
-//   later:  parts that only appear from a stage on (flowers, fruit), with the note the height card shows.
+//   later:  parts that only appear from a year on (flowers, fruit), with the note the height card shows.
 //           A banana planted as a young sucker has no fruit yet; a young heliconia clump no flowers yet.
 //           Plumeria and peace lily are kept flowering: nurseries usually sell them in flower.
 // Checked against the part names in the .glb files (2026-11-08).
@@ -16,16 +17,22 @@ const PROFILES = {
     stemThicken: 0.15,    // trunk thickness ∝ (height ratio)^0.15
   },
   'banana_tree.glb': {
-    later: { materials: ['Buah_gedang', 'Ontong'], from: 'established',
+    later: { materials: ['Buah_gedang', 'Ontong'], fromYears: 1,
       note: 'No fruit yet: a banana fruits about 9–12 months after planting.' },
   },
+  // One-piece model (a single baked mesh): its flowers can't be hidden, so the card says when they come
+  'strelitzia.glb': {
+    later: { materials: [], fromYears: 2,
+      note: 'Shown in flower: a young strelitzia usually starts flowering in its second or third year.' },
+  },
   'heliconia_rostrata.glb': {
-    later: { materials: ['flower'], from: 'established',
+    later: { materials: ['flower'], fromYears: 1,
       note: 'No flowers yet: heliconia usually flowers from about its first year.' },
   },
 };
 
-const ORDER = { planting: 0, established: 1, mature: 2 };
+// Shown from this many years after planting (stage: years, or an old key; data/modelSizing.stageYears)
+const shownAt = (later, stage) => !later || stageYears(stage) >= (later.fromYears ?? 0);
 const fileOf = (url) => decodeURIComponent(String(url || '').split('?')[0].split('/').pop() || '');
 const matsOf = (m) => (Array.isArray(m.material) ? m.material : [m.material]).map((x) => x?.name || '');
 
@@ -35,7 +42,7 @@ export const growsByParts = (url) => !!PROFILES[fileOf(url)]?.stem;
 /** The height card's note for a stage (e.g. no fruit yet), or ''. */
 export function growthNote(url, stage) {
   const later = PROFILES[fileOf(url)]?.later;
-  return later && (ORDER[stage] ?? 1) < ORDER[later.from] ? later.note : '';
+  return later && !shownAt(later, stage) ? later.note : '';
 }
 
 /**
@@ -89,7 +96,7 @@ export function rigGrowth(object, url) {
         crownPivot.scale.setScalar(crownS);
         crownPivot.position.y = ground + newStem;
       }
-      const show = (ORDER[stage] ?? 1) >= ORDER[profile.later?.from ?? 'planting'];
+      const show = shownAt(profile.later, stage);
       later.forEach((m) => { m.visible = show; });
       object.updateMatrixWorld(true);
     },

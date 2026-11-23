@@ -115,5 +115,6 @@ export function groundcoverFor(area, products, crowns = 0) {
   const sunM2 = Math.floor(area) - shadeM2;
   return [[sun, sunM2], [shade, shadeM2]]
     .filter(([p, m2]) => p && m2 >= 1)
-    .map(([p, m2]) => ({ plant_id: String(p.id), name: p.name, area_sqm: Math.min(m2, Number(p.stock_quantity) || m2), sunlight: p.sunlight }));
+    .map(([p, m2]) => ({ plant_id: String(p.id), name: p.name, area_sqm: Math.min(m2, Number(p.stock_quantity) || m2), sunlight: p.sunlight,
+      years_to_mature: p.years_to_mature ?? null }));   // how fast it closes into a carpet (data/groundcoverField.js)
 }

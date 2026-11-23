@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { getOutbox, subscribe } from './outbox';
 import { getPhoto } from './photoStore';
+import { getPackMeta, subscribePack } from './jobPack';
+import { getChanges, subscribeChanges } from './jobChanges';
 
 /** The crew outbox (waiting and failed actions), re-rendering whenever it changes. */
 export function useOutbox() {
@@ -23,4 +25,18 @@ export function useKeptPhoto(id) {
     return () => { alive = false; if (made) URL.revokeObjectURL(made); };
   }, [id]);
   return url;
+}
+
+/** The job pack's status (crew/jobPack.js): { at, jobs: { [bookingId]: { ready, missing, saving } } }. */
+export function useJobPack() {
+  const [meta, setMeta] = useState(getPackMeta);
+  useEffect(() => subscribePack(setMeta), []);
+  return meta;
+}
+
+/** "Changed since you last checked" notices (crew/jobChanges.js). */
+export function useJobChanges() {
+  const [items, setItems] = useState(getChanges);
+  useEffect(() => subscribeChanges(setItems), []);
+  return items;
 }

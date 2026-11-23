@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, Box, Camera, MapPin, Clock } from 'lucide-react';
+import { ArrowRight, Box, Camera, MapPin, Clock, BadgeCheck } from 'lucide-react';
+import SectionEyebrow from './SectionEyebrow';
 import { getProjectShowcase } from '../services/api';
 import { CompareSlider } from './ProjectHub';
 
@@ -33,7 +34,7 @@ export default function ProofShowcase() {
     <section id="results" className="gs-proof" style={{ padding: 'clamp(56px, 8vw, 96px) 0', background: '#ffffff' }}>
       <div className="gs-container">
         <div className="gs-section-header">
-          <div className="gs-section-eyebrow" style={{ marginBottom: 16 }}>Real results</div>
+          <SectionEyebrow icon={BadgeCheck} label="Real results" center />
           <h2 className="gs-section-title">Designed in 3D. Built by our crew.</h2>
           <p style={{ fontSize: 17, color: '#64748b', maxWidth: 560, margin: '12px auto 0', lineHeight: 1.65 }}>
             Real gardens from our Project Hub. Drag the slider to compare.

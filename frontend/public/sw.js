@@ -11,6 +11,9 @@
  *      /models/*      3D models: cached the first time they're used
  *      photos, fonts  product photos, icons, Google Fonts: shown from cache, refreshed in the background
  *      API            NEVER cached here (orders, bookings, cash, reports always come from the server)
+ *      crew job pack  files the crew app saved for its next jobs (src/crew/jobPack.js: 3D models, yard
+ *                     photo, textures) in "crew-pack": used only when the network fails; the app wipes it
+ *                     on sign-out. This worker never adds to it.
  *    A new version installs in the background and waits; the app shows "New version available —
  *    Refresh" (src/pwa) and only then swaps over, so nobody is switched mid-task.
  *
@@ -25,6 +28,12 @@ const MODELS = 'models';
 const SITE = 'site';      // the site's own images, icons, manifest
 const PHOTOS = 'photos';  // public product photos from the backend
 const FONTS = 'fonts';
+const PACK = 'crew-pack';   // written by the app (src/crew/jobPack.js), only read here
+// Every lookup ignores Vary. Servers send "Vary: Origin", and the app's module scripts are requested WITH an
+// Origin header while the copies saved at install were fetched without one: a strict match never finds them,
+// and with no signal the app opened blank. Safe: build files are named by content, models and pack files
+// are fixed per link.
+const MATCH = { ignoreVary: true };
 // Cross-site responses (backend photos, Google Fonts) are "opaque": browsers count each one as
 // several MB of storage quota, so those caches stay small
 const LIMITS = { [ASSETS]: 150, [MODELS]: 40, [SITE]: 60, [PHOTOS]: 40, [FONTS]: 12 };
@@ -77,10 +86,22 @@ async function trim(cacheName) {
   for (let i = 0; i < keys.length - LIMITS[cacheName]; i++) await cache.delete(keys[i]);   // oldest first
 }
 
+// No signal: the copy the crew app saved for a job, if any
+async function fromPack(request) {
+  try { return (await (await caches.open(PACK)).match(request.url, MATCH)) || null; } catch { return null; }
+}
+
 async function cacheFirst(request, cacheName) {
-  const cached = await caches.match(request).catch(() => null);
+  const cached = await caches.match(request, MATCH).catch(() => null);
   if (cached) return cached;
-  const response = await fetch(request);
+  let response;
+  try {
+    response = await fetch(request);
+  } catch (e) {
+    const packed = await fromPack(request);
+    if (packed) return packed;
+    throw e;
+  }
   if (response.ok && response.type !== 'opaque') {
     caches.open(cacheName).then((cache) => cache.put(request, response.clone())).then(() => trim(cacheName)).catch(() => {});
   }
@@ -90,11 +111,11 @@ async function cacheFirst(request, cacheName) {
 async function staleWhileRevalidate(request, cacheName) {
   let cache;
   try { cache = await caches.open(cacheName); } catch { return fetch(request); }
-  const cached = await cache.match(request).catch(() => null);
+  const cached = await cache.match(request, MATCH).catch(() => null);
   const fresh = fetch(request).then((response) => {
     if (response.ok || response.type === 'opaque') cache.put(request, response.clone()).then(() => trim(cacheName)).catch(() => {});
     return response;
-  }).catch(() => cached || Response.error());
+  }).catch(async () => cached || await caches.match(request, MATCH).catch(() => null) || await fromPack(request) || Response.error());
   return cached || fresh;
 }
 
@@ -114,7 +135,7 @@ async function page(request) {
     return await fetch(request);
   } catch {
     // Every route is the same app (Vercel serves index.html for all of them): show the saved one
-    const shell = await caches.match('/', { cacheName: SHELL }).catch(() => null) || await caches.match('/').catch(() => null);
+    const shell = await caches.match('/', { ...MATCH, cacheName: SHELL }).catch(() => null) || await caches.match('/', MATCH).catch(() => null);
     return shell || new Response(OFFLINE_PAGE, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
   }
 }
@@ -138,6 +159,11 @@ self.addEventListener('fetch', (event) => {
   }
   if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com') {
     return event.respondWith(staleWhileRevalidate(request, FONTS));
+  }
+  // Office-uploaded 3D models and job photos: straight from the network; no signal → the crew job pack.
+  // (Never stored here: only what the crew app chose to save for its jobs.)
+  if (url.pathname.endsWith('.glb') || request.destination === 'image') {
+    return event.respondWith(fetch(request).catch(async () => (await fromPack(request)) || Response.error()));
   }
   // The backend API and everything else: not touched (never cached)
 });

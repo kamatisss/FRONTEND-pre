@@ -1,27 +1,34 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import FeatureCarousel from './FeatureCarousel';
 import ReviewCarousel from './ReviewCarousel';
-import LandingStudioTeaser from './LandingStudioTeaser';
 import ScrollStory from './ScrollStory';
 import { SiteHeader, SiteFooter } from './SiteChrome';
 import EstimateTeaser from './EstimateTeaser';
 import ProofShowcase from './ProofShowcase';
 import HeroGarden from './HeroGarden';
+import SectionEyebrow, { EYEBROW_CSS } from './SectionEyebrow';
 import { prefetchStudio } from '../services/prefetch';
+import { useAuth } from '../context/AuthContext';
+import { BUSINESS } from '../data/business';
 import { ProjectCard } from './ProjectHub';
 import { getPublicProjects, getTrackRecord, getInventoryItems } from '../services/api';
 import { productImage } from '../data/productImage';
 import {
   Leaf,
   ArrowRight,
-  ShieldCheck,
-  Image as ImageIcon,
-  Trees,
-  Sun,
-  Wrench,
   Sparkles,
+  Star,
+  Shovel,
+  Images,
+  Sprout,
+  Box,
+  Ruler,
+  Fence,
+  Scissors,
+  Check,
+  Lock,
 } from 'lucide-react';
 
 /* ─── Animation Variants ──────────────────────────────────── */
@@ -44,14 +51,30 @@ function scrollTo(id) {
 }
 
 /* ─── Data ────────────────────────────────────────────────── */
+// What the business really does: two free online tools, and the four services customers can book
+// (ServiceBooking.SERVICE_CHOICES). Each card leads somewhere: a tool opens, a service opens the
+// booking form with that service already chosen. Only claims the app itself shows are made here.
+// ("Outdoor Lighting" was removed: there are no lights in the catalog to sell or install yet.)
 const SERVICES = [
-  { title: 'Garden Design',          icon: <Leaf size={24} />,        desc: 'Bespoke botanical layouts tailored to your local climate and personal aesthetic.' },
-  { title: '3D Virtual Landscaping', icon: <ImageIcon size={24} />,   desc: 'Immersive 3D previews of your future garden using our state-of-the-art studio.' },
-  { title: 'Plant Recommendations',  icon: <Trees size={24} />,       desc: 'Expert curation of flora to ensure year-round vibrancy and sustainability.' },
-  { title: 'Hardscape Installation', icon: <ShieldCheck size={24} />, desc: 'Premium stonework, paving, and structural elements built to last generations.' },
-  { title: 'Outdoor Lighting',       icon: <Sun size={24} />,         desc: 'Architectural and mood lighting to bring your garden to life after dark.' },
-  { title: 'Lawn Maintenance',       icon: <Wrench size={24} />,      desc: 'Comprehensive care plans to keep your outdoor sanctuary in pristine condition.' },
+  { title: 'AI garden design', Icon: Sparkles, tag: 'Free online', to: '/ai-designer', action: 'Let AI design it',
+    desc: 'Enter your lot size and budget. The AI lays out a complete garden with plants we stock, priced from our real catalog.' },
+  { title: '3D garden studio', Icon: Box, tag: 'Free online', to: '/try-studio', action: 'Open the Studio', studio: true,
+    desc: 'Place plants, stones and benches on your yard in real 3D, check the sun through the day, and watch the cost as you go.' },
+  { title: 'Consultation & site visit', Icon: Ruler, tag: 'Book a visit', service: 'consultation', action: 'Book a consultation',
+    desc: 'We visit, measure your yard and talk through your plans and budget, so the quote matches the real site.' },
+  { title: 'Planting', Icon: Sprout, tag: 'Our crew', service: 'Softscape', action: 'Book planting',
+    desc: 'Our crew prepares the soil, plants and mulches your beds, posts progress photos, and you sign off when it is done.' },
+  { title: 'Hardscaping', Icon: Fence, tag: 'Our crew', service: 'hardscaping', action: 'Book hardscaping',
+    desc: 'Stone paths, borders, rock features and garden furniture, set in place by the same crew that plants your garden.' },
+  { title: 'Garden maintenance', Icon: Scissors, tag: 'Our crew', service: 'maintenance', action: 'Book maintenance',
+    desc: 'Lawn care, trimming, weeding and replanting on the dates you choose, so the garden stays the way it was built.' },
 ];
+
+// The free Studio vs a free account (this used to be its own "Try it now" section, which repeated the hero)
+const FREE_NOW = ['Design on a sample yard in real 3D', 'Place, move and rotate plants, stones and furniture',
+  'Morning-to-evening sunlight preview', 'Live cost estimate as you design'];
+const WITH_ACCOUNT = ['AI designs complete layouts for your budget', 'Turn a photo of your own yard into 3D terrain',
+  'Save designs and book our crew'];
 
 const catalogImage = productImage;
 const CATEGORY_LABEL = { plant: 'Plant', hardscape: 'Hardscape', furniture: 'Furniture' };
@@ -72,6 +95,8 @@ function pickPalette(items, n = 8) {
    MAIN COMPONENT
 ══════════════════════════════════════════════════════════════ */
 export default function LandingPage() {
+  const { user } = useAuth();
+  const navigate = useNavigate();
   const [projects,     setProjects]     = useState([]);
   const [record,       setRecord]       = useState(null);
   const [palette,      setPalette]      = useState([]);
@@ -110,6 +135,13 @@ export default function LandingPage() {
       body.style.height = prev.bodyHeight;
     };
   }, []);
+
+  // A service card opens the booking form with that service chosen (the same handoff as "Book a similar
+  // project" in the Project Hub); signed-out visitors log in first and land on the form.
+  const bookService = (serviceType) => {
+    localStorage.setItem('pending_booking_context', JSON.stringify({ serviceType }));
+    navigate(user ? '/book-service' : '/login');
+  };
 
   return (
     <div style={{ fontFamily: "'Inter', system-ui, sans-serif", color: '#0f172a', background: '#f8fafc', minHeight: '100vh' }}>
@@ -180,13 +212,26 @@ export default function LandingPage() {
           display: flex; flex-direction: column; align-items: center;
         }
         .gs-hero-badge {
-          display: inline-flex; align-items: center; gap: 6px;
-          padding: 6px 14px; border-radius: 100px;
+          display: inline-flex; align-items: center; gap: 8px;
+          padding: 5px 12px 5px 5px; border-radius: 100px;
           background: #ecfdf5; border: 1px solid #a7f3d0;
-          color: #059669; font-size: 13px; font-weight: 700;
-          letter-spacing: 0.5px; text-transform: uppercase;
-          margin-bottom: 28px;
+          color: #047857; font-size: 13px; font-weight: 700;
+          letter-spacing: 0.3px; text-decoration: none;
+          transition: background .2s, border-color .2s, box-shadow .2s;
         }
+        /* align-self: the hero column is a flex column, which stretched the pill to its full width */
+        .gs-hero-badge-wrap { align-self: flex-start; margin-bottom: 28px; max-width: 100%; }
+        .gs-hero-badge { white-space: nowrap; }
+        @media (max-width: 420px) { .gs-hero-badge { font-size: 12px; letter-spacing: 0; gap: 6px; } }
+        .gs-hero-badge:hover { background: #d1fae5; border-color: #6ee7b7; box-shadow: 0 4px 14px rgba(16,185,129,.15); }
+        .gs-hero-badge:focus-visible { outline: 2px solid #10b981; outline-offset: 3px; }
+        .gs-hero-badge-icon {
+          width: 24px; height: 24px; border-radius: 99px; background: #10b981; color: #fff;
+          display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+        }
+        .gs-hero-badge-arrow { transition: transform .2s; }
+        .gs-hero-badge:hover .gs-hero-badge-arrow { transform: translateX(3px); }
+        .gs-hero-proofrow .gs-star { display: inline-block; color: #10b981; fill: #10b981; vertical-align: -1px; margin-left: 2px; }
         .gs-hero-h1 {
           font-size: clamp(40px, 7vw, 76px);
           font-weight: 900; line-height: 1.05;
@@ -242,13 +287,8 @@ export default function LandingPage() {
           50% { transform: translateX(-50%) translateY(8px); }
         }
 
-        .gs-section-eyebrow {
-          display: inline-flex; align-items: center; gap: 6px;
-          padding: 5px 14px; border-radius: 100px;
-          background: #ecfdf5; border: 1px solid #a7f3d0;
-          color: #059669; font-size: 12px; font-weight: 800;
-          letter-spacing: 1px; text-transform: uppercase; margin-bottom: 20px;
-        }
+        /* Section labels: SectionEyebrow.jsx (icon chip + label) */
+        ${EYEBROW_CSS}
         .gs-section-title {
           font-size: clamp(32px, 4vw, 52px);
           font-weight: 900; line-height: 1.1;
@@ -276,28 +316,35 @@ export default function LandingPage() {
           gap: 24px;
         }
         .gs-service-card {
-          padding: 36px 32px;
+          padding: 32px 30px 28px;
           border-radius: 20px;
           background: white;
           border: 1px solid #e2e8f0;
           transition: box-shadow 0.25s, transform 0.25s, border-color 0.25s;
           position: relative; overflow: hidden;
+          display: flex; flex-direction: column; height: 100%; width: 100%;
+          text-align: left; font: inherit; color: inherit; text-decoration: none; cursor: pointer;
         }
-        .gs-service-card::before {
-          content: '';
-          position: absolute; top: 0; right: 0;
-          width: 80px; height: 80px;
-          background: #ecfdf5;
-          border-radius: 0 20px 0 100%;
-          transition: transform 0.3s;
-          z-index: 0;
+        .gs-service-card:focus-visible { outline: 2px solid #10b981; outline-offset: 3px; }
+        .gs-service-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; position: relative; z-index: 1; }
+        .gs-service-tag {
+          font-size: 11px; font-weight: 800; letter-spacing: .6px; text-transform: uppercase;
+          padding: 4px 9px; border-radius: 99px; white-space: nowrap;
+          background: #f1f5f9; color: #475569;
         }
+        .gs-service-tag.free { background: #ecfdf5; color: #047857; }
+        .gs-service-action {
+          margin-top: auto; padding-top: 20px; position: relative; z-index: 1;
+          display: inline-flex; align-items: center; gap: 6px;
+          font-size: 14px; font-weight: 800; color: #059669;
+        }
+        .gs-service-action svg { transition: transform .2s; }
+        .gs-service-card:hover .gs-service-action svg, .gs-service-card:focus-visible .gs-service-action svg { transform: translateX(4px); }
         .gs-service-card:hover {
           box-shadow: 0 20px 50px rgba(16,185,129,0.08), 0 4px 16px rgba(0,0,0,0.04);
           transform: translateY(-4px);
           border-color: #a7f3d0;
         }
-        .gs-service-card:hover::before { transform: scale(1.3); }
         .gs-service-icon {
           width: 52px; height: 52px; border-radius: 14px;
           background: #ecfdf5; color: #10b981;
@@ -312,6 +359,8 @@ export default function LandingPage() {
           font-size: 14px; color: #64748b; line-height: 1.7;
           margin: 0; position: relative; z-index: 1;
         }
+        .gs-service-card:hover .gs-service-icon { background: #10b981; color: #fff; }
+        .gs-service-icon { transition: background .25s, color .25s; }
 
         /* ── Gallery / Material Palette ── */
         .gs-gallery {
@@ -399,6 +448,19 @@ export default function LandingPage() {
           line-height: 1.65;
         }
         .gs-cta-btns { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+        .gs-cta-plans {
+          display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+          max-width: 760px; margin: 0 auto 40px; text-align: left;
+        }
+        .gs-cta-plan { background: #fff; border: 1px solid #d1fae5; border-radius: 18px; padding: 22px 24px; }
+        .gs-cta-plan.account { border-color: #e2e8f0; }
+        .gs-cta-plan h3 { margin: 0 0 14px; font-size: 13px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: #047857; }
+        .gs-cta-plan.account h3 { color: #475569; }
+        .gs-cta-plan ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+        .gs-cta-plan li { display: flex; gap: 10px; align-items: flex-start; font-size: 14.5px; color: #334155; line-height: 1.5; }
+        .gs-cta-plan .ico { flex-shrink: 0; width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin-top: 1px; background: #d1fae5; color: #047857; }
+        .gs-cta-plan.account .ico { background: #f1f5f9; color: #64748b; }
+        @media (max-width: 640px) { .gs-cta-plans { grid-template-columns: 1fr; } }
         .gs-btn-cta-primary {
           padding: 16px 36px; border-radius: 100px;
           font-size: 16px; font-weight: 800; text-decoration: none;
@@ -429,6 +491,7 @@ export default function LandingPage() {
           .gs-hero-copy .gs-hero-sub  { text-align: center; }
           .gs-hero-copy .gs-hero-actions { justify-content: center; }
           .gs-hero-proofrow { justify-content: center; }
+          .gs-hero-badge-wrap { align-self: center; }
           .gs-scroll-indicator { display: none; }
         }
       `}</style>
@@ -442,9 +505,14 @@ export default function LandingPage() {
 
             {/* Left — copy */}
             <motion.div initial="hidden" animate="visible" variants={STAGGER} className="gs-hero-copy">
-              <motion.div variants={FADE_UP} className="gs-hero-badge">
-                <Sparkles size={13} />
-                Free 3D Garden Studio · No sign-up
+              {/* The wrapper animates (an animated router Link stayed invisible); it sizes to the pill */}
+              <motion.div variants={FADE_UP} className="gs-hero-badge-wrap">
+                <Link to="/try-studio" className="gs-hero-badge"
+                  onPointerEnter={prefetchStudio} onFocus={prefetchStudio}>
+                  <span className="gs-hero-badge-icon" aria-hidden="true"><Sparkles size={13} /></span>
+                  Free 3D Garden Studio · No sign-up
+                  <ArrowRight size={14} className="gs-hero-badge-arrow" aria-hidden="true" />
+                </Link>
               </motion.div>
 
               <motion.h1 variants={FADE_UP} className="gs-hero-h1">
@@ -474,7 +542,7 @@ export default function LandingPage() {
                   {record.average_rating && (
                     <>
                       <span className="gs-hero-proof-dot" />
-                      <span><strong>{record.average_rating}★</strong> from {record.review_count.toLocaleString()} reviews</span>
+                      <span><strong>{record.average_rating}<Star size={13} className="gs-star" aria-label="stars" /></strong> from {record.review_count.toLocaleString()} reviews</span>
                     </>
                   )}
                   <span className="gs-hero-proof-dot" />
@@ -509,22 +577,43 @@ export default function LandingPage() {
         <div className="gs-container">
           <div className="gs-section-header">
             <motion.div initial="hidden" whileInView="visible" viewport={{ once: true }} variants={FADE_UP}>
-              <div className="gs-section-eyebrow" style={{ marginBottom: 16 }}>Our Expertise</div>
-              <h2 className="gs-section-title">Premium Services</h2>
-              <p style={{ fontSize: 17, color: '#64748b', maxWidth: 480, margin: '12px auto 0', lineHeight: 1.65 }}>
-                From concept to completion — everything you need to transform your outdoor space.
+              <SectionEyebrow icon={Shovel} label="Our services" center />
+              <h2 className="gs-section-title">Plan it free online. Our crew builds it.</h2>
+              <p style={{ fontSize: 17, color: '#64748b', maxWidth: 560, margin: '12px auto 0', lineHeight: 1.65 }}>
+                Design with our free tools, then book the same local team to plant, build and care for your garden
+                across {BUSINESS.serviceArea}.
               </p>
             </motion.div>
           </div>
           <motion.div className="gs-services-grid"
             initial="hidden" whileInView="visible" viewport={{ once: true }} variants={STAGGER_SLOW}>
-            {SERVICES.map((service, i) => (
-              <motion.div key={i} variants={FADE_UP} className="gs-service-card">
-                <div className="gs-service-icon">{service.icon}</div>
-                <h3 className="gs-service-title">{service.title}</h3>
-                <p className="gs-service-desc">{service.desc}</p>
-              </motion.div>
-            ))}
+            {SERVICES.map((service) => {
+              const body = (
+                <>
+                  <div className="gs-service-top">
+                    <div className="gs-service-icon"><service.Icon size={24} /></div>
+                    <span className={`gs-service-tag${service.tag === 'Free online' ? ' free' : ''}`}>{service.tag}</span>
+                  </div>
+                  <h3 className="gs-service-title">{service.title}</h3>
+                  <p className="gs-service-desc">{service.desc}</p>
+                  <span className="gs-service-action">{service.action} <ArrowRight size={15} /></span>
+                </>
+              );
+              return (
+                <motion.div key={service.title} variants={FADE_UP}>
+                  {service.to ? (
+                    <Link to={service.to} className="gs-service-card"
+                      {...(service.studio ? { onPointerEnter: prefetchStudio, onFocus: prefetchStudio } : {})}>
+                      {body}
+                    </Link>
+                  ) : (
+                    <button type="button" className="gs-service-card" onClick={() => bookService(service.service)}>
+                      {body}
+                    </button>
+                  )}
+                </motion.div>
+              );
+            })}
           </motion.div>
         </div>
       </section>
@@ -535,9 +624,6 @@ export default function LandingPage() {
       {/* ══ INSTANT ESTIMATE — yard size → price range, hands off to the AI Designer or Studio ══ */}
       <EstimateTeaser />
 
-      {/* ══ TRY THE STUDIO — free 3D design, AI with an account ══ */}
-      <LandingStudioTeaser />
-
       {/* ══ REAL RESULTS — before/after and 3D design vs built, from published projects ══ */}
       <ProofShowcase />
 
@@ -547,7 +633,7 @@ export default function LandingPage() {
           <div className="gs-container">
             <div className="gs-gallery-header">
               <div>
-                <div className="gs-section-eyebrow" style={{ marginBottom: 14 }}>Project Hub</div>
+                <SectionEyebrow icon={Images} label="Project Hub" />
                 <h2 className="gs-section-title" style={{ margin: 0 }}>Gardens We've Built</h2>
               </div>
               <Link to="/projects" className="gs-gallery-link">
@@ -571,7 +657,7 @@ export default function LandingPage() {
           <div className="gs-container">
             <div className="gs-gallery-header">
               <div>
-                <div className="gs-section-eyebrow" style={{ marginBottom: 14 }}>From our catalog</div>
+                <SectionEyebrow icon={Sprout} label="From our catalog" />
                 <h2 className="gs-section-title" style={{ margin: 0 }}>Plants &amp; materials you can place in 3D</h2>
               </div>
               <Link to="/try-studio" className="gs-gallery-link" onPointerEnter={prefetchStudio}>
@@ -608,19 +694,34 @@ export default function LandingPage() {
         <div className="gs-container gs-cta-content">
           <motion.div initial="hidden" whileInView="visible" viewport={{ once: true }} variants={STAGGER}>
             <motion.div variants={FADE_UP}>
-              <div className="gs-section-eyebrow" style={{ marginBottom: 24, marginLeft: 'auto', marginRight: 'auto', display: 'table' }}>
-                Get Started Today
-              </div>
+              <SectionEyebrow icon={Leaf} label="Get started today" center style={{ marginBottom: 24 }} />
             </motion.div>
             <motion.h2 variants={FADE_UP} className="gs-cta-h2">
               Ready to build your<br />dream garden?
             </motion.h2>
             <motion.p variants={FADE_UP} className="gs-cta-sub">
-              Create an account to access the 3D studio, save your designs, and connect with our expert landscaping team.
+              Start designing in the free 3D Studio now, no sign-up. Create a free account when you want the AI,
+              your own yard in 3D, or our crew.
             </motion.p>
+            <motion.div variants={FADE_UP} className="gs-cta-plans">
+              <div className="gs-cta-plan">
+                <h3>Free, right now</h3>
+                <ul>
+                  {FREE_NOW.map(t => <li key={t}><span className="ico"><Check size={12} strokeWidth={3} /></span>{t}</li>)}
+                </ul>
+              </div>
+              <div className="gs-cta-plan account">
+                <h3>With a free account</h3>
+                <ul>
+                  {WITH_ACCOUNT.map(t => <li key={t}><span className="ico"><Lock size={11} /></span>{t}</li>)}
+                </ul>
+              </div>
+            </motion.div>
             <motion.div variants={FADE_UP} className="gs-cta-btns">
-              <Link to="/register" className="gs-btn-cta-primary">Create Free Account</Link>
-              <Link to="/try-studio" className="gs-btn-cta-outline">Try the 3D Studio Free</Link>
+              <Link to="/try-studio" className="gs-btn-cta-primary" onPointerEnter={prefetchStudio} onFocus={prefetchStudio}>
+                Start designing free
+              </Link>
+              <Link to="/register" className="gs-btn-cta-outline">Create free account</Link>
             </motion.div>
           </motion.div>
         </div>

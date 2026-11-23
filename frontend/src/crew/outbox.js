@@ -17,6 +17,7 @@
 import { API_BASE_URL } from '../config';
 import { compressImage } from '../services/imageCompress';
 import { putPhoto, getPhoto, removePhoto, clearPhotos } from './photoStore';
+import { clearJobPack } from './jobPack';
 
 const OUTBOX_KEY = 'gs.crew.outbox';
 const SNAP_PREFIX = 'gs.crew.snap.';
@@ -59,12 +60,16 @@ export async function cachedGet(path, name) {
   return snap ? { data: snap.data, savedAt: snap.at } : { data: null, savedAt: null };
 }
 
+/** The copy saved on the phone (before a fresh one replaces it): { at, data } or null. */
+export const readSnapshot = (name) => read(SNAP_PREFIX + name, null);
+
 /** Wipe everything kept for offline use (sign-out; the next person on this phone sees nothing). */
 export function clearCrewOffline() {
   try {
     Object.keys(localStorage).filter((k) => k.startsWith('gs.crew.')).forEach((k) => localStorage.removeItem(k));
   } catch { /* storage blocked: nothing was kept */ }
   clearPhotos();
+  clearJobPack();   // the job pack's saved files (work orders, yard photos) go too
   listeners.forEach((fn) => fn([]));
 }
 
@@ -164,6 +169,20 @@ export async function sendPhoto({ label, bookingId, file, phase, description = '
 async function attempt(entry) {
   if (navigator.onLine === false) {
     setOutbox([...getOutbox(), entry]);
+    return { queued: true };
+  }
+  // Older actions still waiting: this one goes behind them, never ahead. (A stage photo sent before the
+  // clock-in it depends on, or a sign-off before its photos, would be refused.) Then send them all, in order.
+  if (getOutbox().some((e) => e.state === 'waiting')) {
+    setOutbox([...getOutbox(), entry]);
+    await flushOutbox().catch(() => {});
+    // A send already under way started before this entry joined: one more round picks it up
+    if (getOutbox().find((e) => e.id === entry.id)?.state === 'waiting' && navigator.onLine !== false) {
+      await flushOutbox().catch(() => {});
+    }
+    const left = getOutbox().find((e) => e.id === entry.id);
+    if (!left) return { data: {} };   // sent with the others (its answer isn't needed: the screen reloads)
+    if (left.state === 'failed') { discardAction(entry.id); throw new Error(left.error || 'The server refused this.'); }
     return { queued: true };
   }
   let result;
@@ -273,6 +292,24 @@ export function withPendingDeliveries(run, outbox) {
   const plus = (v) => (v == null ? v : (Number(v) + cash).toFixed(2));
   return { ...run, active, delivered_today: done, cash_today: plus(run.cash_today), cash_to_hand_in: plus(run.cash_to_hand_in) };
 }
+
+/**
+ * A booking's stage changes still on the phone: { [stage]: 'done' | 'undone' } (the latest one wins).
+ * A stage photo finishes its stage; an Undo (kind 'stage', completion_pct 0) reopens it.
+ */
+export function pendingStageChanges(outbox, bookingId) {
+  const out = {};
+  for (const e of outbox) {
+    if (e.state !== 'waiting' || e.ref?.bookingId !== bookingId || !e.ref?.stage) continue;
+    if (e.kind === 'photo') out[e.ref.stage] = 'done';
+    else if (e.kind === 'stage') out[e.ref.stage] = Number(e.body?.completion_pct) === 100 ? 'done' : 'undone';
+  }
+  return out;
+}
+
+/** "Submit for sign-off" saved on the phone for this booking, waiting for signal. */
+export const pendingSignOff = (outbox, bookingId) =>
+  outbox.some((e) => e.kind === 'sign_off' && e.state === 'waiting' && e.ref?.bookingId === bookingId);
 
 /** This booking's photos still on the phone (waiting, or not accepted), oldest first. */
 export const pendingPhotos = (outbox, bookingId) =>

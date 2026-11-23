@@ -1,8 +1,9 @@
-import { useRef, useState, useEffect, useCallback, Suspense } from 'react';
+import { useRef, useState, useEffect, useLayoutEffect, useCallback, Suspense } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { TransformControls, Html, ContactShadows } from '@react-three/drei';
-import { placedScale, stageSize, stageSpread } from '../data/modelSizing';
+import { placedScale, stageSize, stageSpread, plantVariation, matureWhen, isFullyGrown, DEFAULT_GROWTH_STAGE, GROW_MS, growEase, growMotionOk } from '../data/modelSizing';
 import PlantHeightCard from './PlantHeightCard';
+import { crowdingNotes } from '../data/crowding';
 import { growthNote } from '../data/plantGrowth';
 import { ErrorBoundary } from 'react-error-boundary';
 import { useDesign } from '../context/DesignContext';
@@ -43,10 +44,6 @@ export default function PlacedObject({ item, orbitControlsRef }) {
   const mouse = useRef(new THREE.Vector2());
   const intersection = useRef(new THREE.Vector3());
 
-  // Refs for rotate dragging
-  const rotateDragStartX = useRef(0);
-  const rotateStartRotY = useRef(0);
-  const hasRotated = useRef(false);
 
   const isSelected = state.selectedItemId === item.id;
   const isPlacing = state.placementMode !== 'idle';
@@ -85,12 +82,54 @@ export default function PlacedObject({ item, orbitControlsRef }) {
   const establishedH = Number(sizeSource.real_world_size) || 0;
   const plantingH = Number(productMatch?.planting_height) || 0;
   const matureH = Number(productMatch?.mature_height) || 0;
-  const stage = state.growthStage || 'established';
-  // Drawn (and measured) at the Studio's growth stage; non-plants keep their size
-  const realH = Number(stageSize(sizeSource, stage, category)) || 0;
+  const stage = state.growthStage ?? DEFAULT_GROWTH_STAGE;   // years after planting (0 = at planting)
+  // Drawn (and measured) at the Studio's growth stage; non-plants keep their size. Each plant is its own
+  // size within ±8% of the catalog's, fixed by its id, like real nursery stock (data/modelSizing.plantVariation)
+  const vary = plantVariation(item.id, category);
+  const realH = (Number(stageSize(sizeSource, stage, category)) || 0) * vary.h;
+  const spreadNow = stageSpread(productMatch || item, stage, category) * vary.w;
+
+  // Crowding: this plant's crown grows into a neighbour's at the year on the slider (data/crowding.js):
+  // an amber ring round its crown and a note on its card. Advice only.
+  // (no useMemo: the React Compiler memoizes this component)
+  const crowdNotes = (() => {
+    if (category !== 'plant') return [];
+    const list = state.placedItems.map((it) => {
+      const product = state.products.find((p) => p.id === it.productId);
+      return { key: it.id, x: it.position?.x, z: it.position?.z, product,
+        vary: plantVariation(it.id, it.category || product?.category), scale: placedScale(it.scale?.x ?? it.scale ?? 1) };
+    });
+    return crowdingNotes(list, stage).get(item.id) || [];
+  })();
+
+  // ── Growing between stages: the new size is drawn at once, so this group starts at the old size
+  //    (as a share of the new one) and eases to 1 (data/modelSizing GROW_MS) ──
+  const growRef = useRef();
+  const grow = useRef(null);
+  const drawn = useRef({ stage, h: realH, w: spreadNow });
+  useLayoutEffect(() => {
+    const was = drawn.current;
+    drawn.current = { stage, h: realH, w: spreadNow };
+    if (was.stage === stage || !(was.h > 0) || !(realH > 0) || category !== 'plant' || !growMotionOk()) {
+      grow.current = null;
+      growRef.current?.scale.set(1, 1, 1);
+      return;
+    }
+    const fy = was.h / realH;
+    const fx = was.w > 0 && spreadNow > 0 ? was.w / spreadNow : fy;   // no widths on record: width follows height
+    grow.current = { fx, fy, t0: performance.now() };
+    growRef.current?.scale.set(fx, fy, fx);
+  }, [stage, realH, spreadNow, category]);
 
   // ── Hover emissive effect ──────────────────────────────────────
   useFrame(() => {
+    const g = grow.current;
+    if (g && growRef.current) {
+      const t = (performance.now() - g.t0) / GROW_MS;
+      const k = growEase(t);
+      growRef.current.scale.set(g.fx + (1 - g.fx) * k, g.fy + (1 - g.fy) * k, g.fx + (1 - g.fx) * k);
+      if (t >= 1) grow.current = null;
+    }
     if (!modelGroupRef.current) return;
 
     const targetEmissive = isSelected
@@ -220,69 +259,7 @@ export default function PlacedObject({ item, orbitControlsRef }) {
     dispatch({ type: 'SELECT_ITEM', payload: item.id });
   }, [isPlacing, dispatch, item.id]);
 
-  // ── Delete handler via floating button ─────────────────────────
-  const handleDelete = useCallback((e) => {
-    e.stopPropagation();
-    dispatch({ type: 'REMOVE_ITEM', payload: item.id });
-  }, [dispatch, item.id]);
-
-  // ── Rotate handler via floating button (Drag to rotate or Click to snap) ──
-  const handleRotatePointerDown = useCallback((e) => {
-    e.stopPropagation();
-    rotateDragStartX.current = e.clientX;
-    rotateStartRotY.current = item.rotation?.y ?? 0;
-    hasRotated.current = false;
-
-    const onPointerMove = (moveEvent) => {
-      const deltaX = moveEvent.clientX - rotateDragStartX.current;
-      
-      // Threshold to detect drag vs click
-      if (!hasRotated.current && Math.abs(deltaX) > 4) {
-        hasRotated.current = true;
-      }
-      
-      if (hasRotated.current) {
-        dispatch({
-          type: 'UPDATE_ITEM',
-          payload: {
-            id: item.id,
-            updates: {
-              rotation: {
-                x: item.rotation?.x ?? 0,
-                y: rotateStartRotY.current + (deltaX * 0.01),
-                z: item.rotation?.z ?? 0,
-              }
-            }
-          }
-        });
-      }
-    };
-
-    const onPointerUp = () => {
-      window.removeEventListener('pointermove', onPointerMove);
-      window.removeEventListener('pointerup', onPointerUp);
-      
-      // If no drag occurred, snap 45 degrees
-      if (!hasRotated.current) {
-        dispatch({
-          type: 'UPDATE_ITEM',
-          payload: {
-            id: item.id,
-            updates: {
-              rotation: {
-                x: item.rotation?.x ?? 0,
-                y: rotateStartRotY.current + Math.PI / 4,
-                z: item.rotation?.z ?? 0,
-              }
-            }
-          }
-        });
-      }
-    };
-
-    window.addEventListener('pointermove', onPointerMove);
-    window.addEventListener('pointerup', onPointerUp);
-  }, [dispatch, item.id, item.rotation]);
+  // Delete, Turn and Move for the selected item live in the Studio's panel (StudioItemPanel)
 
   const showHeight = category === 'plant' && realH > 0 && !isPlacing && !isDragging && (hovered || isSelected);
   const tick = 0.32 / objScale;      // tick marks keep the same real size whatever the item's scale
@@ -314,15 +291,17 @@ export default function PlacedObject({ item, orbitControlsRef }) {
           fallback={<ModelPlaceholder category={category} label="3D Model Unavailable" />}
         >
           <Suspense fallback={<ModelPlaceholder category={category} />}>
-            <NormalizedModel
-              url={modelUrl}
-              category={category}
-              realWorldSize={realH || undefined}
-              targetWidth={stageSpread(productMatch || item, stage, category)}
-              stage={stage}
-              establishedSize={establishedH || undefined}
-              sway={category === 'plant'}
-            />
+            <group ref={growRef}>
+              <NormalizedModel
+                url={modelUrl}
+                category={category}
+                realWorldSize={realH || undefined}
+                targetWidth={spreadNow}
+                stage={stage}
+                establishedSize={establishedH ? establishedH * vary.h : undefined}
+                sway={category === 'plant'}
+              />
+            </group>
           </Suspense>
         </ErrorBoundary>
       ) : (
@@ -338,6 +317,14 @@ export default function PlacedObject({ item, orbitControlsRef }) {
         opacity={0.5}
         color="#222"
       />
+
+      {/* Crowding: an amber ring round the crown at this year (the group's scale applies, so no objScale) */}
+      {crowdNotes.length > 0 && spreadNow > 0 && (
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.025, 0]} renderOrder={997}>
+          <ringGeometry args={[spreadNow / 2 - 0.06 / objScale, spreadNow / 2, 48]} />
+          <meshBasicMaterial color="#F59E0B" transparent opacity={0.8} depthWrite={false} side={THREE.DoubleSide} />
+        </mesh>
+      )}
 
       {/* Selection / hover ring on the floor */}
       {(isSelected || hovered) && (
@@ -365,61 +352,22 @@ export default function PlacedObject({ item, orbitControlsRef }) {
               <meshBasicMaterial color="#ffffff" depthTest={false} transparent opacity={0.95} />
             </mesh>
           ))}
+          {!isSelected && (
           <Html position={[0, realH, 0]} zIndexRange={[18, 10]} style={{ pointerEvents: 'none' }}>
-            {/* Beside the top, hanging down into view: tall plants never push it off the top of the canvas */}
-            <PlantHeightCard name={productMatch?.name || item.name} shown={realH * objScale} stage={stage}
+            {/* Pointing at it: a short label beside the top. Selected: its details are in the panel (StudioItemPanel) */}
+            <PlantHeightCard compact name={productMatch?.name || item.name} shown={realH * objScale} stage={stage}
               heights={{ planting: plantingH, established: establishedH, mature: matureH }}
-              wide={stageSpread(productMatch, stage, category)}
+              wide={spreadNow}
+              matureWhen={matureWhen(productMatch)} grown={!!productMatch && isFullyGrown(productMatch, stage)}
+              notes={crowdNotes}
               growthNote={growthNote(modelUrl, stage)}
               style={{ transform: 'translate(14px, -25%)' }} />
           </Html>
+          )}
         </group>
       )}
 
-      {/* Floating action buttons when selected (not while dragging): just below the base, clear of the height label */}
-      {isSelected && !isPlacing && !isDragging && (
-        <Html position={[0, 0, 0]} center distanceFactor={10}>
-          <div style={{ marginTop: 64 }} className="flex gap-1.5 items-center bg-white/95 dark:bg-slate-800/95 px-3 py-2 rounded-full shadow-xl backdrop-blur-md border border-gray-100 dark:border-slate-700 ring-1 ring-black/5">
-            {/* Re-place / Move button */}
-            <button
-              onClick={(e) => { e.stopPropagation(); dispatch({ type: 'START_EDITING', payload: item.id }); }}
-              className="p-1.5 rounded-full transition-all active:scale-95 hover:bg-emerald-50 dark:hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400"
-              title="Move Object"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M5 9l4-4 4 4M19 15l-4 4-4-4M9 5v14M15 19V5" />
-              </svg>
-            </button>
-
-            <div className="w-px h-5 bg-gray-200 dark:bg-slate-600 mx-0.5" />
-
-            {/* Rotate button */}
-            <button
-              onPointerDown={handleRotatePointerDown}
-              className="p-1.5 hover:bg-blue-50 dark:hover:bg-blue-500/20 rounded-full text-blue-500 transition-transform cursor-ew-resize hover:scale-110 active:scale-95"
-              title="Drag to Rotate smoothly, Click to snap 45°"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                <path d="M3 3v5h5" />
-              </svg>
-            </button>
-
-            <div className="w-px h-5 bg-gray-200 dark:bg-slate-600 mx-0.5" />
-
-            {/* Delete button */}
-            <button
-              onClick={handleDelete}
-              className="p-1.5 hover:bg-red-50 dark:hover:bg-red-500/20 rounded-full text-red-500 transition-all active:scale-95"
-              title="Delete (Del)"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
-              </svg>
-            </button>
-          </div>
-        </Html>
-      )}
+      {/* The selected item's Move / Turn / Remove are in the Studio's panel (StudioItemPanel), not floating here */}
     </group>
   );
 

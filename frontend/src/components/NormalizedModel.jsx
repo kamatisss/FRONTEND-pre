@@ -82,7 +82,7 @@ export default function NormalizedModel({ url, scale = 1, category = 'plant', re
     // ── 2c. Growing by parts: the palm's trunk lengthens under its crown; fruit and flowers come later
     const rig = rigGrowth(clone, url);
     const ratio = Number(establishedSize) > 0 && Number(realWorldSize) > 0 ? Number(realWorldSize) / Number(establishedSize) : 1;
-    rig?.pose(ratio, stage || 'established');
+    rig?.pose(ratio, stage ?? 2);   // years after planting (0 = at planting, so not ||)
 
     // ── 3. Compute the world-space bounding box of the raw clone ──────────────
     //    We must do this BEFORE modifying position/scale so the box reflects

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Camera, Mountain, Sprout, SunMedium, Receipt, HardHat, ArrowRight, Sparkles, Check, Box } from 'lucide-react';
+import { Camera, Mountain, Sprout, SunMedium, Receipt, HardHat, ArrowRight, Sparkles, Check, Box, Route } from 'lucide-react';
+import SectionEyebrow from './SectionEyebrow';
 import { getInventoryItems, getEstimate } from '../services/api';
 import { prefetchStudio } from '../services/prefetch';
 import { SAMPLE_LOT, sampleGarden } from '../data/sampleGarden';
@@ -339,7 +340,7 @@ export default function ScrollStory() {
 
       <div className="gs-container">
         <div className="gs-section-header">
-          <div className="gs-section-eyebrow" style={{ marginBottom: 16 }}>How it works</div>
+          <SectionEyebrow icon={Route} label="How it works" center />
           <h2 className="gs-section-title">From a photo to a finished garden</h2>
           <p style={{ fontSize: 17, color: '#64748b', maxWidth: 520, margin: '12px auto 0', lineHeight: 1.65 }}>
             Scroll to watch a garden come together, the same way yours will.

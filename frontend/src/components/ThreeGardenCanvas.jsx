@@ -1,18 +1,21 @@
 import React, { useRef, useEffect, useLayoutEffect, useMemo, useState, useImperativeHandle } from 'react';
+import { createPortal } from 'react-dom';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 // Catalog models are Meshopt-compressed (see scripts/optimize-models.md); drei's useGLTF enables this by default
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
-import { realScale, stageSize, stageSpread, widthFit, DEFAULT_GROWTH_STAGE } from '../data/modelSizing';
+import { realScale, stageSize, stageSpread, widthFit, DEFAULT_GROWTH_STAGE, plantVariation, matureWhen, isFullyGrown, keptTreeGrowth, sizedStage, hasSpecimen, specimenMatureWhen, SPECIMEN, GROW_MS, growEase, growMotionOk } from '../data/modelSizing';
 import PlantHeightCard from './PlantHeightCard';
+import { crowdingNotes } from '../data/crowding';
+import { sunDirection, surveyFacing } from '../data/sunPath';
 import { getInventoryItems } from '../services/api';
 import { resolveModelUrl } from '../data/modelCatalog';
 import { FENCE_OUTLINE, defaultPins, normalizePins, pinLabels, solvePhotoPose, suggestLength, vantageOf } from '../data/photoPose';
 import { exactBounds } from '../services/modelBounds';
 import { plantOut } from '../data/plantedModel';
 import { rigGrowth, rigBounds, growsByParts, growthNote } from '../data/plantGrowth';
-import { RotateCw, Trash2, Replace } from 'lucide-react';
+import { RotateCw, Trash2, Replace, Maximize2, X, Move } from 'lucide-react';
 import { buildGround, buildBackdrop, buildDimensions, buildMetreGrid, metres, SKY_DAY, DIM_OFFSET } from '../data/gardenGround';
 import { buildYard, hasSurvey, pavedAreas, keptTree, WALL_HEIGHT } from '../data/yardScene';
 import { photoPixels, photoGroundCanvas } from '../data/photoGround';
@@ -42,6 +45,11 @@ const LOT_LABEL = {
 // lite: lighter rendering for phones (lower pixel ratio, smaller shadow map).
 // timeOfDay: hour 5–21 drives the sun (position, colour, sky) and, after dusk, warm garden
 // lights along the lot edge. null (the default) keeps the fixed daylight every other screen uses.
+// sun: { hour, day } puts the 3D view's sun where it really is over this yard at that solar time and day of
+// the year (data/sunPath.js, the backend's sun path), facing from survey.sun.facing (north if not marked),
+// so the shadows fall where they will. null: the fixed daylight. Not on the photo overlay.
+// allowSpecimen: the selected plant's toolbar offers "Bigger size" (plant.size = 'specimen', bigger stock at its
+// own price; installed jobs only) when the catalog plant has a specimen size. Plants are drawn at their size.
 //
 // Photo overlay (arMode with backgroundImageUrl): the photo is shown at its own shape and colours
 // (the browser draws it; the 3D scene is transparent on top), and the camera is the one that took
@@ -75,11 +83,19 @@ export default function ThreeGardenCanvas({
   photoCorners = null, editCorners = false, onCornersChange, onPoseStatus,
   photoTone = null, preserveDrawingBuffer = false,
   height = 450, enableZoom = true, enablePan = true, autoRotate = false, active = true,
-  lite = false, timeOfDay = null,
+  lite = false, timeOfDay = null, sun = null, allowSpecimen = false,
   editable = false, onPlantsChange, showHeights = editable, growthStage = DEFAULT_GROWTH_STAGE,
   notesByUid = null, onSwapRequest = null, focus = null, previewMoves = null,
   showGrid = false, lotLabels = true, survey = null, photoGround = false, onPhotoGround = null, groundcover = null,
   lawnLook = DEFAULT_LAWN_LOOK,   // how long the lawn's grass is (data/grassField.js LAWN_LOOKS)
+  compactHover = false,   // pointing at a plant shows a 2-line label; the full card is for the selected one (AI Designer)
+  // The selected plant's details and actions in a panel OUTSIDE the picture (AI Designer), instead of a card and a
+  // button bar floating on it: detailsTarget = an element under the view to draw the panel into; detailsSheet = a
+  // bottom sheet instead (phones). Either one turns the floating card (for a selected plant) and bar off.
+  detailsTarget = null, detailsSheet = false,
+  // "Move apart" for a plant with designer's notes: onFixRequest(uid) asks the engine to move just that plant;
+  // fixNote = { uid, text, busy }: what happened, shown in that plant's details
+  onFixRequest = null, fixNote = null,
   ref,   // React 19: ref.current.exportGlb({ title }) → a .glb Blob of the garden as drawn
 }) {
   const canvasRef = useRef(null);
@@ -112,6 +128,7 @@ export default function ThreeGardenCanvas({
   const onChangeRef = useRef(onPlantsChange);
   const stageRef = useRef(growthStage);
   const notesRef = useRef(notesByUid);   // amber rings on items with designer's notes
+  const crowdRef = useRef(null);         // …and on plants that crowd a neighbour at this year (data/crowding.js)
   const previewRef = useRef(previewMoves);   // Tidy preview: [{ uid, x, z }] where items would go
   const cardRef = useRef(null);
   const toolbarRef = useRef(null);
@@ -136,6 +153,8 @@ export default function ThreeGardenCanvas({
   const viewRef = useRef({ enableZoom, enablePan, autoRotate, active });
   const lightingRef = useRef(null);       // { scene, sun, ambient, lamps, ... } for time-of-day updates
   const timeOfDayRef = useRef(timeOfDay);
+  const sunRigRef = useRef(null);         // { dirLight, skyLight, ambient, cx, cz, reach, base } for the real sun
+  const sunRef = useRef(null);            // { hour, day, facing } (or null): what the sun prop asks for
   const liteRef = useRef(lite);
 
   // Orbit options + pause state change without rebuilding the scene
@@ -149,6 +168,8 @@ export default function ThreeGardenCanvas({
   }, [enableZoom, enablePan, autoRotate, active, arMode]);
 
   const [inventory, setInventory] = useState([]);
+  const catalogReadyRef = useRef(false);   // read by the imperative handle (catalogReady)
+  useEffect(() => { catalogReadyRef.current = inventory.length > 0; }, [inventory]);
 
   useEffect(() => {
     let isMounted = true;
@@ -283,6 +304,14 @@ export default function ThreeGardenCanvas({
     if (lightingRef.current && timeOfDay != null) applyTimeOfDay(lightingRef.current, timeOfDay);
   }, [timeOfDay]);
 
+  // Effect 5b: the real sun over their yard (sun prop + the survey's facing), without rebuilding the scene
+  const sunFacing = surveyFacing(survey);
+  const sunHour = sun ? Number(sun.hour) : null, sunDay = sun ? Number(sun.day) || 80 : null;
+  useEffect(() => {
+    sunRef.current = sunHour == null ? null : { hour: sunHour, day: sunDay, facing: sunFacing };
+    if (sunRigRef.current) applySun(sunRigRef.current, sunRef.current);
+  }, [sunHour, sunDay, sunFacing]);
+
   // Effect 1: Initialize vanilla Three.js scene environment
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -377,6 +406,14 @@ export default function ThreeGardenCanvas({
       backdrop = buildBackdrop(currentWidth, currentLength);
       scene.add(backdrop.group);
       scene.fog = backdrop.fog;
+    }
+
+    // The real sun (sun prop): remembers the fixed daylight to go back to
+    if (!arMode && timeOfDayRef.current == null) {
+      sunRigRef.current = { dirLight, skyLight, ambient: ambientLight, cx, cz, reach: Math.max(gw, gl) * 1.5,
+        base: { pos: dirLight.position.clone(), intensity: dirLight.intensity, color: dirLight.color.clone(),
+          sky: skyLight?.intensity ?? 0, ambient: ambientLight.intensity } };
+      if (sunRef.current) applySun(sunRigRef.current, sunRef.current);
     }
 
     let lamps = null;
@@ -579,10 +616,12 @@ export default function ThreeGardenCanvas({
       };
       // Items with designer's notes: an amber ring each (pooled, so nothing is created per frame)
       const notes = st.on ? notesRef.current : null;
+      const crowd = st.on ? crowdRef.current : null;
       let w = 0;
-      if (notes) {
+      if (notes || crowd?.size) {
         entries.forEach((e) => {
-          if (!e.plant.uid || !notes[e.plant.uid]?.length || e.dead || e.plant.is_existing) return;
+          if (e.dead || e.plant.is_existing) return;
+          if (!(e.plant.uid && notes?.[e.plant.uid]?.length) && !crowd?.has(e.key)) return;
           const m = markers.warnRing(w++);
           ring(m, e);
           m.scale.multiplyScalar(1.12);
@@ -685,6 +724,7 @@ export default function ThreeGardenCanvas({
       planGroupRef.current?.update(camera);   // walls / house between the camera and the garden fade
       planGroupRef.current?.tick(performance.now() / 1000);   // the lawn's wind
       setSway(!arMode, performance.now() / 1000);              // plants in the wind: the 3D view only, not over the photo
+      tickGrowth(entriesRef.current, performance.now());       // plants growing to a new growth stage
       placeLotLabels();
       renderer.render(scene, camera);
     };
@@ -736,6 +776,7 @@ export default function ThreeGardenCanvas({
       groundcoverRef.current = null;
       sceneRef.current = null;
       lightingRef.current = null;
+      sunRigRef.current = null;
       // Null out refs so Effects 3 & 4 don't touch disposed objects
       cameraRef.current      = null;
       controlsRef.current    = null;
@@ -803,6 +844,7 @@ export default function ThreeGardenCanvas({
           outline: survey?.outline, paved: hasSurvey(survey) ? pavedAreas(survey) : [], beds: gardenPlan?.lawn ? null : beds,
           heightOf: (p) => { const m = find(p); return m ? Math.max(Number(m.real_world_size) || 0, Number(m.mature_height) || 0) : 0; },
           spreadOf: (p) => { const m = find(p); return m ? Number(m.mature_spread || m.established_spread) || 0 : 0; },
+          yearsOf: (e) => Number(find(e)?.years_to_mature) || 0,   // each groundcover fills in at its own pace
         });
       scene.add(built.group);
       groundcoverRef.current = built;
@@ -832,7 +874,10 @@ export default function ThreeGardenCanvas({
         const key = plantKey(plant, i);
         seen.add(key);
         const old = entries.get(key);
-        if (old) { old.plant = plant; old.live = null; poseEntry(old, stageRef.current); return; }
+        if (old) {
+          const resized = (old.plant.size || '') !== (plant.size || '');   // specimen ↔ standard: grow to it
+          old.plant = plant; old.live = null; poseEntry(old, stageRef.current, resized && growMotionOk()); return;
+        }
         entries.set(key, createEntry(aiGroup, plant, key, inventory, arMode, () => stageRef.current));
       });
       entries.forEach((e, key) => { if (!seen.has(key)) { dropEntry(e); entries.delete(key); } });
@@ -846,12 +891,22 @@ export default function ThreeGardenCanvas({
   useEffect(() => { placePlantsRef.current(); }, [plants, inventory, arMode]);
 
   useEffect(() => { notesRef.current = notesByUid; }, [notesByUid]);
+  // Crowns that grow into each other at the year on the slider: key → [note] (data/crowding.js)
+  const crowding = useMemo(() => crowdingNotes((Array.isArray(plants) ? plants : []).map((p, i) => {
+    if (p.is_existing) return null;
+    const key = plantKey(p, i);
+    const product = findMatch(inventory, String(p.plant_id).toLowerCase());
+    return { key, x: p.x, z: p.z, product, vary: plantVariation(key, product?.category || 'plant'),
+      stage: sizedStage(growthStage, product, p.size) };
+  }).filter(Boolean), growthStage), [plants, inventory, growthStage]);
+  useEffect(() => { crowdRef.current = crowding; }, [crowding]);
   useEffect(() => { previewRef.current = previewMoves; }, [previewMoves]);
 
   // Growth stage: redraw every loaded plant at its planting / 2-year / fully grown height
   useEffect(() => {
     stageRef.current = growthStage;
-    entriesRef.current.forEach((e) => poseEntry(e, growthStage));
+    const grow = growMotionOk();   // grow to the new size (data/modelSizing GROW_MS), not jump
+    entriesRef.current.forEach((e) => poseEntry(e, growthStage, grow));
   }, [growthStage]);
 
   // Editing on/off (off while the photo pins are being placed)
@@ -873,7 +928,13 @@ export default function ThreeGardenCanvas({
     if (!key || !Array.isArray(list)) return;
     const next = change === 'remove'
       ? list.filter((p, i) => plantKey(p, i) !== key)
-      : list.map((p, i) => (plantKey(p, i) === key ? { ...p, rotation: ((Number(p.rotation) || 0) + 45) % 360 } : p));
+      : change === 'size'   // specimen ↔ standard size
+        ? list.map((p, i) => {
+          if (plantKey(p, i) !== key) return p;
+          const { size, ...rest } = p;
+          return size === SPECIMEN ? rest : { ...rest, size: SPECIMEN };
+        })
+        : list.map((p, i) => (plantKey(p, i) === key ? { ...p, rotation: ((Number(p.rotation) || 0) + 45) % 360 } : p));
     if (change === 'remove') { interactRef.current.selectedKey = null; setSelectedKey(null); }
     onChangeRef.current?.(next, { type: change, key });
   };
@@ -917,6 +978,10 @@ export default function ThreeGardenCanvas({
     if (pending().length) throw new Error('Some plants are still loading. Try again in a moment.');
   };
   useImperativeHandle(ref, () => ({
+    // The product catalog has arrived, so plants are matched to their models (data/designPreview.js waits
+    // for this before a snapshot; until then every plant is a stand-in shape)
+    catalogReady: () => catalogReadyRef.current,
+
     // Photo overlay only: the design drawn over the customer's photo at (up to) the photo's own
     // resolution, plus the untouched photo → { before, after } canvases of the same size. Renders
     // the live scene once at that size with the rings / grid hidden, then puts everything back, all
@@ -948,6 +1013,7 @@ export default function ThreeGardenCanvas({
       const size = renderer.getSize(new THREE.Vector2());
       try {
         setSway(false, 0);
+        tickGrowth(entriesRef.current, Infinity);   // a still picture: plants at their stage's size, not mid-growth
         renderer.setPixelRatio(1);
         renderer.setSize(W, H, false);
         renderer.render(scene, camera);
@@ -964,7 +1030,8 @@ export default function ThreeGardenCanvas({
 
     // 3D view only: a tidy overview of the whole lot (the default framing, not wherever the customer
     // turned the view), without rings or labels, at width × height → a canvas. For the PDF proposal.
-    async renderOverview({ width = 1600, height = 1000 } = {}) {
+    // measurements: the lot's size pills (off for small card pictures); room: how far out the camera sits.
+    async renderOverview({ width = 1600, height = 1000, measurements = true, room = 1.25 } = {}) {
       if (arMode) throw new Error('Switch to the 3D view for this picture.');
       await waitForModels();
       const renderer = rendererRef.current, scene = sceneRef.current, live = cameraRef.current;
@@ -975,7 +1042,7 @@ export default function ThreeGardenCanvas({
       // The screen framing fills the view edge to edge; a printed picture leaves a little room round the
       // lot and its measurements
       const centre = new THREE.Vector3(ow / 2, 0, ol / 2);
-      cam.position.sub(centre).multiplyScalar(1.25).add(centre);
+      cam.position.sub(centre).multiplyScalar(room).add(centre);
       cam.lookAt(centre);
       cam.updateMatrixWorld();
       const out = Object.assign(document.createElement('canvas'), { width, height });
@@ -987,6 +1054,7 @@ export default function ThreeGardenCanvas({
       try {
         planGroupRef.current?.update(cam, true);
         setSway(false, 0);   // a still picture: plants at rest…
+        tickGrowth(entriesRef.current, Infinity);   // …at their stage's full size, not mid-growth…
         planGroupRef.current?.tick(0);   // …and the lawn too
         renderer.setPixelRatio(1);
         renderer.setSize(width, height, false);
@@ -994,7 +1062,7 @@ export default function ThreeGardenCanvas({
         const gl = renderer.getContext();
         const octx = out.getContext('2d');
         octx.drawImage(renderer.domElement, 0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight, 0, 0, width, height);
-        const anchors = dimsRef.current?.anchors;
+        const anchors = measurements && dimsRef.current?.anchors;
         if (anchors) {
           drawPill(octx, anchors.front, cam, width, height, `${metres(ow)} · House side`);
           drawPill(octx, anchors.side, cam, width, height, metres(ol));
@@ -1049,43 +1117,132 @@ export default function ThreeGardenCanvas({
   }), [lotWidth, lotLength, gardenPlan, arMode, arPhoto, photoSize, backgroundImageUrl, survey]);
 
   // The card for the hovered (else selected) item, and the buttons for the selected one
-  const focusKey = interactive ? (hoverKey ?? selectedKey) : null;
-  const focusIdx = focusKey && Array.isArray(plants) ? plants.findIndex((p, i) => plantKey(p, i) === focusKey) : -1;
-  const focusPlant = focusIdx >= 0 && !plants[focusIdx].is_existing ? plants[focusIdx] : null;
-  const focusMatch = focusPlant ? findMatch(inventory, String(focusPlant.plant_id).toLowerCase()) : null;
-  const focusCat = focusMatch?.category || 'plant';
+  const detailsOut = !!(detailsTarget || detailsSheet);
+  // With the details outside, the picture only ever shows the small label for a plant being pointed at
+  const focusKey = !interactive ? null : detailsOut ? (hoverKey && hoverKey !== selectedKey ? hoverKey : null) : (hoverKey ?? selectedKey);
+  const cardFor = (key) => {
+    const idx = key && Array.isArray(plants) ? plants.findIndex((p, i) => plantKey(p, i) === key) : -1;
+    const plant = idx >= 0 && !plants[idx].is_existing ? plants[idx] : null;
+    if (!plant) return null;
+    const match = findMatch(inventory, String(plant.plant_id).toLowerCase());
+    const cat = match?.category || 'plant';
+    const stage = sizedStage(growthStage, match, plant.size);   // a specimen: ahead
+    const specimen = plant.size === SPECIMEN && hasSpecimen(match);
+    return {
+      plant, match, specimen,
+      props: {
+        name: match?.name || plant.name || 'Plant', category: cat, stage: growthStage,
+        shown: match ? (Number(stageSize(match, stage, cat)) || 0) * plantVariation(key, cat).h : 0,
+        heights: { planting: Number(match?.planting_height) || 0, established: Number(match?.real_world_size) || 0,
+          mature: Number(match?.mature_height) || 0 },
+        matureWhen: specimen ? specimenMatureWhen(match) : matureWhen(match), grown: !!match && isFullyGrown(match, stage),
+        specimen: specimen ? Number(match.specimen_height) : 0,
+        notes: [...((plant.uid && notesByUid?.[plant.uid]) || []), ...(crowding.get(key) || [])],
+        growthNote: match ? growthNote(resolveModelUrl(match.model_file), stage) : '',
+        wide: match ? stageSpread(match, stage, cat) * plantVariation(key, cat).w : 0,
+      },
+    };
+  };
+  const focusCard = cardFor(focusKey);
+  const focusPlant = focusCard?.plant || null;
+  const focusMatch = focusCard?.match || null;
+  const focusSpecimen = !!focusCard?.specimen;
+  const sel = interactive && detailsOut ? cardFor(selectedKey) : null;
+  const letGo = () => { interactRef.current.selectedKey = null; setSelectedKey(null); };
+  // Turn / Bigger / Swap / Remove for the selected plant (the floating bar, or the details panel)
+  const actionsFor = (match, specimenOn, plant) => {
+    const engineNotes = (plant?.uid && notesByUid?.[plant.uid]) || [];
+    const apart = engineNotes.some(n => n && typeof n === 'object' && n.kind === 'spacing');
+    const busy = fixNote?.busy && fixNote.uid === plant?.uid;
+    return (
+    <>
+      {onFixRequest && plant?.uid && engineNotes.length > 0 && (
+        <button type="button" onClick={() => onFixRequest(plant.uid)} disabled={busy}
+          title={apart ? 'Move it the shortest distance that gives it room (Undo puts it back)'
+            : 'Move it the shortest distance to a spot that suits it (Undo puts it back)'}
+          style={{ ...TOOL_BTN('#92400E'), background: '#FEF3C7', opacity: busy ? 0.6 : 1, cursor: busy ? 'wait' : 'pointer' }}>
+          <Move size={15} aria-hidden="true" /> {busy ? 'Moving…' : apart ? 'Move apart' : 'Move to a better spot'}
+        </button>
+      )}
+      <button type="button" onClick={() => editSelected('rotate')} title="Turn 45° (R)" style={TOOL_BTN('#065F46')}>
+        <RotateCw size={15} aria-hidden="true" /> Turn
+      </button>
+      {allowSpecimen && plant && hasSpecimen(match) && (
+        <button type="button" onClick={() => editSelected('size')} aria-pressed={specimenOn}
+          title={specimenOn
+            ? `Back to the standard size (₱${Number(match.unit_price).toLocaleString()})`
+            : `Planted bigger: about ${Number(match.specimen_height)} m tall, ₱${Number(match.specimen_price).toLocaleString()} instead of ₱${Number(match.unit_price).toLocaleString()}`}
+          style={{ ...TOOL_BTN('#92400E'), ...(specimenOn && { background: '#FEF3C7' }) }}>
+          <Maximize2 size={15} aria-hidden="true" /> {specimenOn ? 'Specimen' : 'Bigger'}
+        </button>
+      )}
+      {onSwapRequest && plant?.uid && (
+        <button type="button" onClick={() => onSwapRequest(plant.uid)} title="Swap for a similar plant" style={TOOL_BTN('#1E40AF')}>
+          <Replace size={15} aria-hidden="true" /> Swap
+        </button>
+      )}
+      <button type="button" onClick={() => editSelected('remove')} title="Remove (Delete)" style={TOOL_BTN('#B91C1C')}>
+        <Trash2 size={15} aria-hidden="true" /> Remove
+      </button>
+    </>
+    );
+  };
   const overlay = interactive && (
     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden', zIndex: 4 }}>
       {focusPlant && (
         <div ref={cardRef} style={{ position: 'absolute', left: 0, top: 0, visibility: 'hidden' }}>
-          <PlantHeightCard name={focusMatch?.name || focusPlant.name || 'Plant'} category={focusCat} stage={growthStage}
-            shown={focusMatch ? Number(stageSize(focusMatch, growthStage, focusCat)) || 0 : 0}
-            heights={{ planting: Number(focusMatch?.planting_height) || 0, established: Number(focusMatch?.real_world_size) || 0,
-              mature: Number(focusMatch?.mature_height) || 0 }}
-            notes={(focusPlant.uid && notesByUid?.[focusPlant.uid]) || []}
-            growthNote={focusMatch ? growthNote(resolveModelUrl(focusMatch.model_file), growthStage) : ''}
-            wide={focusMatch ? stageSpread(focusMatch, growthStage, focusCat) : 0} />
+          <PlantHeightCard {...focusCard.props} compact={compactHover && focusKey !== selectedKey} />
         </div>
       )}
-      {canEdit && selectedKey && (
+      {canEdit && selectedKey && !detailsOut && (
         <div ref={toolbarRef} role="toolbar" aria-label={`${focusMatch?.name || 'Plant'} actions`}
           style={{ position: 'absolute', left: 0, top: 0, visibility: 'hidden', pointerEvents: 'auto', display: 'flex', gap: 4,
             padding: 4, borderRadius: 999, background: 'rgba(255,255,255,0.96)', boxShadow: '0 6px 18px rgba(15,23,42,0.22)',
             border: '1px solid #E2E8F0', fontFamily: "'Inter', system-ui, sans-serif" }}>
-          <button type="button" onClick={() => editSelected('rotate')} title="Turn 45° (R)" style={TOOL_BTN('#065F46')}>
-            <RotateCw size={15} aria-hidden="true" /> Turn
-          </button>
-          {onSwapRequest && focusPlant?.uid && (
-            <button type="button" onClick={() => onSwapRequest(focusPlant.uid)} title="Swap for a similar plant" style={TOOL_BTN('#1E40AF')}>
-              <Replace size={15} aria-hidden="true" /> Swap
-            </button>
-          )}
-          <button type="button" onClick={() => editSelected('remove')} title="Remove (Delete)" style={TOOL_BTN('#B91C1C')}>
-            <Trash2 size={15} aria-hidden="true" /> Remove
-          </button>
+          {actionsFor(focusMatch, focusSpecimen, focusPlant)}
         </div>
       )}
     </div>
+  );
+
+  const detailsBody = sel && (
+    <div role="region" aria-label={`${sel.props.name}: details`}
+      style={{ display: 'flex', flexDirection: 'column', gap: 10, fontFamily: "'Inter', system-ui, sans-serif" }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+        <PlantHeightCard {...sel.props} panel style={{ flex: 1 }} />
+        <button type="button" onClick={letGo} aria-label="Close the plant details (Esc)" title="Close (Esc)"
+          style={{ width: 36, height: 36, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            border: 'none', borderRadius: 10, background: 'transparent', color: '#64748B', cursor: 'pointer' }}>
+          <X size={18} aria-hidden="true" />
+        </button>
+      </div>
+      {canEdit && (
+        <div role="toolbar" aria-label={`${sel.props.name} actions`}
+          style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: 4, borderRadius: 14, background: '#F8FAFC', border: '1px solid #E2E8F0',
+            alignSelf: 'flex-start' }}>
+          {actionsFor(sel.match, sel.specimen, sel.plant)}
+        </div>
+      )}
+      {fixNote?.text && fixNote.uid === sel.plant.uid && (
+        <p role="status" style={{ margin: 0, fontSize: 12.5, fontWeight: 600, color: fixNote.busy ? '#64748B' : '#065F46' }}>{fixNote.text}</p>
+      )}
+    </div>
+  );
+  const details = detailsOut && (
+    <>
+      {detailsTarget && createPortal(
+        sel ? <div style={{ marginTop: 10, padding: '12px 14px', borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>{detailsBody}</div>
+          : null,
+        detailsTarget)}
+      {detailsSheet && sel && createPortal(
+        <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 60, maxHeight: '55vh', overflowY: 'auto',
+          padding: '8px 16px calc(14px + env(safe-area-inset-bottom))', background: '#fff', borderRadius: '16px 16px 0 0',
+          boxShadow: '0 -8px 24px rgba(15,23,42,0.18)', borderTop: '1px solid #E2E8F0' }}>
+          <div aria-hidden="true" style={{ width: 40, height: 4, borderRadius: 99, background: '#CBD5E1', margin: '0 auto 10px' }} />
+          {detailsBody}
+        </div>,
+        document.body)}
+    </>
   );
 
   if (!arPhoto) {
@@ -1105,6 +1262,7 @@ export default function ThreeGardenCanvas({
           </div>
         )}
         {overlay}
+        {details}
       </div>
     );
   }
@@ -1118,6 +1276,7 @@ export default function ThreeGardenCanvas({
         backgroundImage: `url("${backgroundImageUrl}")`, backgroundSize: '100% 100%' }}>
         <canvas ref={canvasRef} className="focus:outline-none" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block' }} />
         {overlay}
+        {details}
         {editCorners && (
           <CornerPins frameRef={frameRef} corners={setup?.pins || defaultPins(setup?.mode || 'edges')}
             labels={pinLabels(setup?.mode || 'edges', setup)} outline={setup?.mode === 'points' ? false : setup?.mode === 'fences' ? FENCE_OUTLINE : true} onChange={onCornersChange} />
@@ -1250,6 +1409,33 @@ function buildGardenLights(w, l) {
   };
 }
 
+// The real sun over the yard (data/sunPath.js), or back to the fixed daylight when sun is null.
+// Position: from the lot's centre towards the sun; dimmer and warmer as it gets low; under the horizon a
+// faint light from just above it (early morning in December, early evening in June).
+const SUN_LOW = new THREE.Color('#ffb36b');
+function applySun(rig, sun) {
+  const { dirLight, skyLight, ambient, cx, cz, reach, base } = rig;
+  if (!sun) {
+    dirLight.position.copy(base.pos);
+    dirLight.intensity = base.intensity;
+    dirLight.color.copy(base.color);
+    if (skyLight) skyLight.intensity = base.sky;
+    ambient.intensity = base.ambient;
+    return;
+  }
+  const d = sunDirection(sun.hour, sun.day, sun.facing ?? 0);
+  const up = Math.max(0.06, d.dy);   // keep the light just above the ground at sunrise / sunset
+  const flat = Math.hypot(d.dx, d.dz) || 1;
+  const k = Math.sqrt(Math.max(0, 1 - up * up)) / flat;
+  dirLight.position.set(cx + d.dx * k * reach, up * reach, cz + d.dz * k * reach);
+  const high = clamp01(d.elevation / 45);                 // 0 at the horizon, 1 from 45° up
+  const day = clamp01((d.elevation + 4) / 10);            // fades out just below the horizon
+  dirLight.intensity = base.intensity * (0.15 + 0.85 * day) * (0.45 + 0.55 * high);
+  dirLight.color.copy(base.color).lerp(SUN_LOW, 1 - clamp01(d.elevation / 25));
+  if (skyLight) skyLight.intensity = base.sky * (0.55 + 0.45 * clamp01(d.elevation / 30));
+  ambient.intensity = base.ambient * (0.6 + 0.4 * day);
+}
+
 function applyTimeOfDay(rig, hour) {
   const { scene, sun, ambient, lamps, cx, cz, reach } = rig;   // + skyLight, backdrop (3D view)
   const h = Math.min(21, Math.max(5, Number(hour) || 12));
@@ -1365,10 +1551,14 @@ function stageFactor(e, stage) {
   return (Number(stageSize(e.match, stage, 'plant')) || est) / est;
 }
 
+// The stage to draw this entry at: a specimen-size plant is ahead (data/modelSizing.sizedStage)
+const entryStage = (e, stage) => sizedStage(stage, e.match, (e.live || e.plant)?.size);
+
 // Metres tall the entry is drawn at this growth stage (0 = unknown size)
 function entryHeight(e, stage) {
   if (!e?.match) return 0;
-  return Number(stageSize(e.match, stage, e.match.category || 'plant')) || 0;
+  stage = entryStage(e, stage);
+  return (Number(stageSize(e.match, stage, e.match.category || 'plant')) || 0) * (e.vary?.h || 1);
 }
 
 function placeholderFor(pId) {
@@ -1420,6 +1610,7 @@ function createEntry(group, plant, key, inventory, arMode, getStage) {
       : existingMarker(plant);
     if (e.node.userData.keptTree) {
       e.node.position.set(Number(plant.x) || 0, 0, Number(plant.z) || 0);
+      e.node.scale.setScalar(keptTreeGrowth(getStage()));   // a kept tree grows a little over the years
       swayObject(e.node);   // the trees they keep move with the rest of the garden
     }
     group.add(e.node);
@@ -1427,6 +1618,8 @@ function createEntry(group, plant, key, inventory, arMode, getStage) {
   }
   const pId = String(plant.plant_id).toLowerCase();
   e.match = findMatch(inventory, pId) || null;
+  // This plant's own size within its batch (±8%, fixed by its key: data/modelSizing.plantVariation)
+  e.vary = plantVariation(key, e.match?.category || 'plant');
   e.foot = TREEISH(pId) ? 1.0 : SHRUBBY(pId) ? 0.6 : 0.4;
   e.node = placeholderFor(pId);
   group.add(e.node);
@@ -1472,6 +1665,7 @@ function createEntry(group, plant, key, inventory, arMode, getStage) {
       e.minY = box.min.y;   // the model's lowest point goes on the ground
       e.foot = Math.max(0.3, (Math.max(size.x, size.z) * e.base) / 2);
       e.rawW = Math.max(size.x, size.z);   // the model's own widest side (for its real width per stage)
+      e.rawH = size.y;                     // and its own height (how tall it is drawn, for growing between stages)
     }
     group.remove(e.node);
     disposeNode(e.node);
@@ -1483,12 +1677,20 @@ function createEntry(group, plant, key, inventory, arMode, getStage) {
   return e;
 }
 
-function poseEntry(e, stage) {
-  if (e.plant.is_existing) return;
+// animate: grow from the size drawn now to this stage's size (the growth stage switch), else go straight there
+function poseEntry(e, stage, animate = false) {
+  if (e.plant.is_existing) {
+    if (e.node?.userData.keptTree) e.node.scale.setScalar(keptTreeGrowth(stage));   // (data/modelSizing)
+    return;
+  }
   const p = e.live || e.plant;
   e.node.position.x = Number(p.x);
   e.node.position.z = Number(p.z);
   e.node.rotation.y = ((Number(e.plant.rotation) || 0) * Math.PI) / 180;
+  const vary = e.vary || { h: 1, w: 1 };
+  stage = entryStage(e, stage);   // a specimen-size plant is drawn ahead on its curve
+  const was = e.loaded && e.drawn ? e.drawn : null;   // metres tall and wide drawn before this pose
+  let sx = 0, sy = 0, py = 0, boxH = 0, boxW = 0;
   if (e.loaded && e.byParts) {
     // Grows part by part (data/plantGrowth.js): reshape, then size the new shape to this stage's height
     e.rig.pose(stageFactor(e, stage), stage);
@@ -1498,9 +1700,8 @@ function poseEntry(e, stage) {
     const s = size.y > 0 ? h / size.y : 1;
     const target = stageSpread(e.match, stage, 'plant');
     const w = s * widthFit(target, Math.max(size.x, size.z) * s);
-    e.node.scale.set(w, s, w);
-    e.node.position.y = -box.min.y * s;
-    e.footNow = Math.max(0.3, (Math.max(size.x, size.z) * w) / 2);
+    sx = w * vary.w; sy = s * vary.h; py = -box.min.y * sy;
+    boxH = size.y; boxW = Math.max(size.x, size.z);
   } else if (e.loaded) {
     e.rig?.pose(stageFactor(e, stage), stage);   // flowers / fruit for this stage
     // Height and width grow separately: drawn at the plant's real width at this stage (its spread),
@@ -1508,15 +1709,48 @@ function poseEntry(e, stage) {
     const s = e.base * stageFactor(e, stage);
     const target = e.match ? stageSpread(e.match, stage, e.match.category || 'plant') : 0;
     const w = s * widthFit(target, e.rawW * s);
-    e.node.scale.set(w, s, w);
-    e.node.position.y = -e.minY * s;
-    e.footNow = Math.max(0.3, (e.rawW * w) / 2);
+    sx = w * vary.w; sy = s * vary.h; py = -e.minY * sy;
+    boxH = e.rawH || 0; boxW = e.rawW || 0;
+  }
+  if (e.loaded) {
+    e.target = { sx, sy, py };
+    e.drawn = { h: boxH * sy, w: boxW * sx };
+    e.footNow = Math.max(0.3, (boxW * sx) / 2);
+    // Growing: start from the size drawn before and ease to the new one (tickGrowth, every frame)
+    e.grow = animate && was && e.drawn.h > 0 && e.drawn.w > 0
+      && (Math.abs(was.h / e.drawn.h - 1) > 0.01 || Math.abs(was.w / e.drawn.w - 1) > 0.01)
+      ? { fy: was.h / e.drawn.h, fx: was.w / e.drawn.w, t0: performance.now() } : null;
+    applyGrowth(e, e.grow ? 0 : 1);
   }
   if (e.disc) e.disc.position.set(Number(p.x), 0.012, Number(p.z));
-  if (e.disc?.userData.contact) {
-    const r = (e.loaded && e.footNow ? e.footNow : e.foot) * 1.25;
+  if (e.disc?.userData.contact && !e.loaded) {
+    const r = e.foot * 1.25;
     e.disc.scale.set(r, 1, r);
   }
+}
+
+// Draws a loaded entry k of the way (0–1, eased) from where its growth started to its stage's size
+function applyGrowth(e, k) {
+  const t = e.target;
+  if (!t) return;
+  const g = e.grow;
+  const my = g ? g.fy + (1 - g.fy) * k : 1, mx = g ? g.fx + (1 - g.fx) * k : 1;
+  e.node.scale.set(t.sx * mx, t.sy * my, t.sx * mx);
+  e.node.position.y = t.py * my;
+  if (e.disc?.userData.contact) {
+    const r = Math.max(0.3, e.footNow * mx) * 1.25;
+    e.disc.scale.set(r, 1, r);
+  }
+}
+
+// Every frame: plants still growing to the new stage move on (now = Infinity finishes them at once)
+function tickGrowth(entries, now) {
+  entries.forEach((e) => {
+    if (!e.grow || e.dead) return;
+    const t = (now - e.grow.t0) / GROW_MS;
+    if (t >= 1) { e.grow = null; applyGrowth(e, 1); return; }
+    applyGrowth(e, growEase(t));
+  });
 }
 
 function dropEntry(e) {

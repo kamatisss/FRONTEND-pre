@@ -61,3 +61,13 @@ export function groupJobs(bookings, today, clockedJobId) {
 // Navigate to a job: its site pin when known, else the written address; Google Maps or Waze (data/navApps.js)
 export const navUrl = (b) => navLink({ lat: b.site_lat ?? NaN, lng: b.site_lng ?? NaN, address: b.service_address });
 export const telOf = (b) => (b.contact_number || '').replace(/[^\d+]/g, '');
+
+// "On my way" by text message, when the app has no data signal (SMS often still gets through in rural areas).
+// The same words the app's own message uses; the crew member's name when known.
+export function onMyWayText({ customerName, crewName, businessName, eta }) {
+  const first = String(customerName || '').trim().split(/\s+/)[0];
+  const who = crewName ? `${crewName} from ${businessName}` : businessName;
+  return `Hi${first ? ` ${first}` : ''}, this is ${who}. We're on our way and should arrive in about ${eta} minutes.`;
+}
+// sms: link that opens the phone's messages app with the text filled in ("?&body=" works on Android and iPhone)
+export const smsLink = (phone, body) => `sms:${phone}?&body=${encodeURIComponent(body)}`;

@@ -604,12 +604,14 @@ const CATEGORY_CARDS = [
   { key: 'furniture', label: 'Furniture', sub: 'Benches and chairs', Icon: Armchair, tint: 'bg-sky-100 text-sky-700' },
 ];
 // Optional plant sizes: tucked behind "Add growth details" until wanted (or already filled in)
-const GROWTH_EXTRAS = ['planting_height', 'mature_height', 'planting_spread', 'established_spread', 'mature_spread', 'spacing_cm'];
+const GROWTH_EXTRAS = ['planting_height', 'mature_height', 'planting_spread', 'established_spread', 'mature_spread', 'years_to_mature', 'spacing_cm',
+  'specimen_price', 'specimen_height'];
 // Server field → the input it belongs to (errors are shown there, and the form scrolls to the first one)
 const FIELD_IDS = {
   name: 'inv-name', category: 'inv-cat-plant', unit_price: 'inv-price', description: 'inv-desc', reorder_level: 'inv-reorder',
   stock_quantity: 'inv-stock', real_world_size: 'inv-size', planting_height: 'inv-planting_height', mature_height: 'inv-mature_height',
   planting_spread: 'inv-planting_spread', established_spread: 'inv-established_spread', mature_spread: 'inv-mature_spread',
+  years_to_mature: 'inv-years', specimen_price: 'inv-spec-price', specimen_height: 'inv-spec-height',
   sunlight: 'inv-sun', water_need: 'inv-water', model_file: 'inv-model', thumbnail: 'inv-photo', spacing_cm: 'inv-spacing',
   flower_color: 'inv-flower', foliage_color: 'inv-foliage', plant_form: 'inv-form', design_role: 'inv-role',
   feature_type: 'inv-feature',
@@ -675,7 +677,8 @@ function ItemForm({ item, items, onClose, onSaved, modelOptions, modelSpace, onM
     sunlight: item?.sunlight || 'full_sun', water_need: item?.water_need || 'moderate', is_invasive: !!item?.is_invasive,
     planting_height: item?.planting_height ?? '', mature_height: item?.mature_height ?? '',
     planting_spread: item?.planting_spread ?? '', established_spread: item?.established_spread ?? '',
-    mature_spread: item?.mature_spread ?? '', spacing_cm: item?.spacing_cm ?? '',
+    mature_spread: item?.mature_spread ?? '', years_to_mature: item?.years_to_mature ?? '', spacing_cm: item?.spacing_cm ?? '',
+    specimen_price: item?.specimen_price ?? '', specimen_height: item?.specimen_height ?? '',
     flower_color: item?.flower_color || '', foliage_color: item?.foliage_color || '',
     plant_form: item?.plant_form || '', design_role: item?.design_role || '',
     feature_type: item?.feature_type || '',
@@ -774,6 +777,11 @@ function ItemForm({ item, items, onClose, onSaved, modelOptions, modelSpace, onM
       data.append('mature_height', isPlant ? form.mature_height : '');
       // Widths at the same stages: the 3D growth view widens plants at their own pace (empty = follows height)
       ['planting_spread', 'established_spread', 'mature_spread'].forEach(k => data.append(k, isPlant ? form[k] : ''));
+      // When it is fully grown (years after planting): the 3D "Fully grown" card says it (empty = unknown)
+      data.append('years_to_mature', isPlant ? form.years_to_mature : '');
+      // Specimen size: bigger stock customers can choose per plant (installed jobs), at its own price
+      data.append('specimen_price', isPlant ? form.specimen_price : '');
+      data.append('specimen_height', isPlant ? form.specimen_height : '');
       // Planting distance: empty = the AI layout works it out from the fully grown height
       data.append('spacing_cm', isPlant ? form.spacing_cm : '');
       // Looks: how the AI Designer combines plants (empty = not set)
@@ -951,6 +959,36 @@ function ItemForm({ item, items, onClose, onSaved, modelOptions, modelSpace, onM
                 <p className="m-0 text-xs text-slate-500 leading-relaxed">
                   Only the height after ~2 years is required. The others (–) show customers how it grows; empty widths follow the height.
                 </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+                  <div>
+                    <label className={label} htmlFor="inv-years">Fully grown after<Opt /></label>
+                    <UnitInput id="inv-years" suffix="years" step="1" min="1" max="60" value={form.years_to_mature} onChange={set('years_to_mature')}
+                      error={fieldErrors.years_to_mature} describedBy="inv-years-hint" placeholder="–" />
+                    <FieldError id="inv-years" msg={fieldErrors.years_to_mature} />
+                  </div>
+                  <p id="inv-years-hint" className="m-0 sm:pt-7 text-xs text-slate-500 leading-relaxed">
+                    Years from planting until it reaches the fully grown size, e.g. banana 2, hibiscus 3, plumeria 12. Groundcover: until it closes into a carpet, e.g. mani-mani 1, mondo grass 3. Customers see it in 3D.
+                  </p>
+                </div>
+                {/* Specimen size: bigger stock at its own price; customers pick it per plant (installed jobs) */}
+                <fieldset className="m-0 p-0 border-0 grid grid-cols-1 sm:grid-cols-2 gap-3 items-start" aria-describedby="inv-spec-hint">
+                  <legend className="sr-only">Specimen size</legend>
+                  <div>
+                    <label className={label} htmlFor="inv-spec-price">Specimen size price<Opt /></label>
+                    <UnitInput id="inv-spec-price" prefix="₱" step="0.01" min="0" value={form.specimen_price} onChange={set('specimen_price')}
+                      error={fieldErrors.specimen_price} describedBy="inv-spec-hint" placeholder="–" />
+                    <FieldError id="inv-spec-price" msg={fieldErrors.specimen_price} />
+                  </div>
+                  <div>
+                    <label className={label} htmlFor="inv-spec-height">Specimen height at planting<Opt /></label>
+                    <UnitInput id="inv-spec-height" suffix="m" step="0.1" min="0" value={form.specimen_height} onChange={set('specimen_height')}
+                      error={fieldErrors.specimen_height} describedBy="inv-spec-hint" placeholder="–" />
+                    <FieldError id="inv-spec-height" msg={fieldErrors.specimen_height} />
+                  </div>
+                  <p id="inv-spec-hint" className="m-0 sm:col-span-2 text-xs text-slate-500 leading-relaxed">
+                    A bigger, older plant customers can choose instead (planted by our crew only), e.g. a 1.2 m hibiscus for ₱450. Fill both or leave both empty.
+                  </p>
+                </fieldset>
                 {warnings.length > 0 && (
                   <ul className="m-0 pl-0 list-none rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-900 flex flex-col gap-0.5" role="status">
                     {warnings.map(w => <li key={w}>{w} Please check.</li>)}

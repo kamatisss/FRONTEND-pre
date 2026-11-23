@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Navigation, Phone, StickyNote, Play, LogOut, Camera, Check, Lock, Layers, Eye, FileText, Loader2, AlertTriangle,
-  Car, PackageCheck, ChevronDown, ChevronUp, RotateCcw, Flag, Crosshair, Ruler,
+  Car, MessageSquare, PackageCheck, ChevronDown, ChevronUp, RotateCcw, Flag, Crosshair, Ruler, CheckCircle2, CloudDownload, CloudOff,
 } from 'lucide-react';
 import ProgressPhotos from './ProgressPhotos';
 import ProblemSheet from './ui/ProblemSheet';
-import { SERVICE, TIME, statusOf, dayLabel, clockTime, navUrl as mapsUrl, telOf } from '../data/crewJobs';
+import { SERVICE, TIME, statusOf, dayLabel, clockTime, navUrl as mapsUrl, telOf, onMyWayText, smsLink } from '../data/crewJobs';
+import { BUSINESS } from '../data/business';
+import { useAuth } from '../context/AuthContext';
 import { productImage } from '../data/productImage';
-import { sendAction, sendPhoto, pendingPhotos } from '../crew/outbox';
+import { sendAction, sendPhoto, pendingPhotos, pendingStageChanges, pendingSignOff } from '../crew/outbox';
 import { useOutbox } from '../crew/useOutbox';
 import { PHOTO_ACCEPT, photoProblem } from '../services/fileCheck';
 
@@ -111,7 +113,7 @@ export function JobShift({ booking, todayIso, activeAttendance, toast, onChanged
 }
 
 /* ── The crew's three stages: one photo each ────────────────────────────── */
-function FieldStages({ booking, api, headers, onChanged, onTheJob }) {
+function FieldStages({ booking, onChanged, onTheJob }) {
   const fromBooking = () => Object.fromEntries((booking.project_milestones || []).map(m => [m.phase, m]));
   const [milestones, setMilestones] = useState(fromBooking);
   // Fresh job data (e.g. after saved stage photos were sent) replaces what this card knew
@@ -120,23 +122,15 @@ function FieldStages({ booking, api, headers, onChanged, onTheJob }) {
   const [error, setError] = useState({});
   const [failed, setFailed] = useState({});   // stage → the photo that didn't upload (retry without retaking)
   const inputs = useRef({});
-  // Stage photos taken with no signal: the stage counts as done here, and is sent with the photo later
-  const waitingStage = Object.fromEntries(pendingPhotos(useOutbox(), booking.id)
+  // Stage changes made with no signal (a stage photo finishes a stage, an Undo reopens it): shown as
+  // they will be once sent. A photo that wasn't accepted is listed separately.
+  const outbox = useOutbox();
+  const waitingStage = Object.fromEntries(pendingPhotos(outbox, booking.id)
     .filter(e => e.ref.stage).map(e => [e.ref.stage, e.state]));
+  const changes = pendingStageChanges(outbox, booking.id);
   const office = milestones.design_contract?.completion_pct === 100;
-  const isDoneHere = key => milestones[key]?.completion_pct === 100 || waitingStage[key] === 'waiting';
+  const isDoneHere = key => (changes[key] ? changes[key] === 'done' : milestones[key]?.completion_pct === 100);
   const done = STAGES.filter(s => isDoneHere(s.key)).length;
-
-  const save = async (stage, pct, proof = '') => {
-    const r = await fetch(`${api}/bookings/${booking.id}/update_milestone/`, {
-      method: 'PATCH', headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phase: stage.key, completion_pct: pct, proof_photo_url: proof }),
-    });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.error || 'Could not save. Check your signal and try again.');
-    if (data.milestone) setMilestones(prev => ({ ...prev, [stage.key]: data.milestone }));
-    onChanged?.();
-  };
 
   const finishWithPhoto = async (stage, file) => {
     if (!file) return;
@@ -163,9 +157,17 @@ function FieldStages({ booking, api, headers, onChanged, onTheJob }) {
     setBusy(null);
   };
 
+  // Undo goes through the outbox too: with no signal it waits (in order, after the photo it undoes)
   const undo = async (stage) => {
-    setBusy(stage.key);
-    try { await save(stage, 0); } catch (e) { setError(prev => ({ ...prev, [stage.key]: e.message })); }
+    setBusy(stage.key); setError(prev => ({ ...prev, [stage.key]: '' }));
+    try {
+      const res = await sendAction({
+        label: `Undo ${stage.label} (booking #${booking.id})`, path: `/bookings/${booking.id}/update_milestone/`, method: 'PATCH',
+        body: { phase: stage.key, completion_pct: 0, proof_photo_url: '' }, kind: 'stage', ref: { bookingId: booking.id, stage: stage.key },
+      });
+      if (res.data?.milestone) setMilestones(prev => ({ ...prev, [stage.key]: res.data.milestone }));
+      if (res.data) onChanged?.();
+    } catch (e) { setError(prev => ({ ...prev, [stage.key]: e.message })); }
     setBusy(null);
   };
 
@@ -185,7 +187,8 @@ function FieldStages({ booking, api, headers, onChanged, onTheJob }) {
       {STAGES.map((stage, i) => {
         const m = milestones[stage.key];
         const isDone = isDoneHere(stage.key);
-        const waiting = waitingStage[stage.key] === 'waiting' && m?.completion_pct !== 100;
+        const waiting = changes[stage.key] === 'done' && waitingStage[stage.key] === 'waiting' && m?.completion_pct !== 100;
+        const undoWaiting = changes[stage.key] === 'undone' && m?.completion_pct === 100;
         const saving = busy === stage.key;
         return (
           <div key={stage.key} className={`rounded-xl border p-3 ${isDone ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-slate-200'}`}>
@@ -197,6 +200,7 @@ function FieldStages({ booking, api, headers, onChanged, onTheJob }) {
                 <p className={`m-0 text-[15px] font-bold ${isDone ? 'text-emerald-900' : 'text-slate-900'}`}>{stage.label}</p>
                 {!isDone && <p className="m-0 text-xs text-slate-500">{stage.hint}</p>}
                 {waiting && <p className="m-0 text-xs font-semibold text-amber-700">Photo saved on this phone. Sends when you have signal.</p>}
+                {undoWaiting && <p className="m-0 text-xs font-semibold text-amber-700">Undo saved on this phone. Sends when you have signal.</p>}
                 {waitingStage[stage.key] === 'failed' && !isDone && <p className="m-0 text-xs font-semibold text-red-700">Photo not accepted. See “not accepted” at the top.</p>}
               </div>
               {isDone && !waiting && onTheJob && (
@@ -266,29 +270,72 @@ export function JobSteps({ booking, onTheJob }) {
 /* ── "On my way": tell the customer we're coming ───────────────────────────── */
 const ETAS = [15, 30, 45, 60];
 export function OnMyWay({ booking, todayIso, api, headers, toast, onChanged }) {
+  const { user } = useAuth();
   const [picking, setPicking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [sentAt, setSentAt] = useState(booking.crew_on_way_at || null);
+  // No data signal: offer a text message instead (the time it was opened is kept on this phone, wiped on sign-out)
+  const textedKey = `gs.crew.texted.${booking.id}`;
+  const [textedAt, setTextedAt] = useState(() => { try { return localStorage.getItem(textedKey); } catch { return null; } });
+  const [smsFor, setSmsFor] = useState(null);   // the ETA to text about
   const startable = booking.status === 'Installing' || (booking.status === 'Preparing' && booking.scheduled_date <= todayIso);
   if (!startable || !booking.customer_name) return null;
-  const toldToday = sentAt && new Date(sentAt).toDateString() === new Date().toDateString();
+  const isToday = (iso) => iso && new Date(iso).toDateString() === new Date().toDateString();
+  const lastTold = [isToday(sentAt) && { at: sentAt, how: 'app' }, isToday(textedAt) && { at: textedAt, how: 'text' }]
+    .filter(Boolean).sort((a, b) => (a.at < b.at ? 1 : -1))[0];
+  const phone = telOf(booking);
 
   const send = async (eta) => {
+    if (navigator.onLine === false) { setPicking(false); setSmsFor(eta); return; }
     setBusy(true);
     try {
       const r = await fetch(`${api}/bookings/${booking.id}/on_my_way/`, {
         method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ eta_minutes: eta }),
       });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(d.error || 'Could not tell the customer.');
-      setSentAt(d.crew_on_way_at); setPicking(false);
-      toast?.(`${booking.customer_name} has been told you arrive in about ${eta} minutes.`);
-      onChanged?.();
-    } catch (e) {
-      toast?.(navigator.onLine === false ? 'No signal. Try again when you have signal.' : e.message, 'error');
+      if (r.status >= 500) { setPicking(false); setSmsFor(eta); }   // the server can't send it now: a text still can
+      else if (!r.ok) toast?.(d.error || 'Could not tell the customer.', 'error');
+      else {
+        setSentAt(d.crew_on_way_at); setPicking(false);
+        toast?.(`${booking.customer_name} has been told you arrive in about ${eta} minutes.`);
+        onChanged?.();
+      }
+    } catch {
+      setPicking(false); setSmsFor(eta);   // no answer: weak or no data signal
     }
     setBusy(false);
   };
+
+  const texted = () => {
+    const now = new Date().toISOString();
+    try { localStorage.setItem(textedKey, now); } catch { /* not kept: only the "texted at" line is lost */ }
+    setTextedAt(now); setSmsFor(null);
+  };
+
+  if (smsFor) {
+    const body = onMyWayText({ customerName: booking.customer_name, crewName: user?.first_name, businessName: BUSINESS.name, eta: smsFor });
+    return (
+      <div className="rounded-xl border border-amber-200 bg-amber-50 p-3" role="status">
+        <p className="m-0 text-sm font-bold text-amber-900">No data signal: the app can't tell {booking.customer_name}.</p>
+        {phone ? (
+          <>
+            <p className="m-0 mt-1 text-sm text-amber-900">A text message often still gets through. It opens your messages app with this filled in:</p>
+            <p className="m-0 mt-2 text-sm text-slate-800 bg-white border border-amber-200 rounded-lg p-2">{body}</p>
+            <a href={smsLink(phone, body)} onClick={texted}
+              className="mt-2 w-full min-h-[48px] rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-extrabold no-underline inline-flex items-center justify-center gap-2">
+              <MessageSquare size={16} /> Text {booking.customer_name.split(' ')[0]}
+            </a>
+          </>
+        ) : (
+          <p className="m-0 mt-1 text-sm text-amber-900">There's no phone number on this booking. Try again when you have signal, or ask the office.</p>
+        )}
+        <div className="flex gap-2 mt-1">
+          <button type="button" onClick={() => { setSmsFor(null); setPicking(true); }} className="min-h-[40px] px-1 bg-transparent border-none text-sm font-semibold text-sky-800 cursor-pointer">Try the app again</button>
+          <button type="button" onClick={() => setSmsFor(null)} className="min-h-[40px] px-1 bg-transparent border-none text-sm font-semibold text-slate-600 cursor-pointer">Cancel</button>
+        </div>
+      </div>
+    );
+  }
 
   if (picking) {
     return (
@@ -310,9 +357,13 @@ export function OnMyWay({ booking, todayIso, api, headers, toast, onChanged }) {
     <div className="flex items-center gap-3">
       <button type="button" onClick={() => setPicking(true)}
         className="flex-1 min-h-[48px] rounded-xl bg-white border border-sky-300 text-sky-800 text-sm font-bold cursor-pointer inline-flex items-center justify-center gap-2 hover:bg-sky-50">
-        <Car size={16} /> {toldToday ? 'Tell again' : "I'm on my way"}
+        <Car size={16} /> {lastTold ? 'Tell again' : "I'm on my way"}
       </button>
-      {toldToday && <p className="m-0 text-sm text-slate-600 shrink-0">Customer told at <b>{clockTime(sentAt)}</b></p>}
+      {lastTold && (
+        <p className="m-0 text-sm text-slate-600 shrink-0">
+          {lastTold.how === 'text' ? 'Texted at' : 'Customer told at'} <b>{clockTime(lastTold.at)}</b>
+        </p>
+      )}
     </div>
   );
 }
@@ -372,10 +423,41 @@ const JOB_PROBLEMS = ['Customer not home', 'Weather (rain or storm)', 'Missing p
 
 const SECONDARY = 'flex-1 min-h-[44px] rounded-xl bg-white border border-slate-200 text-slate-700 text-sm font-bold cursor-pointer inline-flex items-center justify-center gap-1.5 hover:bg-slate-50';
 
+/* ── Saved for offline (crew/jobPack.js): can the buttons above open with no signal? ── */
+function PackStatus({ pack, design, onPackNow }) {
+  if (!pack) return null;
+  // Only what this job has: the buttons above
+  const parts = [design && '3D', design?.setting_out?.items?.length > 0 && 'plan',
+    (design?.reference_image_url || design?.image_url) && 'AR', 'work order'].filter(Boolean);
+  const what = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : 'Work order';
+  if (pack.saving) {
+    return <p className="m-0 -mt-2 text-xs text-slate-500 inline-flex items-center gap-1.5" role="status"><CloudDownload size={13} /> Saving for offline…</p>;
+  }
+  if (pack.ready) {
+    return (
+      <p className="m-0 -mt-2 text-xs font-semibold text-emerald-700 inline-flex items-center gap-1.5">
+        <CheckCircle2 size={13} /> Saved for offline: {what} open{parts.length > 1 ? '' : 's'} without signal
+      </p>
+    );
+  }
+  return (
+    <div className="-mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-amber-800">
+      <span className="inline-flex items-center gap-1.5 font-semibold"><CloudOff size={13} /> Not all saved for offline: {(pack.missing || []).join(', ')}</span>
+      {onPackNow && (
+        <button type="button" onClick={onPackNow}
+          className="min-h-[32px] px-2 rounded-lg bg-transparent border border-amber-300 text-amber-900 text-xs font-bold cursor-pointer hover:bg-amber-50">
+          Try again
+        </button>
+      )}
+    </div>
+  );
+}
+
 /* ── The card ────────────────────────────────────────────────────────────── */
 export default function CrewJobCard({
   booking, todayIso, activeAttendance, refreshActiveAttendance, api, headers, toast, user,
   submitting, onSubmit, onOpenDesign, onWorkOrder, onChanged, onFindIt,
+  pack = null, onPackNow = null,   // job pack status for this job (crew/jobPack.js) and "save it now"
 }) {
   const bar = statusOf(booking.status);
   const active = ['Preparing', 'Installing'].includes(booking.status);
@@ -386,7 +468,25 @@ export default function CrewJobCard({
   const blockers = booking.sign_off_blockers || [];
   const design = booking.design_details;
   const [problem, setProblem] = useState(false);
-  const photosWaiting = pendingPhotos(useOutbox(), booking.id).length;
+  const outbox = useOutbox();
+  const photosWaiting = pendingPhotos(outbox, booking.id).filter(e => e.state === 'waiting').length;
+  const signOffWaiting = pendingSignOff(outbox, booking.id);
+  // Every stage done on this phone (sent, or a stage photo still waiting)? Then sign-off can be submitted
+  // now and waits behind the photos; the server checks everything again when it arrives.
+  const stageChanges = pendingStageChanges(outbox, booking.id);
+  const doneOnServer = Object.fromEntries((booking.project_milestones || []).map(m => [m.phase, m.completion_pct === 100]));
+  const missingHere = STAGES.filter(st => !(stageChanges[st.key] ? stageChanges[st.key] === 'done' : doneOnServer[st.key]));
+  const stagesHere = !missingHere.length;
+  const submitButton = (note) => (
+    <div className="flex flex-col gap-1.5">
+      <button type="button" disabled={submitting}
+        onClick={() => window.confirm(`Submit booking #${booking.id} as finished? The office will check it and sign it off.`) && onSubmit(booking.id)}
+        className="w-full min-h-[52px] rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-base font-extrabold border-none cursor-pointer inline-flex items-center justify-center gap-2 disabled:opacity-60">
+        <Check size={18} strokeWidth={3} /> {submitting ? 'Submitting…' : 'Submit for sign-off'}
+      </button>
+      {note && <p className="m-0 text-xs text-slate-600 text-center">{note}</p>}
+    </div>
+  );
   const hasAr = !!(design?.reference_image_url || design?.image_url);
 
   return (
@@ -451,7 +551,7 @@ export default function CrewJobCard({
         )}
 
         {(booking.status === 'Installing' || onTheJob) && (
-          <FieldStages booking={booking} api={api} headers={headers} onChanged={onChanged} onTheJob={onTheJob} />
+          <FieldStages booking={booking} onChanged={onChanged} onTheJob={onTheJob} />
         )}
 
         {booking.status !== 'Cancelled' && (
@@ -459,22 +559,26 @@ export default function CrewJobCard({
         )}
 
         {booking.status === 'Installing' && (
-          photosWaiting > 0 ? (
+          signOffWaiting ? (
+            <p className="m-0 text-sm text-violet-800 bg-violet-50 border border-violet-200 rounded-xl p-3">
+              <b>Submitted on this phone.</b> It goes to the office for sign-off when you have signal{photosWaiting ? ', after your photos' : ''}.
+            </p>
+          ) : stagesHere && (photosWaiting > 0 || !blockers.length) ? (
+            submitButton(photosWaiting > 0
+              ? `${photosWaiting === 1 ? '1 photo is' : `${photosWaiting} photos are`} still on this phone: the sign-off goes after them.`
+              : null)
+          ) : photosWaiting > 0 ? (
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
               <p className="m-0 text-sm font-bold text-amber-900 flex items-center gap-1.5"><AlertTriangle size={15} /> {photosWaiting === 1 ? '1 photo' : `${photosWaiting} photos`} still on this phone</p>
-              <p className="m-0 mt-1 text-sm text-amber-900">You can submit for sign-off once they are sent. They go by themselves when you have signal.</p>
-            </div>
-          ) : blockers.length ? (
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-              <p className="m-0 text-sm font-bold text-slate-800 flex items-center gap-1.5"><AlertTriangle size={15} className="text-amber-600" /> Before you can submit for sign-off</p>
-              <ul className="m-0 mt-1.5 pl-5 text-sm text-slate-700">{blockers.map(b => <li key={b}>{b}</li>)}</ul>
+              <p className="m-0 mt-1 text-sm text-amber-900">They go by themselves when you have signal. Finish every stage to submit for sign-off.</p>
             </div>
           ) : (
-            <button type="button" disabled={submitting}
-              onClick={() => window.confirm(`Submit booking #${booking.id} as finished? The office will check it and sign it off.`) && onSubmit(booking.id)}
-              className="w-full min-h-[52px] rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-base font-extrabold border-none cursor-pointer inline-flex items-center justify-center gap-2 disabled:opacity-60">
-              <Check size={18} strokeWidth={3} /> {submitting ? 'Submitting…' : 'Submit for sign-off'}
-            </button>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <p className="m-0 text-sm font-bold text-slate-800 flex items-center gap-1.5"><AlertTriangle size={15} className="text-amber-600" /> Before you can submit for sign-off</p>
+              <ul className="m-0 mt-1.5 pl-5 text-sm text-slate-700">
+                {(stagesHere ? blockers : [`Finish: ${missingHere.map(st => st.label).join(', ')}.`]).map(b => <li key={b}>{b}</li>)}
+              </ul>
+            </div>
           )
         )}
         {booking.status === 'For Review' && (
@@ -504,6 +608,7 @@ export default function CrewJobCard({
             <FileText size={15} /> Work order
           </button>
         </div>
+        <PackStatus pack={pack} design={design} onPackNow={onPackNow} />
 
         {['Pending', 'Preparing', 'Installing'].includes(booking.status) && (
           <button type="button" onClick={() => setProblem(true)}

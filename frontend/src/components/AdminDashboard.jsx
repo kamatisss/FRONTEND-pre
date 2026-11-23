@@ -4,6 +4,7 @@ import { RefreshCw, ChevronDown, ChevronUp, BarChart3 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useIsPhone } from './ui/useMediaQuery';
 import TodayAttention from './TodayAttention';
+import CrewSyncPanel from './CrewSyncPanel';
 import IncomeAnalytics from './IncomeAnalytics';
 import StudioFunnelCard from './StudioFunnelCard';
 import AIDesignerHealthCard from './AIDesignerHealthCard';
@@ -47,6 +48,7 @@ export default function AdminDashboard() {
       </div>
 
       <TodayAttention reloadKey={reloadKey} />
+      <CrewSyncPanel key={reloadKey} />
 
       {/* The longer view */}
       {phone && (

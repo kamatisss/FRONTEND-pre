@@ -42,7 +42,7 @@ const GardenBackground = forwardRef(function GardenBackground(
     gardenPlan = null, // beds + lawn from the AI Designer (dimensions.gardenPlan): beds drawn as mulch
     ground = null,     // DesignContext's { beds, entries }: beds round the plants (hand-made designs) and their groundcover
     groundPlants = [], // [{ x, z, h, s }] lot metres from the back-left corner: grown height / spread (shade under crowns)
-    growthStage = 'established',
+    growthStage = 2,   // years after planting (data/modelSizing.stageYears)
     lite = false,
     lawnLook = DEFAULT_LAWN_LOOK,   // how long the grass looks (data/grassField.js LAWN_LOOKS)
     onTerrainClick,   // legacy: raw event (used by GardenDesigner to confirm placement)

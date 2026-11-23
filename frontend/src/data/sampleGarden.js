@@ -62,6 +62,7 @@ export function lotPlantsToStudioItems(layout, products, width, length) {
       position: { x: Number(s.x) - width / 2, y: 0, z: Number(s.z) - length / 2 },
       rotation: { x: 0, y: ((Number(s.rotation) || 0) * Math.PI) / 180, z: 0 },
       scale: { x: 1, y: 1, z: 1 },
+      // (no specimen size: the Studio's checkout is a shop order, and specimens are planted by our crew only)
     };
   }).filter(Boolean);
 }

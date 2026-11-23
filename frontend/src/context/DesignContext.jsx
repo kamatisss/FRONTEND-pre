@@ -30,7 +30,7 @@ const initialState = {
   terrainHeight: 1.5,
   timeOfDay: DEFAULT_TIME_OF_DAY,
   dimensions: { width: 10, length: 15, terrainType: 'flat' },
-  growthStage: 'established',   // view only (not saved): 'planting' | 'established' | 'mature'
+  growthStage: 2,   // view only (not saved): years after planting, 100 = fully grown (data/modelSizing GROWTH_STOPS)
 
   // Save/load
   designId: null,

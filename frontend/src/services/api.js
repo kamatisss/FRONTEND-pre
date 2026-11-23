@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { compressImage } from './imageCompress';
 import { API_BASE_URL as API_ROOT } from '../config';
+import { packedCatalog } from '../crew/jobPack';   // crew phones: the catalog saved for offline jobs
 
 const API_BASE_URL = API_ROOT;
 
@@ -62,8 +63,17 @@ export const generateDepthMap = async (imageFile) => {
 // archived: true lists archived items too (office only; the Inventory page)
 export const getInventoryItems = async (category = null, { archived = false } = {}) => {
   const params = { ...(category ? { category } : {}), ...(archived ? { archived: 1 } : {}) };
-  const res = await api.get('/inventory/', { params });
-  return res.data;
+  try {
+    const res = await api.get('/inventory/', { params });
+    return res.data;
+  } catch (err) {
+    // No signal (no answer at all): a crew phone may have the catalog saved with its job pack (crew/jobPack.js)
+    if (!category && !archived && !err.response) {
+      const saved = await packedCatalog();
+      if (saved) return saved;
+    }
+    throw err;
+  }
 };
 
 /**
@@ -442,6 +452,16 @@ export const getPublicProject = async (slug) => {
     const res = await publicGet(`/portfolio/public/${slug}/`);
     return res.data;
   } catch (err) { throw errorOf(err, 'Project not found'); }
+};
+
+// ─── Design card picture (backend design_preview.py; made by data/designPreview.js) ───
+// POST /api/designs/:id/preview/ (image, revision) → { preview_url, preview_revision }
+export const uploadDesignPreview = async (designId, blob, revision) => {
+  const form = new FormData();
+  form.append('image', blob, 'preview.jpg');
+  if (revision) form.append('revision', String(revision));
+  const res = await api.post(`/designs/${designId}/preview/`, form);
+  return res.data;
 };
 
 // ─── Design share links (/d/<token>) ─────────────────────────────
@@ -833,4 +853,35 @@ export const getSunMap = (lotWidth, lotLength, survey) => {
     sunCache.set(key, job);
   }
   return sunCache.get(key);
+};
+
+// Mark your yard → the AI's look at the lined-up photo (backend garden_ai.photo_objects): the trees, shrubs,
+// structures, paving, water and utilities it sees, as boxes on the picture. photoUrl: the photo on screen (an
+// object URL). A copy at most 1280 px wide is sent (enough for Gemini, a fraction of a phone photo's size).
+// → { status: 'ok' | 'unavailable' | 'quota' | 'failed', objects: [{ kind, label, box: [ymin, xmin, ymax, xmax] 0–1000 }] }
+const PHOTO_SEND_MAX = 1280;
+const photoObjectsCache = new Map();
+export const getPhotoObjects = (photoUrl) => {
+  if (!photoObjectsCache.has(photoUrl)) {
+    const job = new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const k = Math.min(1, PHOTO_SEND_MAX / Math.max(img.naturalWidth, img.naturalHeight));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(img.naturalWidth * k));
+        canvas.height = Math.max(1, Math.round(img.naturalHeight * k));
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(blob => (blob ? resolve(blob) : reject(new Error('The photo could not be read.'))), 'image/jpeg', 0.85);
+      };
+      img.onerror = () => reject(new Error('The photo could not be read.'));
+      img.src = photoUrl;
+    }).then((blob) => {
+      const form = new FormData();
+      form.append('image', blob, 'yard.jpg');
+      return api.post('/photo-objects/', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+    }).then(res => res.data)
+      .catch((err) => { photoObjectsCache.delete(photoUrl); throw err; });
+    photoObjectsCache.set(photoUrl, job);
+  }
+  return photoObjectsCache.get(photoUrl);
 };

@@ -76,7 +76,8 @@ const UserOrders = () => {
                     headers: { 'Authorization': `Bearer ${authTokens.access}` }
                 });
                 if (res.ok) {
-                    setOrders(prevOrders => prevOrders.filter(order => order.id !== orderId));
+                    // The order is kept as Cancelled (no longer deleted), so it stays in the history
+                    setOrders(prevOrders => prevOrders.map(order => (order.id === orderId ? { ...order, status: 'Cancelled' } : order)));
                     showToast("Order cancelled successfully.", "info");
                 } else {
                     const data = await res.json().catch(() => ({}));

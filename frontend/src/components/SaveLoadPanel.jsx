@@ -9,6 +9,7 @@ import { DEFAULT_TIME_OF_DAY } from '../data/studioLight';
 import { useToast } from './ui/Toast';
 
 import { loadDesignForStudio } from '../data/studioDesign';
+import { previewScene, queuePreview } from '../data/designPreview';
 /* ═══════════════════════════════════════════════════════════════
    INLINE STYLES
    ═══════════════════════════════════════════════════════════════ */
@@ -220,6 +221,7 @@ export default function SaveLoadPanel({ toolbarVariant }) {
     try {
       const base = (state.designName || 'My design').replace(/ \(new version\)$/, '');
       const result = await saveDesign({ ...designPayload(), id: undefined, name: `${base} (new version)`.slice(0, 100) });
+      queuePreview(result.id, previewScene(result), result.revision);   // its card picture, in the background
       dispatch({ type: 'SET_DESIGN_META', payload: { designId: result.id, designName: result.name, designLocked: false } });
       dispatch({ type: 'MARK_CLEAN' });
       toast({ id: 'design-save', type: 'success', title: 'Saved as a new design',
@@ -236,6 +238,7 @@ export default function SaveLoadPanel({ toolbarVariant }) {
     setMessage('');
     try {
       const result = await saveDesign(designPayload());
+      queuePreview(result.id, previewScene(result), result.revision);   // its card picture, in the background
       dispatch({ type: 'SET_DESIGN_META', payload: { designId: result.id, designLocked: !!result.locked } });
       dispatch({ type: 'MARK_CLEAN' });
       setMessage('Design saved successfully!');

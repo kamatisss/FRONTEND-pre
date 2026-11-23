@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Bell, X, ShoppingBag, CalendarCheck, HardHat, Truck, Wallet, AlertTriangle, Star, Image as ImageIcon, CheckCheck,
+  Palette, Info,
 } from 'lucide-react';
 import api from '../../services/api';
 
@@ -13,16 +14,20 @@ import api from '../../services/api';
 
 const POLL_MS = 45000;
 
+// First match wins. The warning triangle is for problems only, never for good news such as
+// "our crew is on the way" (it used to be the fallback for every kind not listed here).
 const KIND_ICON = [
-  [/^order|delivery_problem/, ShoppingBag, '#2563eb', '#eff6ff'],
-  [/^delivery/, Truck, '#0891b2', '#ecfeff'],
-  [/^job|crew_assigned/, HardHat, '#ea580c', '#fff7ed'],
+  [/problem|late_payment/, AlertTriangle, '#b45309', '#fffbeb'],
+  [/^rider|^delivery|order_on_the_way/, Truck, '#0891b2', '#ecfeff'],
+  [/^order/, ShoppingBag, '#2563eb', '#eff6ff'],
+  [/^job|^crew/, HardHat, '#ea580c', '#fff7ed'],
   [/^booking/, CalendarCheck, '#059669', '#ecfdf5'],
-  [/payment/, Wallet, '#7c3aed', '#f5f3ff'],
+  [/payment|^cash/, Wallet, '#7c3aed', '#f5f3ff'],
+  [/^design/, Palette, '#0d9488', '#f0fdfa'],
   [/review/, Star, '#ca8a04', '#fefce8'],
   [/portfolio/, ImageIcon, '#db2777', '#fdf2f8'],
 ];
-const iconFor = (kind) => KIND_ICON.find(([re]) => re.test(kind || '')) || [null, AlertTriangle, '#64748b', '#f1f5f9'];
+const iconFor = (kind) => KIND_ICON.find(([re]) => re.test(kind || '')) || [null, Info, '#64748b', '#f1f5f9'];
 
 function ago(iso) {
   const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);

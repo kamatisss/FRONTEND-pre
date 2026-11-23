@@ -3,16 +3,23 @@
 // clear, trees to keep, the gate or door, a wall to hide, a view to keep — by tapping the photo (each tap is a real
 // spot in the yard: data/photoPose.js imageToGround) or a plan of the lot (no photo, or not lined up).
 // The marks are lot metres (data/yardSurvey.js); the design engine plans around them (backend site_survey.py).
-// The yard's shape (YardShapePanel + the corner handles here): when it isn't the whole W × L box, marks stay
-// inside it, gates and screens follow its sides, and the engine plans inside it (backend lot_shape.py).
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Camera, Check, Crosshair, Map as MapIcon, Sparkles, Sun, Trash2, X } from 'lucide-react';
+// The yard's shape (survey.outline) is drawn before this, under the yard size (YardShapeStep): when it isn't the
+// whole W x L box, marks stay inside it, gates and screens follow its sides, and the engine plans inside it
+// (backend lot_shape.py). Here it is only shown; "Use this shape" (a photo that shows a narrowing yard) can set it.
+// The photo shapes the design, and the design says so (backend site_survey.photo_facts): once it is lined up, its
+// reading (photoHints.js) runs by itself and suggests paving to keep clear and an existing lawn to keep; marks
+// carry where they came from (src 'photo' = tapped on the photo, 'found' = an accepted suggestion) and
+// survey.photo = { lined_up, sized, shaped, grass }. When the AI has quota left, it looks too (backend
+// photo_objects: trees, sheds, paving… as boxes on the picture), and data/photoObjects.js turns each box into a
+// spot in the yard with the same line-up; those join the suggestions. Without the AI the colour reading still works.
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
+import { Camera, Check, ChevronDown, Crosshair, Map as MapIcon, Sparkles, Sun, Trash2, X } from 'lucide-react';
 import CornerPins from './PhotoPins';
 import PhotoPlanCheck from './PhotoPlanCheck';
 import SunSetup from './SunSetup';
-import YardShapePanel from './YardShapePanel';
-import { getSunMap } from '../services/api';
+import { getPhotoObjects, getSunMap } from '../services/api';
 import { findPaving, loadPixels } from '../data/photoHints';
+import { objectsToMarks } from '../data/photoObjects';
 import { FENCE_LABELS, FENCE_OUTLINE, MAX_POINT_PINS, VANTAGES, defaultFencePins, defaultPins, fitSizeToCamera, imageToGround, pinLabels, projectGroundPoint, solvePhotoPose, vantageOf } from '../data/photoPose';
 import {
   CLEAR_LABELS, KEEP_SIZES, MAX_SURVEY_ITEMS, SUN_LEGEND, SURVEY_TOOLS, alongEdge, clampPoint, describe, edgeLength,
@@ -65,8 +72,14 @@ const guessPin = (W, L) => (a) => ({ u: 0.1 + 0.8 * (W ? a.x / W : 0.5), v: 0.38
 // onLotSize(width, length): the one-tap size fix when the camera height shows the typed size is off.
 // pinFront / onPinFront: { width, lean } — the yard's width measured at the house side, and which fence angles
 // ('both' | 'left' | 'right'); with six fence pins it measures a yard that narrows or widens (photoPose.solveFromFences).
+// lawn / onLawn / lawnApplies: the "open lawn" answer ('new' | 'keep'), offered from the photo when most of the
+// yard is grass (lawnApplies: only when we lay the lawn at all, i.e. an installed makeover).
+const LAWN_GRASS = 0.5;      // this much of the seen yard green = an existing lawn (backend site_survey.GRASS_LAWN)
+const LAWN_SEEN = 0.25;      // and the photo must show at least this much of the yard to say so
+
 export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pinMode, onPinMode, onPins, pinAnchors,
-  onPinAnchors, survey, onSurvey, pinVantage = 'ground', onPinVantage, onLotSize, pinFront = null, onPinFront }) {
+  onPinAnchors, survey, onSurvey, pinVantage = 'ground', onPinVantage, onLotSize, pinFront = null, onPinFront,
+  lawn = 'new', onLawn, lawnApplies = false }) {
   const W = Number(lotWidth) || 0, L = Number(lotLength) || 0;
   const photo = useImageSize(imageUrl);
   const shape0 = useMemo(() => fitOutline(survey?.outline || null, W, L), [survey?.outline, W, L]);
@@ -127,7 +140,7 @@ export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pi
       return { x: r2((g?.x ?? 0) - minX), z: r2(g?.z ?? 0), corner: null, label: FENCE_LABELS[i] };
     });
     onLotSize?.(r2(maxX - minX), L);
-    save({ outline });
+    save({ outline, photo: { ...(survey?.photo || {}), lined_up: true, sized: true, shaped: true } });
     onPinMode('points');
     onPinAnchors?.(anchors);
     onPins(setup.pins.slice(0, FENCE_OUTLINE));
@@ -150,6 +163,10 @@ export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pi
   const step = imageUrl ? (stepFor.url === imageUrl ? stepFor.step : 'line') : 'mark';
   const setStep = (s) => setStepFor({ url: imageUrl, step: s });
   const [onPlan, setOnPlan] = useState(false);
+  // "More accurate options" (another pin method, the house-side pin, the width at the house): folded away for a
+  // first-timer; open from the start when one of them is already in use
+  const [moreOpen, setMoreOpen] = useState(() => (!shape0 && pinMode !== 'fences')
+    || (pinSetup?.mode === 'fences' && pinSetup.pins?.length === 8 && !pinSetup.pins[7]?.skip) || Number(pinFront?.width) > 0);
   const usePhoto = !!(imageUrl && photo && poseOk && step === 'mark' && !onPlan);
 
   const [tool, setTool] = useState('clear');
@@ -161,11 +178,11 @@ export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pi
   const sun = survey?.sun || null;
   // The yard's own shape (null = the whole box); kept inside the box if the lot size changes
   const shape = shape0, yard = yard0;
-  const save = (patch) => onSurvey({ items, sun, outline: shape, ...patch });
+  const save = (patch) => onSurvey({ items, sun, outline: shape, ...(survey?.photo && { photo: survey.photo }), ...patch });
+  // The photo is lined up (and maybe fixed the size): the design may now use it
+  const photoUsed = (patch = {}) => save({ photo: { ...(survey?.photo || {}), lined_up: true, ...patch } });
+  const fixSize = (w, l) => { onLotSize?.(w, l); photoUsed({ sized: true }); };
   const put = (next) => save({ items: next });
-  const [shaping, setShaping] = useState(false);       // dragging the yard's corners instead of marking
-  const [picked, setPicked] = useState(null);          // { type: 'corner' | 'side', i }
-  const [cornerDrag, setCornerDrag] = useState(null);  // index of the corner being dragged
 
   // Show sun & shade: hours of direct sun per spot from the server (same maths as the design engine)
   const [showSun, setShowSun] = useState(false);
@@ -189,20 +206,65 @@ export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pi
   // Hints from the photo's colours (data/photoHints.js, in this browser only): paving the customer can keep clear.
   // Tied to this photo and these pins: lining it up again or a new photo needs a new look.
   const hintKey = imageUrl && poseOk ? JSON.stringify([imageUrl, setup.pins, W, L]) : '';
-  const [hints, setHints] = useState({ key: '', status: 'idle', list: [], green: 0 });
-  const hintsNow = hints.key === hintKey ? hints : { key: '', status: 'idle', list: [], green: 0 };
+  const NO_HINTS = { key: '', status: 'idle', list: [], green: 0, seen: 0 };
+  const [hints, setHints] = useState(NO_HINTS);
+  const hintsNow = hints.key === hintKey ? hints : NO_HINTS;
   const spotPaving = async () => {
     const key = hintKey;
-    setHints({ key, status: 'busy', list: [], green: 0 });
+    setHints({ ...NO_HINTS, key, status: 'busy' });
     const px = await loadPixels(imageUrl);
-    if (!px || !photo) { setHints({ key, status: 'failed', list: [], green: 0 }); return; }
+    if (!px || !photo) { setHints({ ...NO_HINTS, key, status: 'failed' }); return; }
     const found = findPaving(px, pose, W, L, photo.w, photo.h, items);
-    setHints({ key, status: 'done', list: found.suggestions.map(s => ({ ...s, id: newId() })), green: found.green });
+    setHints({ key, status: 'done', list: found.suggestions.map(s => ({ ...s, id: newId() })), green: found.green, seen: found.seen });
+    // The grass share goes with the survey (the design says "kept your existing lawn" from it); the latest survey,
+    // since the customer may have marked something while the photo was being read
+    const now = surveyRef.current || {};
+    const grass = found.seen >= LAWN_SEEN ? Math.round(found.green * 100) / 100 : null;
+    if (now.photo?.lined_up && now.photo.grass !== grass) onSurvey({ ...now, photo: { ...now.photo, grass } });
   };
+  // Lined up and marking: read the photo by itself (once per photo and pins), no button needed
+  const photoRead = !!(imageUrl && poseOk && step === 'mark' && survey?.photo?.lined_up);
+  const readKey = photoRead ? hintKey : '';
+  const NO_AI = { url: '', status: 'idle', objects: [] };
+  const [ai, setAi] = useState(NO_AI);
+  const aiNow = ai.url === imageUrl ? ai : NO_AI;
+  const lookWithAi = () => {
+    const url = imageUrl;
+    setAi({ url, status: 'busy', objects: [] });
+    getPhotoObjects(url)
+      .then(d => setAi({ url, status: d?.status || 'failed', objects: Array.isArray(d?.objects) ? d.objects : [] }))
+      .catch(() => setAi({ url, status: 'failed', objects: [] }));
+  };
+  const [aiDone, setAiDone] = useState({ url: '', ids: [] });   // suggestions accepted or turned down, per photo
+  const aiGone = aiDone.url === imageUrl ? aiDone.ids : [];
+  const aiMarks = (() => {   // at most 15 boxes: cheap to redo each render
+    if (!photoRead || !photo || !aiNow.objects.length) return [];
+    const inYard = shape ? (p) => insidePolygon(yard, p.x, p.z) || nearestSide(yard, p).d < 0.6 : () => true;
+    return objectsToMarks(aiNow.objects, pose, photo.w, photo.h, W, L, inYard, items).filter(m => !aiGone.includes(m.id));
+  })();
+  const doneAi = (id) => setAiDone({ url: imageUrl, ids: [...aiGone, id] });
+  const acceptAi = (m) => {
+    add(m.kind === 'keep'
+      ? { kind: 'keep', x: m.x, z: m.z, r: m.r, label: m.label, src: 'found' }
+      : { kind: 'clear', x0: m.x0, z0: m.z0, x1: m.x1, z1: m.z1, label: m.label, src: 'found' });
+    doneAi(m.id);
+  };
+  const readPhoto = useEffectEvent(() => {
+    if (hints.key !== hintKey) spotPaving();
+    if (ai.url !== imageUrl) lookWithAi();
+  });
+  useEffect(() => {
+    if (!readKey) return undefined;
+    const t = setTimeout(() => readPhoto(), 0);
+    return () => clearTimeout(t);
+  }, [readKey]);
+  const [lawnNo, setLawnNo] = useState('');   // the photo key the customer said "Lay new grass" for
+  const lawnOffer = hintsNow.status === 'done' && lawnApplies && !!onLawn && hintsNow.seen >= LAWN_SEEN
+    && hintsNow.green >= LAWN_GRASS;
   const dropHint = (id) => setHints(h => ({ ...h, list: h.list.filter(x => x.id !== id) }));
   const acceptHint = (hint) => {
     const { x0, z0, x1, z1, label } = hint;
-    add({ kind: 'clear', x0, z0, x1, z1, label });
+    add({ kind: 'clear', x0, z0, x1, z1, label, src: 'found' });
     dropHint(hint.id);
   };
   const sunCells = useMemo(() => {
@@ -266,7 +328,7 @@ export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pi
   };
   const add = (item) => {
     if (items.length >= MAX_SURVEY_ITEMS) { setHint(`That's the most marks we take (${MAX_SURVEY_ITEMS}).`); return; }
-    put([...items, { id: newId(), ...item }]);
+    put([...items, { id: newId(), ...(usePhoto && { src: 'photo' }), ...item }]);
     setHint('');
   };
   const down = (e) => {
@@ -328,14 +390,6 @@ export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pi
     if (item) add(item);
   };
 
-  const moveCorner = (e) => {
-    if (cornerDrag == null || !shape) return;
-    const g = groundAt(e);
-    if (!g) return;
-    const snap = (v, hi) => Math.min(hi, Math.max(0, Math.round(v * 10) / 10));
-    save({ outline: shape.map((c, k) => (k === cornerDrag ? { ...c, x: snap(g.x, W), z: snap(g.z, L) } : c)) });
-  };
-  const editingShape = !!shape && shaping && step === 'mark';
 
   const shapes = [...items.map((it, i) => ({ it, n: i + 1 })), ...(drag ? [{ it: draft(drag), n: null }] : [])];
   const tone = (kind) => toolOf(kind)?.color || '#64748b';
@@ -349,7 +403,7 @@ export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pi
       {/* Steps */}
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <p className="m-0 text-sm font-extrabold text-slate-900">
-          {step === 'line' ? 'Step 1 of 2 · Line up your photo' : imageUrl ? 'Step 2 of 2 · Mark what\'s in your yard' : 'Mark what\'s in your yard'}
+          {step === 'line' ? 'Part 1 of 2 · Line up your photo' : imageUrl ? 'Part 2 of 2 · What\'s already in your yard?' : 'What\'s already in your yard?'}
           <span className="font-normal text-slate-500"> (optional)</span>
         </p>
         {imageUrl && step === 'mark' && (
@@ -377,14 +431,11 @@ export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pi
               : mode === 'corners'
                 ? <>Drag the yellow pins onto the <b>four corners</b> of your yard, where the ground meets the fence.</>
                 : mode === 'fences'
-                  ? <>Drag the yellow pins onto the two <b>back corners</b> and the <b>middle of the back fence</b>, then <b>two pins on each side
-                      fence</b>, where the fence meets the ground: one far, one near. Each fence gets more than one pin, so we can check the pins
-                      against each other. Can you see where the yard meets the <b>house</b> (photo from upstairs or a corner)? Add the house-side
-                      pin too: it measures how long your yard is.</>
+                  ? <>Drag each yellow pin to the spot on its label: the <b>back corners</b>, the <b>middle of the back fence</b> and <b>two spots on
+                      each side fence</b>, always where the fence meets the ground.</>
                   : <>Drag the yellow pins onto the two <b>back corners</b>, then each side pin onto the <b>bottom of that side's fence</b>:
                       anywhere along it, and the farther from you the better.</>}
-            {' '}A fence or corner that runs out of the picture? Drag its pin into the dark border, where it would carry on.
-            When the grid lies flat on your ground, each square is 1 m and everything you mark next lands in the right spot.
+            {' '}A fence that runs out of the picture? Drag its pin into the dark border. When the grid lies flat on your ground, you're done.
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-1.5" role="radiogroup" aria-label="Where you took the photo from">
             <span className="text-xs font-semibold text-slate-600 mr-1">I took it:</span>
@@ -395,58 +446,73 @@ export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pi
               </button>
             ))}
           </div>
-          <div className="mt-2 flex flex-wrap gap-1.5" role="radiogroup" aria-label="Where the pins go">
-            {[['fences', 'Back and side fences (7–8 pins)'], ['corners', 'All four corners'], ['points', 'Corners or spots I choose']].map(([k, text]) => (
-              <button key={k} type="button" role="radio" aria-checked={mode === k} disabled={!!shape && k !== 'points'}
-                onClick={() => {
-                  if (k === mode) return;
-                  onPinMode(k);
-                  if (k === 'points') {
-                    const base = defaultPointSetup(yard, W, L);
-                    onPinAnchors?.(base.anchors);
-                    onPins(base.pins);
-                  } else onPins(defaultPins(k));
-                }}
-                className={`min-h-[32px] px-2.5 rounded-lg border text-xs font-semibold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${mode === k ? 'border-amber-500 bg-amber-50 text-amber-900' : 'border-slate-200 bg-white text-slate-600'}`}>
-                {text}
+          {shape && <p className="m-0 mt-2 text-[11px] text-slate-500">Your yard isn't a rectangle, so pin the corners or spots you can see.</p>}
+          {!shape && (
+            <div className="mt-2">
+              <button type="button" aria-expanded={moreOpen} aria-controls="photo-more-options" onClick={() => setMoreOpen(v => !v)}
+                className="min-h-[32px] px-0 border-none bg-transparent text-xs font-bold text-slate-700 hover:text-emerald-700 cursor-pointer inline-flex items-center gap-1">
+                <ChevronDown size={14} aria-hidden="true" className={`transition-transform ${moreOpen ? 'rotate-180' : ''}`} />
+                More accurate options{!moreOpen && <span className="font-normal text-slate-500">: other ways to pin, the house side, a yard that narrows</span>}
               </button>
-            ))}
-          </div>
-          {shape && <p className="m-0 mt-1 text-[11px] text-slate-500">Your yard isn't a rectangle, so pin the corners or spots you can see.</p>}
-          {housePin && !shape && (
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-              <button type="button" onClick={toggleHousePin} aria-pressed={!housePin.skip}
-                className={`min-h-[32px] px-2.5 rounded-lg border text-xs font-semibold cursor-pointer ${housePin.skip ? 'border-dashed border-amber-400 bg-white text-amber-900' : 'border-amber-500 bg-amber-50 text-amber-900'}`}>
-                {housePin.skip ? '+ House-side pin' : 'Remove the house-side pin'}
-              </button>
-              <span className="text-[11px] text-slate-500">
-                {housePin.skip ? 'Only if your photo shows where the yard meets the house or the front fence.'
-                  : 'Put it where the yard meets the house (or the front fence). It measures the length.'}
-              </span>
-            </div>
-          )}
-          {mode === 'fences' && !shape && (
-            <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs text-slate-600">
-              <label className="inline-flex items-center gap-1.5">
-                <span className="font-semibold">Width at the house side</span>
-                <input type="number" inputMode="decimal" step="0.1" min="1" max="60" placeholder={`${W || ''}`}
-                  value={pinFront?.width ?? ''} aria-label="The yard's width at the house side, in metres (optional)"
-                  onChange={e => onPinFront?.(e.target.value === '' ? null : { width: Math.max(0, Number(e.target.value) || 0), lean: pinFront?.lean || 'both' })}
-                  className="w-20 h-8 px-2 rounded-lg border border-slate-200 text-xs" /> m
-              </label>
-              <span className="text-[11px] text-slate-500">(optional: only if your yard is narrower or wider at the back)</span>
-              {Number(pinFront?.width) > 0 && Math.abs(Number(pinFront.width) - W) >= 0.1 && (
-                <span className="inline-flex flex-wrap items-center gap-1" role="radiogroup" aria-label="Which fence angles">
-                  <span className="font-semibold mr-0.5">Which fence angles:</span>
-                  {[['both', 'Both'], ['left', 'Left'], ['right', 'Right']].map(([k, t]) => (
-                    <button key={k} type="button" role="radio" aria-checked={(pinFront.lean || 'both') === k}
-                      onClick={() => onPinFront?.({ ...pinFront, lean: k })}
-                      className={`min-h-[30px] px-2.5 rounded-lg border text-xs font-semibold cursor-pointer ${(pinFront.lean || 'both') === k ? 'border-emerald-500 bg-emerald-50 text-emerald-900' : 'border-slate-200 bg-white text-slate-600'}`}>
-                      {t}
+              <div id="photo-more-options" hidden={!moreOpen} className="mt-1 p-2.5 rounded-xl border border-slate-200 bg-slate-50/70">
+                <p className="m-0 text-[11px] text-slate-500 leading-relaxed">
+                  Most photos only need the pins above. Each fence gets more than one pin, so we can check them against each other.
+                  Use these when your photo shows more of the yard, or the yard isn't the same width all the way.
+                </p>
+                <div className="mt-2 flex flex-wrap gap-1.5" role="radiogroup" aria-label="Where the pins go">
+                  {[['fences', 'Back and side fences (7–8 pins)'], ['corners', 'All four corners'], ['points', 'Corners or spots I choose']].map(([k, text]) => (
+                    <button key={k} type="button" role="radio" aria-checked={mode === k} disabled={!!shape && k !== 'points'}
+                      onClick={() => {
+                        if (k === mode) return;
+                        onPinMode(k);
+                        if (k === 'points') {
+                          const base = defaultPointSetup(yard, W, L);
+                          onPinAnchors?.(base.anchors);
+                          onPins(base.pins);
+                        } else onPins(defaultPins(k));
+                      }}
+                      className={`min-h-[32px] px-2.5 rounded-lg border text-xs font-semibold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${mode === k ? 'border-amber-500 bg-amber-50 text-amber-900' : 'border-slate-200 bg-white text-slate-600'}`}>
+                      {text}
                     </button>
                   ))}
-                </span>
-              )}
+                </div>
+                {housePin && !shape && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                    <button type="button" onClick={toggleHousePin} aria-pressed={!housePin.skip}
+                      className={`min-h-[32px] px-2.5 rounded-lg border text-xs font-semibold cursor-pointer ${housePin.skip ? 'border-dashed border-amber-400 bg-white text-amber-900' : 'border-amber-500 bg-amber-50 text-amber-900'}`}>
+                      {housePin.skip ? '+ House-side pin' : 'Remove the house-side pin'}
+                    </button>
+                    <span className="text-[11px] text-slate-500">
+                      {housePin.skip ? 'Only if your photo shows where the yard meets the house or the front fence.'
+                        : 'Put it where the yard meets the house (or the front fence). It measures the length.'}
+                    </span>
+                  </div>
+                )}
+                {mode === 'fences' && !shape && (
+                  <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs text-slate-600">
+                    <label className="inline-flex items-center gap-1.5">
+                      <span className="font-semibold">Width at the house side</span>
+                      <input type="number" inputMode="decimal" step="0.1" min="1" max="60" placeholder={`${W || ''}`}
+                        value={pinFront?.width ?? ''} aria-label="The yard's width at the house side, in metres (optional)"
+                        onChange={e => onPinFront?.(e.target.value === '' ? null : { width: Math.max(0, Number(e.target.value) || 0), lean: pinFront?.lean || 'both' })}
+                        className="w-20 h-8 px-2 rounded-lg border border-slate-200 text-xs" /> m
+                    </label>
+                    <span className="text-[11px] text-slate-500">(optional: only if your yard is narrower or wider at the back)</span>
+                    {Number(pinFront?.width) > 0 && Math.abs(Number(pinFront.width) - W) >= 0.1 && (
+                      <span className="inline-flex flex-wrap items-center gap-1" role="radiogroup" aria-label="Which fence angles">
+                        <span className="font-semibold mr-0.5">Which fence angles:</span>
+                        {[['both', 'Both'], ['left', 'Left'], ['right', 'Right']].map(([k, t]) => (
+                          <button key={k} type="button" role="radio" aria-checked={(pinFront.lean || 'both') === k}
+                            onClick={() => onPinFront?.({ ...pinFront, lean: k })}
+                            className={`min-h-[30px] px-2.5 rounded-lg border text-xs font-semibold cursor-pointer ${(pinFront.lean || 'both') === k ? 'border-emerald-500 bg-emerald-50 text-emerald-900' : 'border-slate-200 bg-white text-slate-600'}`}>
+                            {t}
+                          </button>
+                        ))}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           )}
           {mode === 'points' && (
@@ -513,9 +579,10 @@ export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pi
         </>
       ) : (
         <>
-          <YardShapePanel W={W} L={L} outline={shape} editing={editingShape} onEditing={setShaping}
-            selected={picked} onSelect={setPicked} onChange={(next) => save({ outline: next })} />
-          <div className={`mt-2 flex flex-wrap gap-1.5 ${editingShape ? 'opacity-40 pointer-events-none' : ''}`} role="radiogroup" aria-label="What to mark">
+          <p className="m-0 mt-1 text-xs text-slate-500">
+            Pick what to mark, then tap or drag on the {usePhoto ? 'photo' : 'plan'} below. Skip this if your yard is empty.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-1.5" role="radiogroup" aria-label="What to mark">
             {SURVEY_TOOLS.map(t => (
               <button key={t.kind} type="button" role="radio" aria-checked={tool === t.kind} onClick={() => { setTool(t.kind); setHint(''); }}
                 className={`min-h-[36px] px-3 rounded-full border text-xs font-bold cursor-pointer inline-flex items-center gap-1.5 ${tool === t.kind ? 'text-white border-transparent' : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'}`}
@@ -548,8 +615,8 @@ export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pi
             : `${usePhoto ? 'Your photo' : 'Plan of your yard'}: tap or drag to mark ${toolOf(tool).label.toLowerCase()}`}
           style={{ width: lineView ? '100%' : `min(100%, ${maxH * aspect}px)`, aspectRatio: `${aspect}`, touchAction: 'none',
             background: (step === 'line' || usePhoto) && imageUrl ? `#0f172a url("${imageUrl}") center / 100% 100% no-repeat` : '#f8fafc' }}
-          onPointerDown={step === 'mark' && !editingShape ? down : undefined} onPointerMove={step === 'mark' && !editingShape ? move : undefined}
-          onPointerUp={step === 'mark' && !editingShape ? up : undefined} onPointerCancel={() => setDrag(null)}>
+          onPointerDown={step === 'mark' ? down : undefined} onPointerMove={step === 'mark' ? move : undefined}
+          onPointerUp={step === 'mark' ? up : undefined} onPointerCancel={() => setDrag(null)}>
           <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 w-full h-full pointer-events-none"
             style={lineView ? { overflow: 'visible' } : undefined}>
             {!(step === 'line' || usePhoto) && <path d={toPath(lotOutline, true)} fill={shape ? '#f1f5f9' : '#ecfdf5'} />}
@@ -572,7 +639,12 @@ export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pi
               <path key={`h${sd.i}`} d={toPath(densify([sd.a, sd.b], false), false)} fill="none" stroke="#1e293b" strokeWidth="6"
                 strokeLinecap="round" vectorEffect="non-scaling-stroke" />
             ))}
-            {usePhoto && hintsNow.list.map(h => (
+            {aiMarks.map(m => {
+              const o = outline(m, W, L);
+              return <path key={m.id} d={toPath(o.pts, true)} fill="rgba(124,58,237,0.12)" stroke="#7c3aed" strokeWidth="2"
+                strokeDasharray="5 4" vectorEffect="non-scaling-stroke" />;
+            })}
+            {photoRead && hintsNow.list.map(h => (
               <path key={`h${h.id}`} d={toPath([{ x: h.x0, z: h.z0 }, { x: h.x1, z: h.z0 }, { x: h.x1, z: h.z1 }, { x: h.x0, z: h.z1 }], true)}
                 fill="rgba(255,255,255,0.18)" stroke="#fff" strokeWidth="2" strokeDasharray="5 4" vectorEffect="non-scaling-stroke" />
             ))}
@@ -593,7 +665,16 @@ export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pi
               <span className="absolute left-1/2 -translate-x-1/2 bottom-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-500 pointer-events-none">House side (front)</span>
             </>
           )}
-          {usePhoto && hintsNow.list.map((h, i) => {
+          {aiMarks.map((m, i) => {
+            const q = pos(labelPoint(m, W, L));
+            return q && (
+              <span key={`l${m.id}`} className="absolute -translate-x-1/2 -translate-y-1/2 pointer-events-none min-w-[22px] h-5 px-1 rounded-full text-[11px] font-extrabold text-violet-700 bg-white flex items-center justify-center shadow"
+                style={{ left: `${q.u * 100}%`, top: `${q.v * 100}%`, border: '2px dashed #7c3aed' }}>
+                A{i + 1}
+              </span>
+            );
+          })}
+          {photoRead && hintsNow.list.map((h, i) => {
             const q = pos({ x: (h.x0 + h.x1) / 2, z: (h.z0 + h.z1) / 2 });
             return q && (
               <span key={`h${h.id}`} className="absolute -translate-x-1/2 -translate-y-1/2 pointer-events-none min-w-[20px] h-5 px-1 rounded-full text-[11px] font-extrabold text-slate-700 bg-white flex items-center justify-center shadow"
@@ -611,29 +692,6 @@ export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pi
                 style={{ left: `${q.u * 100}%`, top: `${q.v * 100}%`, background: tone(it.kind), border: '2px solid #fff' }}>
                 {n ?? '+'}
               </span>
-            );
-          })}
-          {editingShape && sidesOf(yard).map(sd => {
-            const q = pos({ x: (sd.a.x + sd.b.x) / 2, z: (sd.a.z + sd.b.z) / 2 });
-            const on = picked?.type === 'side' && picked.i === sd.i;
-            return q && (
-              <button key={`s${sd.i}`} type="button" onClick={() => setPicked({ type: 'side', i: sd.i })}
-                aria-label={`Side ${sd.i + 1}, ${Math.hypot(sd.b.x - sd.a.x, sd.b.z - sd.a.z).toFixed(1)} m${sd.house ? ', house wall' : ''}`}
-                className={`absolute -translate-x-1/2 -translate-y-1/2 px-1.5 h-6 rounded-md border text-[10px] font-bold cursor-pointer whitespace-nowrap shadow-sm ${on ? 'ring-2 ring-emerald-500' : ''} ${sd.house ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-300 text-slate-700'}`}
-                style={{ left: `${q.u * 100}%`, top: `${q.v * 100}%` }}>
-                {sd.house ? 'House · ' : ''}{Math.hypot(sd.b.x - sd.a.x, sd.b.z - sd.a.z).toFixed(1)} m
-              </button>
-            );
-          })}
-          {editingShape && yard.map((c, i) => {
-            const q = pos(c);
-            const on = picked?.type === 'corner' && picked.i === i;
-            return q && (
-              <button key={`c${i}`} type="button" aria-label={`Corner ${i + 1}: drag to move`}
-                onPointerDown={(e) => { e.stopPropagation(); e.currentTarget.setPointerCapture?.(e.pointerId); setCornerDrag(i); setPicked({ type: 'corner', i }); }}
-                onPointerMove={moveCorner} onPointerUp={() => setCornerDrag(null)} onPointerCancel={() => setCornerDrag(null)}
-                className={`absolute -translate-x-1/2 -translate-y-1/2 w-7 h-7 rounded-full border-[3px] cursor-grab touch-none shadow ${on ? 'bg-emerald-600 border-white' : 'bg-white border-emerald-600'}`}
-                style={{ left: `${q.u * 100}%`, top: `${q.v * 100}%`, touchAction: 'none' }} />
             );
           })}
           {step === 'line' && imageUrl && (
@@ -664,7 +722,9 @@ export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pi
                 const names = [offFence.includes(6) && 'back', offFence.includes(2) && 'right', offFence.includes(5) && 'left'].filter(Boolean);
                 return <>The {names.join(' and ')} fence pins (red) don't line up. A straight fence is a straight line in the photo too: put
                   {names.includes('back') ? ' the back corners and the middle pin' : ' both pins'} where the fence meets the ground. If a fence
-                  really bends, use <b>Corners or spots I choose</b>.</>;
+                  really bends, choose <b>Corners or spots I choose</b> under{' '}
+                  <button type="button" onClick={() => setMoreOpen(true)}
+                    className="p-0 border-none bg-transparent text-red-800 font-bold underline cursor-pointer">More accurate options</button>.</>;
               })()}
             </p>
           )}
@@ -693,7 +753,7 @@ export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pi
               {fits.length > 0 && (
                 <div className="mt-1.5 flex flex-wrap gap-2">
                   {fits.map(({ k, fit: f }) => (
-                    <button key={k} type="button" onClick={() => { onPinVantage?.(k); onLotSize?.(f.width, f.length); }}
+                    <button key={k} type="button" onClick={() => { onPinVantage?.(k); fixSize(f.width, f.length); }}
                       className="min-h-[38px] px-3 rounded-lg border border-emerald-300 bg-white hover:bg-emerald-50 text-emerald-900 text-xs font-bold cursor-pointer text-left">
                       {VANTAGES[k].label}: <span className="whitespace-nowrap">{f.width} × {f.length} m</span>
                     </button>
@@ -708,7 +768,7 @@ export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pi
               Your house-side pin says the yard is about <b>{measured} m</b> long from the back fence (it's set to {L} m).
               {onLotSize && (
                 <div className="mt-1.5">
-                  <button type="button" onClick={() => onLotSize(W, measured)}
+                  <button type="button" onClick={() => fixSize(W, measured)}
                     className="min-h-[36px] px-3 rounded-lg border-none bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold cursor-pointer">
                     Make it {measured} m long
                   </button>
@@ -722,7 +782,7 @@ export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pi
               stops short. If you took it from inside the yard or from the house, it's about <b>{fit.length} m</b> long.
               {onLotSize && (
                 <div className="mt-1.5">
-                  <button type="button" onClick={() => onLotSize(W, fit.length)}
+                  <button type="button" onClick={() => fixSize(W, fit.length)}
                     className="min-h-[36px] px-3 rounded-lg border-none bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold cursor-pointer">
                     Make it {fit.length} m long
                   </button>
@@ -739,7 +799,7 @@ export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pi
           )}
           <div className="mt-2 flex flex-wrap gap-2">
             <button type="button" disabled={!poseOk}
-              onClick={() => { commitPins(setup.pins); setOnPlan(false); setStep('mark'); }}
+              onClick={() => { commitPins(setup.pins); photoUsed(); setOnPlan(false); setStep('mark'); }}
               className="min-h-[40px] px-4 rounded-xl border-none bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5">
               <Check size={15} /> It lines up: mark my yard
             </button>
@@ -758,21 +818,29 @@ export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pi
               <Crosshair size={13} /> {poseOk ? 'Line up the photo again' : 'Line up my photo to mark on it'}
             </button>
           )}
-          {usePhoto && (
-            <div className="mt-2">
-              <button type="button" onClick={spotPaving} disabled={hintsNow.status === 'busy'}
-                className="min-h-[32px] px-3 rounded-full border border-slate-200 bg-white text-slate-700 text-xs font-bold cursor-pointer inline-flex items-center gap-1.5 hover:border-slate-300 disabled:opacity-60">
-                <Sparkles size={13} /> {hintsNow.status === 'busy' ? 'Looking at your photo…' : hintsNow.status === 'done' ? 'Look again' : 'Spot paving in my photo'}
-              </button>
+          {photoRead && (
+            <div className="mt-3 p-2.5 rounded-xl border border-emerald-200 bg-emerald-50/60" role="region" aria-label="What we found in your photo">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="m-0 text-xs font-extrabold text-emerald-900 inline-flex items-center gap-1.5">
+                  <Sparkles size={13} aria-hidden="true" />
+                  {hintsNow.status === 'busy' || hintsNow.status === 'idle' ? 'Reading your photo…' : 'What we found in your photo'}
+                </p>
+                {hintsNow.status === 'done' && (
+                  <button type="button" onClick={spotPaving}
+                    className="min-h-[28px] px-2 rounded-md border-none bg-transparent text-[11px] font-bold text-emerald-800 cursor-pointer hover:underline">
+                    Look again
+                  </button>
+                )}
+              </div>
               {hintsNow.status === 'failed' && (
                 <p className="m-0 mt-1.5 text-xs font-semibold text-amber-700" role="alert">We couldn't read this photo. Mark the paving yourself with Keep clear.</p>
               )}
               {hintsNow.status === 'done' && (
-                <div className="mt-2" role="status">
-                  {hintsNow.list.length ? (
+                <div className="mt-1.5" role="status">
+                  {hintsNow.list.length > 0 && (
                     <>
                       <p className="m-0 text-xs text-slate-600">
-                        These look like paving, concrete or gravel from their colour. Check each one on your photo: keep the ones that are right.
+                        These look like paving, concrete or gravel from their colour (dashed on the {usePhoto ? 'photo' : 'plan'}). Keep the ones that are right: the design leaves them clear.
                       </p>
                       <ul className="m-0 mt-1.5 pl-0 list-none flex flex-col gap-1.5">
                         {hintsNow.list.map((h, i) => (
@@ -791,12 +859,70 @@ export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pi
                         ))}
                       </ul>
                     </>
-                  ) : (
+                  )}
+                  {lawnOffer && lawn !== 'keep' && lawnNo !== hintKey && (
+                    <div className={`flex flex-wrap items-center gap-x-2 gap-y-1.5 text-sm text-slate-700 ${hintsNow.list.length ? 'mt-2 pt-2 border-t border-emerald-200' : ''}`}>
+                      <span className="flex-1 min-w-[12rem]">
+                        About <b>{Math.round(hintsNow.green * 100)}%</b> of your yard looks like grass. Keep your existing lawn instead of laying new grass?
+                      </span>
+                      <button type="button" onClick={() => onLawn('keep')}
+                        className="min-h-[32px] px-2.5 rounded-lg border-none bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold cursor-pointer inline-flex items-center gap-1">
+                        <Check size={13} /> Keep my grass
+                      </button>
+                      <button type="button" onClick={() => setLawnNo(hintKey)}
+                        className="min-h-[32px] px-2.5 rounded-lg border border-slate-200 bg-white text-slate-600 text-xs font-semibold cursor-pointer">
+                        Lay new grass
+                      </button>
+                    </div>
+                  )}
+                  {lawnOffer && lawn === 'keep' && (
+                    <p className="m-0 mt-1.5 text-xs font-semibold text-emerald-800">
+                      <Check size={12} className="inline -mt-0.5" aria-hidden="true" /> Keeping your existing lawn: the design plants around it.
+                    </p>
+                  )}
+                  {!hintsNow.list.length && !lawnOffer && !aiMarks.length && (
                     <p className="m-0 text-xs text-slate-500">
                       No paving stood out{hintsNow.green > 0.5 ? ': most of what we can see is green' : ''}. Paving in shade is hard to tell from soil, so if there is some, mark it with Keep clear.
                     </p>
                   )}
                 </div>
+              )}
+              {aiMarks.length > 0 && (
+                <div className={`mt-2 ${hintsNow.status === 'done' ? 'pt-2 border-t border-emerald-200' : ''}`} role="status">
+                  <p className="m-0 text-xs text-slate-600">
+                    <b className="text-violet-800">Spotted by our AI</b> (dashed violet on the {usePhoto ? 'photo' : 'plan'}). Check each one: the design plans around the ones you keep.
+                  </p>
+                  <ul className="m-0 mt-1.5 pl-0 list-none flex flex-col gap-1.5">
+                    {aiMarks.map((m, i) => (
+                      <li key={m.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-slate-700">
+                        <span className="min-w-[26px] h-5 px-1 rounded-full text-[11px] font-extrabold text-violet-700 bg-white flex items-center justify-center shrink-0" style={{ border: '2px dashed #7c3aed' }}>A{i + 1}</span>
+                        <span className="flex-1 min-w-[10rem]">
+                          {m.label} · {m.kind === 'keep' ? `about ${(m.r * 2).toFixed(1)} m wide` : `${(m.x1 - m.x0).toFixed(1)} × ${(m.z1 - m.z0).toFixed(1)} m`}
+                        </span>
+                        <button type="button" onClick={() => acceptAi(m)}
+                          className="min-h-[32px] px-2.5 rounded-lg border-none bg-slate-700 hover:bg-slate-800 text-white text-xs font-bold cursor-pointer inline-flex items-center gap-1">
+                          <Check size={13} /> {m.kind === 'keep' ? 'It stays' : 'Keep it clear'}
+                        </button>
+                        <button type="button" onClick={() => doneAi(m.id)} aria-label={`Not right: dismiss AI suggestion ${i + 1}`}
+                          className="min-h-[32px] px-2.5 rounded-lg border border-slate-200 bg-white text-slate-600 text-xs font-semibold cursor-pointer inline-flex items-center gap-1">
+                          <X size={13} /> Not right
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {aiNow.status === 'busy' && (
+                <p className="m-0 mt-1.5 text-[11px] text-slate-500" role="status">Our AI is also looking for trees, sheds and paving…</p>
+              )}
+              {(aiNow.status === 'quota' || aiNow.status === 'unavailable' || aiNow.status === 'failed') && (
+                <p className="m-0 mt-1.5 text-[11px] text-slate-500" role="status">
+                  {aiNow.status === 'quota' ? 'Our AI has used today\'s photo checks' : 'Our AI photo check isn\'t available right now'}: the colour check above still works.
+                  Mark trees you're keeping with <b>Keep a tree</b>.
+                </p>
+              )}
+              {aiNow.status === 'ok' && !aiNow.objects.length && hintsNow.status === 'done' && (
+                <p className="m-0 mt-1.5 text-[11px] text-slate-500" role="status">Our AI didn't spot trees or structures in your yard.</p>
               )}
             </div>
           )}
@@ -830,7 +956,7 @@ export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pi
                     <select value={it.label || 'Path'} aria-label={`What area ${i + 1} is`}
                       onChange={e => put(items.map(x => (x.id === it.id ? { ...x, label: e.target.value } : x)))}
                       className="h-8 px-1.5 rounded-lg border border-slate-200 bg-white text-xs">
-                      {CLEAR_LABELS.map(l => <option key={l}>{l}</option>)}
+                      {(it.label && !CLEAR_LABELS.includes(it.label) ? [it.label, ...CLEAR_LABELS] : CLEAR_LABELS).map(l => <option key={l}>{l}</option>)}
                     </select>
                   )}
                   {it.kind === 'keep' && (
@@ -846,7 +972,7 @@ export default function YardSurvey({ imageUrl, lotWidth, lotLength, pinSetup, pi
               ))}
             </ul>
           ) : (
-            <p className="m-0 mt-2 text-xs text-slate-500">Nothing marked yet. Skip this if your yard is an empty space.</p>
+            <p className="m-0 mt-2 text-xs text-slate-500">Nothing marked yet.</p>
           )}
           <SunSetup sun={sun} onChange={(next) => { save({ sun: next }); if (!next) setShowSun(false); }} />
         </>

@@ -13,12 +13,15 @@ import {
 import ThreeGardenCanvas from './ThreeGardenCanvas';
 import { toCanvasPlants } from '../data/projectHub';
 import OfficeWorkMap from './OfficeWorkMap';
+import CrewSyncPanel from './CrewSyncPanel';
 import TodayAttention from './TodayAttention';
 import ProjectBillingModal from './ProjectBillingModal';
 import OrderQueue from './OrderQueue';
 import BookingQueue from './BookingQueue';
 import CashDesk from './CashDesk';
-import { cachedGet } from '../crew/outbox';
+import { cachedGet, readSnapshot } from '../crew/outbox';
+import { addChanges, diffJobs } from '../crew/jobChanges';
+import { todayIso } from '../data/crewJobs';
 import { DEFAULT_TIME_OF_DAY } from '../data/studioLight';
 import { API_BASE_URL as API_ROOT } from '../config';
 
@@ -183,7 +186,15 @@ const StaffDashboard = () => {
     if (data) setBookings(data);
     setCrewSavedAt(savedAt);
   };
-  const loadCrewBookings = () => cachedGet('/bookings/', 'bookings').then(applyCrewBookings);
+  // Fresh jobs: compare them with the copy saved on the phone first, so a change the office made while
+  // there was no signal (new date, cancelled, reassigned…) is shown (crew/jobChanges.js)
+  const loadCrewBookings = () => {
+    const before = readSnapshot('bookings');
+    return cachedGet('/bookings/', 'bookings').then((res) => {
+      if (res.data && !res.savedAt && Array.isArray(before?.data)) addChanges(diffJobs(before.data, res.data, todayIso()));
+      applyCrewBookings(res);
+    });
+  };
 
   // Effect event: reads the latest headers/role without re-running the load on every render
   const loadDashboard = useEffectEvent(() => {
@@ -212,7 +223,7 @@ const StaffDashboard = () => {
   useEffect(() => {
     if (firstVisit.current) { firstVisit.current = false; return; }
     if (!isFieldCrew || !authTokens) return;
-    cachedGet('/bookings/', 'bookings').then(applyCrewBookings);
+    loadCrewBookings();
   }, [location.key]); // eslint-disable-line react-hooks/exhaustive-deps -- refetch per navigation only
 
   /* ── Derived counts (tab badges; the Overview's numbers come from TodayAttention) ── */
@@ -387,6 +398,9 @@ const StaffDashboard = () => {
 
             {/* Today's job sites, deliveries and crew on one map (from the customers' pins) */}
             <OfficeWorkMap api={API} headers={headers} />
+
+            {/* Has every crew phone sent its work? (unsent = no signal, not "not done") */}
+            <CrewSyncPanel />
           </div>
         )}
 

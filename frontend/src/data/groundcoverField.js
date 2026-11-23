@@ -5,8 +5,9 @@
  *
  *  - Where: the beds = the yard less its lawn (gardenGround.lawnShape), its paths and marked paving. The shade
  *    groundcover goes under the crowns of tall plants and kept trees, the sun one everywhere else.
- *  - How it grows (the growth stage): at planting, separate plugs on the mulch about 28 cm apart; in 2 years
- *    close clumps with a green carpet under them; fully grown a closed carpet — no soil left, as in a real garden.
+ *  - How it grows (the year on the "Show plants" slider): at planting, separate plugs on the mulch about 28 cm
+ *    apart; then close clumps with a green carpet under them; then a closed carpet — no soil left, as in a real
+ *    garden. Each groundcover on its own clock (STAGE below): mani-mani closes in about a year, mondo grass in 3.
  *  - Its look follows the plant: mani-mani round bright leaves with yellow flowers, bangka-bangkaan purple-green
  *    strap leaves, mondo grass dark grassy tufts, Asiatic jasmine small glossy dark leaves.
  *  - A design covering only part of its beds (budget) shows that share of them covered.
@@ -14,14 +15,34 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { lawnShape } from './gardenGround';
+import { stageYears } from './modelSizing';
 
 const MASK_PPM = 20;
 const TALL = 2.4;   // m (backend groundcover.TALL)
-const STAGE = {
-  planting: { gap: 0.28, size: 0.55, carpet: 0 },
-  established: { gap: 0.17, size: 0.85, carpet: 0.6 },
-  mature: { gap: 0.13, size: 1.0, carpet: 0.92 },
-};
+// How filled in the carpet is, by years after planting, on EACH groundcover's own clock: separate plugs at
+// planting, close clumps with a carpet under them at two thirds of its closing time, closed when it closes.
+// Mani-mani runs and closes in about a year; mondo grass and Asiatic jasmine take about 3. The closing time is
+// the catalog's years_to_mature (Inventory: "Fully grown after"), else a guess from the name (profileOf),
+// else 3 years. Between the points it fills in steadily.
+const STAGE = [
+  { at: 0, gap: 0.28, size: 0.55, carpet: 0 },
+  { at: 2 / 3, gap: 0.17, size: 0.85, carpet: 0.6 },
+  { at: 1, gap: 0.13, size: 1.0, carpet: 0.92 },
+];
+const CLOSES = 3;   // years, when nothing else says
+export function stageAt(stage, closes = CLOSES) {
+  const y = stageYears(stage);
+  const f = y / (Number(closes) > 0 ? Number(closes) : CLOSES);   // share of its closing time
+  const i = STAGE.findIndex((s) => s.at >= f);
+  const pick = (a, b, t) => {
+    const mix = (k) => a[k] + (b[k] - a[k]) * t;
+    return { years: y, gap: mix('gap'), size: mix('size'), carpet: mix('carpet') };
+  };
+  if (i === 0) return pick(STAGE[0], STAGE[0], 0);
+  if (i < 0) return pick(STAGE[STAGE.length - 1], STAGE[STAGE.length - 1], 0);
+  const a = STAGE[i - 1], b = STAGE[i];
+  return pick(a, b, (f - a.at) / (b.at - a.at));
+}
 const CAP = { full: 16000, lite: 5000 };
 
 function seeded(seed) {
@@ -32,11 +53,12 @@ function seeded(seed) {
 /** How a groundcover looks, from its name (sample catalog; anything else: a generic leafy carpet). */
 export function profileOf(name = '') {
   const n = name.toLowerCase();
-  if (/mani|arachis|peanut/.test(n)) return { form: 'leafy', colors: ['#5aa33a', '#67b245', '#4d9030'], carpet: '#4f8f32', flower: '#f2c230' };
-  if (/bangka|rhoeo|tradescantia|oyster/.test(n)) return { form: 'strap', colors: ['#4e6e3b', '#6a4b78', '#5c3f6c'], carpet: '#4a4f3a' };
-  if (/mondo|ophiopogon|liriope/.test(n)) return { form: 'grassy', colors: ['#2f4f27', '#38592f', '#2a4623'], carpet: '#2c4a25' };
-  if (/jasmin|trachelospermum/.test(n)) return { form: 'leafy', colors: ['#2f5a2a', '#3a6a32', '#28502a'], carpet: '#2d5428', small: true };
-  return { form: 'leafy', colors: ['#3f7a2c', '#4a8a34', '#376d28'], carpet: '#3d7029' };
+  // closes: years until it is a closed carpet (used when the catalog has no years_to_mature)
+  if (/mani|arachis|peanut/.test(n)) return { form: 'leafy', colors: ['#5aa33a', '#67b245', '#4d9030'], carpet: '#4f8f32', flower: '#f2c230', closes: 1 };
+  if (/bangka|rhoeo|tradescantia|oyster/.test(n)) return { form: 'strap', colors: ['#4e6e3b', '#6a4b78', '#5c3f6c'], carpet: '#4a4f3a', closes: 2 };
+  if (/mondo|ophiopogon|liriope/.test(n)) return { form: 'grassy', colors: ['#2f4f27', '#38592f', '#2a4623'], carpet: '#2c4a25', closes: 3 };
+  if (/jasmin|trachelospermum/.test(n)) return { form: 'leafy', colors: ['#2f5a2a', '#3a6a32', '#28502a'], carpet: '#2d5428', small: true, closes: 3 };
+  return { form: 'leafy', colors: ['#3f7a2c', '#4a8a34', '#376d28'], carpet: '#3d7029', closes: CLOSES };
 }
 
 // One clump, about 20 cm across before its instance scale (y up, origin on the ground)
@@ -86,17 +108,20 @@ function inPoly(poly, x, z) {
 
 /**
  * entries: design.groundcover. plants: the design's plants; heightOf(plant) → grown height (m) and spreadOf(plant)
- * → grown spread (m) from the catalog. → { group, dispose } (empty group when there's nothing to draw).
+ * → grown spread (m) from the catalog; yearsOf(entry) → years until that groundcover is a closed carpet (the
+ * catalog's years_to_mature; empty = its name's guess). → { group, dispose } (empty group when nothing to draw).
  */
 // beds: data/plantBeds.plantBeds(...) for a design without a plan (hand-made in the Studio): its beds round the plants
-export function buildGroundcover(plan, w, l, entries, { plants = [], heightOf, spreadOf, stage = 'established', outline = null, paved = [], lite = false, beds = null } = {}) {
+export function buildGroundcover(plan, w, l, entries, { plants = [], heightOf, spreadOf, yearsOf, stage = 2, outline = null, paved = [], lite = false, beds = null } = {}) {
   const group = new THREE.Group();
   group.name = 'Groundcover';
   const list = (entries || []).filter((e) => Number(e.area_sqm) > 0);
   if (!list.length) return { group, dispose: () => {} };
-  const st = STAGE[stage] || STAGE.established;
   const sun = list.find((e) => e.sunlight !== 'full_shade') || list[0];
   const shade = list.find((e) => e !== sun && e.sunlight === 'full_shade') || list.find((e) => e !== sun) || null;
+  // Each groundcover fills in at its own pace (yearsOf(entry): the catalog's years_to_mature)
+  const closesOf = (e) => Number(yearsOf?.(e)) || Number(e?.years_to_mature) || profileOf(e?.name).closes;
+  const stOf = { sun: stageAt(stage, closesOf(sun)), shade: shade ? stageAt(stage, closesOf(shade)) : null };
 
   // The beds as a mask
   const mw = Math.max(8, Math.round(w * MASK_PPM)), mh = Math.max(8, Math.round(l * MASK_PPM));
@@ -146,7 +171,7 @@ export function buildGroundcover(plan, w, l, entries, { plants = [], heightOf, s
   const isCovered = (x, z) => share >= 0.999 || noise(x, z) < share;
 
   // The carpet under the clumps (from 2 years on): the groundcover's own green over the covered beds
-  if (st.carpet > 0) {
+  if (stOf.sun.carpet > 0 || stOf.shade?.carpet > 0) {
     const cc = Object.assign(document.createElement('canvas'), { width: mw, height: mh });
     const c2 = cc.getContext('2d');
     const img = c2.createImageData(mw, mh);
@@ -157,10 +182,13 @@ export function buildGroundcover(plan, w, l, entries, { plants = [], heightOf, s
         if (mask[k + 3] <= 128) continue;
         const x = ((i + 0.5) / mw) * w, z = ((j + 0.5) / mh) * l;
         if (!isCovered(x, z)) continue;
-        const col = shaded(x, z) ? shadeCol : sunCol;
+        const inShade = shaded(x, z);
+        const col = inShade ? shadeCol : sunCol;
+        const fill = (inShade ? stOf.shade : stOf.sun).carpet;
+        if (!(fill > 0)) continue;
         const v = 0.85 + rand() * 0.3;
         img.data[k] = Math.min(255, col.r * 255 * v); img.data[k + 1] = Math.min(255, col.g * 255 * v); img.data[k + 2] = Math.min(255, col.b * 255 * v);
-        img.data[k + 3] = Math.round(255 * st.carpet * (0.75 + rand() * 0.25));
+        img.data[k + 3] = Math.round(255 * fill * (0.75 + rand() * 0.25));
       }
     }
     c2.putImageData(img, 0, 0);
@@ -178,17 +206,21 @@ export function buildGroundcover(plan, w, l, entries, { plants = [], heightOf, s
     group.add(carpet);
   }
 
-  // The clumps: a jittered grid at the stage's spacing, per groundcover
+  // The clumps: a jittered grid at each groundcover's own spacing for its stage (the sun one where there's no
+  // shade, the shade one under the crowns); the cap is shared out by the area each would fill
   const spots = { sun: [], shade: [] };
   const cap = lite ? CAP.lite : CAP.full;
-  let gap = st.gap;
-  const estimate = (bedM2 * share) / (gap * gap);
-  if (estimate > cap) gap *= Math.sqrt(estimate / cap);
-  for (let z = gap / 2; z < l; z += gap) {
-    for (let x = gap / 2; x < w; x += gap) {
-      const px = x + (rand() - 0.5) * gap * 0.8, pz = z + (rand() - 0.5) * gap * 0.8;
-      if (!inBed(px, pz) || !isCovered(px, pz)) continue;
-      (shaded(px, pz) ? spots.shade : spots.sun).push([px, pz]);
+  const want = (k) => (stOf[k] ? (bedM2 * share) / (stOf[k].gap * stOf[k].gap) : 0);
+  const scaleUp = Math.max(1, Math.max(want('sun'), want('shade')) / cap);
+  for (const key of ['sun', 'shade']) {
+    if (!stOf[key]) continue;
+    const gap = stOf[key].gap * Math.sqrt(scaleUp);
+    for (let z = gap / 2; z < l; z += gap) {
+      for (let x = gap / 2; x < w; x += gap) {
+        const px = x + (rand() - 0.5) * gap * 0.8, pz = z + (rand() - 0.5) * gap * 0.8;
+        if (!inBed(px, pz) || !isCovered(px, pz)) continue;
+        if (shaded(px, pz) === (key === 'shade')) spots[key].push([px, pz]);
+      }
     }
   }
   const o = new THREE.Object3D(), c = new THREE.Color();
@@ -202,13 +234,13 @@ export function buildGroundcover(plan, w, l, entries, { plants = [], heightOf, s
     const mesh = new THREE.InstancedMesh(geo, mat, pts.length);
     mesh.name = entry.name;
     pts.forEach(([x, z], i) => {
-      const s = st.size * (0.8 + rand() * 0.45) * (prof.small ? 0.8 : 1);
+      const s = stOf[key].size * (0.8 + rand() * 0.45) * (prof.small ? 0.8 : 1);
       o.position.set(x, 0.008, z);
       o.rotation.set(0, rand() * Math.PI * 2, 0);
       o.scale.set(s, s * (0.85 + rand() * 0.3), s);
       o.updateMatrix();
       mesh.setMatrixAt(i, o.matrix);
-      const flower = prof.flower && stage !== 'planting' && rand() < 0.12;
+      const flower = prof.flower && stOf[key].years > 0 && rand() < 0.12;
       mesh.setColorAt(i, c.set(flower ? prof.flower : prof.colors[Math.floor(rand() * prof.colors.length)]).offsetHSL(0, 0, (rand() - 0.5) * 0.06));
     });
     mesh.instanceMatrix.needsUpdate = true;

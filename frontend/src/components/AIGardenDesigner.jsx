@@ -2,14 +2,14 @@ import React, { useState, useEffect, useEffectEvent, useRef, useMemo } from 'rea
 import { evaluatePlantCompatibility } from '../data/plantCompatibility';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { Sparkles, ArrowLeft, Check, Compass, ShieldAlert, Upload, X, CalendarPlus, Info, Cpu, Wrench, RefreshCw, Box, ChevronLeft, ChevronRight, Leaf, Sun, CloudSun, Cloud, Droplet, Undo2, RotateCcw, Pencil, AlertTriangle, Wand2, Plus, FlipHorizontal2, Link2, Download, ImageDown, FileText, Grid3x3 } from 'lucide-react';
+import { Sparkles, ArrowLeft, Camera, Check, ShieldAlert, Upload, X, CalendarPlus, Info, Cpu, Wrench, RefreshCw, Box, ChevronLeft, ChevronRight, Leaf, Sun, CloudSun, Cloud, Droplet, Undo2, RotateCcw, Pencil, AlertTriangle, Wand2, Plus, FlipHorizontal2, Link2, Download, ImageDown, FileText, Grid3x3 } from 'lucide-react';
 import { useToast } from './ui/Toast';
 import { saveBlob, glbFileName, designFileName, fileSize } from './ui/download';
 import { productImage } from '../data/productImage';
 import YardSurvey from './YardSurvey';
-import { emptySurvey, yardArea } from '../data/yardSurvey';
+import YardShapeStep from './YardShapeStep';
+import { emptySurvey, newId, yardArea } from '../data/yardSurvey';
 import BudgetPicker from './BudgetPicker';
-import PageHero from './ui/PageHero';
 import { color, cardStyle, inputStyle, labelStyle, radius } from './ui/tokens';
 import { useCart } from '../context/CartContext';
 import { lotPlantsToStudioItems } from '../data/sampleGarden';
@@ -19,6 +19,7 @@ import ThreeGardenCanvas from './ThreeGardenCanvas';
 import { yardSummary, hasSurvey } from '../data/yardScene';
 import { useDesign } from '../context/DesignContext';
 import api, { getInventoryItems, getPricing, shareDesign, stopSharingDesign, downloadDesignProposal } from '../services/api';
+import { queuePreview } from '../data/designPreview';
 import { MODEL_CREDITS } from '../data/modelCredits';
 import ShareDesignDialog from './ShareDesignDialog';
 import { useAuth } from '../context/AuthContext';
@@ -29,8 +30,10 @@ import { DEFAULT_TIME_OF_DAY } from '../data/studioLight';
 import { defaultPins, vantageOf } from '../data/photoPose';
 import { readFocal35 } from '../data/photoExif';
 import { LOT_MAX } from '../data/lot';
-import { DEFAULT_GROWTH_STAGE, GROWTH_STAGES } from '../data/modelSizing';
+import { DEFAULT_GROWTH_STAGE, growthLabel } from '../data/modelSizing';
 import GrowthStagePicker from './GrowthStagePicker';
+import SunControl from './SunControl';
+import { SUN_SEASONS, surveyFacing } from '../data/sunPath';
 import LawnLookSelect from './LawnLookSelect';
 import { useLawnLook } from '../data/lawnLook';
 import { editSummary } from '../data/designEdits';
@@ -89,6 +92,28 @@ const timeAgo = (ms) => {
 // Each design and each of its plants gets a stable id, so the 3D view can edit it (move, turn,
 // remove) and Undo follows the right design. priceCtx = the terms it was priced on (install, scope,
 // lawn, lot), so an edited design is re-priced the same way. Older saved guest designs have none.
+// The AI Designer's guided form. Only step 1 (the yard size) is required.
+const FORM_STEPS = [
+  { n: 1, title: 'Your yard', short: 'Yard', hint: 'How big is it and what shape? A photo is optional but makes the design fit better.' },
+  { n: 2, title: 'Budget & style', short: 'Budget', hint: 'What you want to spend and how the garden should feel.' },
+  { n: 3, title: 'Plants & features', short: 'Plants', hint: 'Optional: skip this and we choose from our whole catalog.' },
+  { n: 4, title: 'Review & generate', short: 'Review', hint: 'Check your answers, then we make 3 designs to compare in 3D.' },
+];
+// "See an example first": a typical backyard, so a first-time customer sees what they get before measuring
+// anything. A door from the house and a tree that stays show that the designs plan around what's there.
+// Engine designs only (example=1): it never uses the customer's daily AI designs.
+const EXAMPLE_YARD = { width: 10, length: 8 };
+const exampleSurvey = () => ({
+  ...emptySurvey(),
+  items: [
+    { id: newId(), kind: 'entry', x: 5, z: 8, edge: 'front' },
+    { id: newId(), kind: 'keep', x: 2, z: 1.5, r: 1.5, label: 'Mango tree' },
+  ],
+});
+const photoSentence = (facts) => (facts.length > 1 ? `${facts.slice(0, -1).join(', ')} and ${facts[facts.length - 1]}` : facts[0]);
+const SUN_LABELS = { full: 'Full sun', part: 'Part sun', shade: 'Mostly shade' };
+const UPKEEP_LABELS = { low: 'Low upkeep', medium: 'Medium upkeep', high: 'I love gardening' };
+
 const tagLayouts = (layouts, priceCtx) => layouts.map((d, i) => ({
   ...d,
   edit_id: d.edit_id || `${Date.now().toString(36)}-${i}`,
@@ -165,6 +190,66 @@ function EditPicker({ title, hint, sections, onPick, onClose, busy, error, empty
 const underUsed = (d) => !!d.target_budget && Number(d.total_cost) < UNDER_USED * Number(d.target_budget);
 
 /** A labelled single choice as chips. options: [value, label, hint]. */
+// Progress for the guided form: numbered steps joined by a line; done steps show a tick. Every step is a
+// button (the parent checks the yard size before letting the customer past step 1).
+function FormStepper({ step, onStep, phone }) {
+  return (
+    <ol aria-label="Steps" style={{ listStyle: 'none', margin: '0 0 1.25rem', padding: 0, display: 'flex', alignItems: 'flex-start' }}>
+      {FORM_STEPS.map((s, i) => {
+        const done = s.n < step, current = s.n === step;
+        return (
+          <li key={s.n} style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+            {i > 0 && (
+              <span aria-hidden="true" style={{ position: 'absolute', top: 15, right: '50%', width: '100%', height: 2,
+                background: s.n <= step ? '#10B981' : '#E2E8F0', transition: 'background 0.25s' }} />
+            )}
+            <button type="button" onClick={() => onStep(s.n)} aria-current={current ? 'step' : undefined}
+              aria-label={`Step ${s.n} of ${FORM_STEPS.length}: ${s.title}${done ? ' (done)' : ''}`}
+              style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, width: '100%',
+                padding: 0, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+              <span style={{ width: 32, height: 32, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: '0.8rem', fontWeight: 800, transition: 'all 0.25s',
+                background: done ? '#10B981' : current ? '#ECFDF5' : '#fff',
+                color: done ? '#fff' : current ? '#047857' : '#94A3B8',
+                border: `2px solid ${done || current ? '#10B981' : '#E2E8F0'}`,
+                boxShadow: current ? '0 0 0 4px rgba(16,185,129,0.15)' : 'none' }}>
+                {done ? <Check size={15} aria-hidden="true" /> : s.n}
+              </span>
+              <span style={{ fontSize: phone ? '0.7rem' : '0.78rem', fontWeight: current ? 800 : 600, lineHeight: 1.25, textAlign: 'center',
+                color: current ? '#0F172A' : done ? '#047857' : '#94A3B8', padding: '0 2px' }}>
+                {phone ? s.short : s.title}
+              </span>
+            </button>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+// Step 4: the customer's answers, one row each, with "Change" taking them back to that step
+function ReviewAnswers({ rows, onEdit }) {
+  return (
+    <dl style={{ margin: 0, border: '1px solid #E2E8F0', borderRadius: 14, overflow: 'hidden', background: '#fff' }}>
+      {rows.map((r, i) => (
+        <div key={r.label} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '12px 14px',
+          borderTop: i ? '1px solid #F1F5F9' : 'none' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <dt style={{ fontSize: '0.68rem', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#94A3B8' }}>{r.label}</dt>
+            <dd style={{ margin: '3px 0 0', fontSize: '0.88rem', fontWeight: 600, color: '#0F172A', lineHeight: 1.45 }}>{r.value}</dd>
+            {r.note && <dd style={{ margin: '3px 0 0', fontSize: '0.75rem', color: '#B45309', lineHeight: 1.4 }}>{r.note}</dd>}
+          </div>
+          <button type="button" onClick={() => onEdit(r.step)} aria-label={`Change ${r.label.toLowerCase()}`}
+            style={{ flexShrink: 0, minHeight: 36, padding: '0 12px', borderRadius: 8, border: '1px solid #E2E8F0', background: '#fff',
+              color: '#047857', fontWeight: 700, fontSize: '0.78rem', cursor: 'pointer', fontFamily: 'inherit' }}>
+            Change
+          </button>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 function ChoiceChips({ label, value, onChange, options, touch }) {
   const hint = options.find(([v]) => v === value)?.[2];
   return (
@@ -251,45 +336,6 @@ function PlantThumb({ item, size, rounded = 8, style }) {
     </span>
   );
 }
-
-const BotanicalSVG = () => (
-  <svg viewBox="0 0 800 200" xmlns="http://www.w3.org/2000/svg" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0.12 }}>
-    {/* Large fern left */}
-    <g transform="translate(60, 180)">
-      {[-40,-25,-10,5,20,35,50].map((angle, i) => (
-        <ellipse key={i} rx="38" ry="8" cx={Math.sin((angle*Math.PI)/180)*i*10} cy={-i*18}
-          transform={`rotate(${angle})`} fill="#6B9E5A" />
-      ))}
-    </g>
-    {/* Tree silhouette center-left */}
-    <g transform="translate(200, 200)">
-      <rect x="-5" y="-80" width="10" height="80" fill="#5C4033" />
-      <circle cx="0" cy="-90" r="45" fill="#4A7A3A" />
-      <circle cx="-25" cy="-75" r="30" fill="#3D6B2E" />
-      <circle cx="28" cy="-72" r="33" fill="#4A7A3A" />
-    </g>
-    {/* Flowers scattered */}
-    {[350, 420, 490, 560].map((x, i) => (
-      <g key={i} transform={`translate(${x}, ${170 - i * 10})`}>
-        <rect x="-2" y="-30" width="4" height="30" fill="#6B8F5A" />
-        <circle cx="0" cy="-35" r="10" fill={['#E8A87C','#D4A5C9','#F0C060','#A8D5A2'][i]} />
-      </g>
-    ))}
-    {/* Palm right */}
-    <g transform="translate(680, 200)">
-      <rect x="-4" y="-100" width="8" height="100" fill="#7A5C33" transform="rotate(5)" />
-      {[-60,-30,0,30,60,90].map((angle, i) => (
-        <ellipse key={i} rx="50" ry="6" cx="0" cy="-105"
-          transform={`rotate(${angle})`} fill="#3D7A2E" />
-      ))}
-    </g>
-    {/* Shrubs right area */}
-    <circle cx="770" cy="185" r="28" fill="#4A7A3A" />
-    <circle cx="790" cy="192" r="20" fill="#5C9440" />
-    {/* Ground line */}
-    <rect x="0" y="195" width="800" height="5" fill="#3D5C2E" rx="2" />
-  </svg>
-);
 
 export default function AIGardenDesigner() {
   const navigate = useNavigate();
@@ -417,10 +463,16 @@ export default function AIGardenDesigner() {
   const activeNotes = activeLayout?.notes;
   const notesByUid = useMemo(() => {
     const out = {};
-    (activeNotes || []).forEach(n => (n.uids || []).forEach(u => { if (u) (out[u] = out[u] || []).push(n.message); }));
+    // With the engine's short headline for this plant (stage 3): { point, advice, kind }; older notes: the sentence
+    (activeNotes || []).forEach(n => (n.uids || []).forEach(u => {
+      if (!u) return;
+      const short = n.short_by_uid?.[u];
+      (out[u] = out[u] || []).push(short ? { point: short, advice: n.advice || n.message, kind: n.kind } : n.message);
+    }));
     return out;
   }, [activeNotes]);
   const [growthStage, setGrowthStage] = useState(DEFAULT_GROWTH_STAGE);
+  const [sunView, setSunView] = useState(null);   // { hour, season }: the real sun and shadows (SunControl), null = off
   const [mirrorOn, setMirrorOn] = useState(true);   // Symmetrical designs: "Mirror my changes"
   const [mirrorNote, setMirrorNote] = useState('');
   const [activeView, setActiveView] = useState('3d');
@@ -432,12 +484,19 @@ export default function AIGardenDesigner() {
   const [photoGroundStatus, setPhotoGroundStatus] = useState(null);
   const phone = useIsPhone();
   const touch = useMediaQuery('(pointer: coarse)');
-  // Phones & tablets: the three options are a swipe carousel. Desktop keeps them side by
-  // side, because comparing the three at a glance is the point of this screen.
-  const carousel = useMediaQuery('(max-width: 1023px)');
-  const carouselRef = useRef(null);
-  const previewRef = useRef(null);
-  const [slide, setSlide] = useState(0);
+  // The form is a short guided flow (FORM_STEPS): 1 yard · 2 budget & style · 3 plants & features · 4 review.
+  // Only the yard size is required, so "Generate" is offered from step 2 on. Every step stays mounted (just
+  // hidden), so the yard survey and the plant picker keep their own state while the customer moves around.
+  const [formStep, setFormStep] = useState(1);
+  const [lotProblem, setLotProblem] = useState('');
+  const cardRef = useRef(null);
+  // Bring the top of the main card into view (below the 60 px top bar), only when it is above the screen
+  const scrollToCard = () => {
+    const el = cardRef.current;
+    if (!el) return;
+    const top = el.getBoundingClientRect().top;
+    if (top < 60) window.scrollTo({ top: window.scrollY + top - 72, behavior: 'smooth' });
+  };
   const [bookingLoading, setBookingLoading] = useState(false);
   // Photo overlay: four pins on the yard's corners in the photo (null = not placed yet, a guess is used)
   const [photoCorners, setPhotoCorners] = useState(null);   // the 4 pins on the photo ({u, v} each)
@@ -481,6 +540,9 @@ export default function AIGardenDesigner() {
   const [keepClear, setKeepClear] = useState([]);
   // Mark your yard (YardSurvey): what's already there, in lot metres — the engine plans around it
   const [survey, setSurvey] = useState(() => (Array.isArray(prefill?.outline) ? { ...emptySurvey(), outline: prefill.outline } : emptySurvey()));
+  // The example yard is on screen: { before } = the customer's own yard answers, put back by "Design my own yard"
+  const [example, setExample] = useState(null);
+  const [detailsEl, setDetailsEl] = useState(null);   // where the 3D view draws the clicked plant's details
   // How many of one kind of rock the yard takes (garden_ai.rock_limits): its own shape's area when it has one
   const rockMax = rockLimits(yardArea(survey, Number(lotWidth), Number(lotLength)));
   const rockLimitOf = (item) => (isSmallStone(item) ? rockMax.stones : rockMax.boulders);
@@ -536,7 +598,9 @@ export default function AIGardenDesigner() {
     if (saved.sun !== undefined) setSun(saved.sun);
     if (saved.maintenance) setMaintenance(saved.maintenance);
     if (Array.isArray(saved.keepClear)) setKeepClear(saved.keepClear);
-    if (Array.isArray(saved.survey?.items)) setSurvey({ items: saved.survey.items, sun: saved.survey.sun || null, outline: saved.survey.outline || null });
+    if (Array.isArray(saved.survey?.items)) setSurvey({ items: saved.survey.items, sun: saved.survey.sun || null, outline: saved.survey.outline || null,
+      ...(saved.survey.photo && { photo: saved.survey.photo }) });
+    if (saved.example?.before) setExample(saved.example);
     if (saved.savedAt) setRestored({ at: saved.savedAt, hadPhoto: !!saved.hadPhoto, edited: layouts.some(l => l.edited) });
     // Left mid-update (closed while a price was on its way): price those designs again
     layouts.filter(l => l.pricing === 'pending' || l.pricing === 'error').forEach(l => reprice(l.edit_id));
@@ -666,6 +730,7 @@ export default function AIGardenDesigner() {
     setSelectedImage(file);
     setImagePreview(URL.createObjectURL(file));
     setPhotoCorners(null);   // a new photo needs its own pins
+    setSurvey(sv => ({ ...sv, photo: undefined }));   // and its own line-up before the design uses it
     setPhotoLens(null);
     scanFileRef.current = file;   // the photo now on screen (its lens reading can arrive after a newer photo)
     readFocal35(file).then(mm => { if (scanFileRef.current === file) setPhotoLens(mm); });
@@ -679,13 +744,18 @@ export default function AIGardenDesigner() {
     setPhotoCorners(null);
     setPhotoLens(null);
     setKeepClear([]);
+    setSurvey(sv => ({ ...sv, photo: undefined }));
   };
 
-  const handleGenerateDesigns = async (e, variationSeed = seed) => {
+  // over: answers to use instead of the state (the example run sets them and generates in the same click)
+  const handleGenerateDesigns = async (e, variationSeed = seed, over = {}) => {
     e?.preventDefault?.();
+    const lotW = over.lotWidth ?? lotWidth, lotL = over.lotLength ?? lotLength, yard = over.survey ?? survey;
+    const isExample = over.example ?? !!example;
     setLoading(true);
     setNotice('');
     setError('');
+    scrollToCard();
     const API_BASE_URL = API_ROOT;
     const headers = {};
     const storedAuth = localStorage.getItem('authTokens');
@@ -699,8 +769,8 @@ export default function AIGardenDesigner() {
     formData.append('budget_min', Number(budgetRange.min));
     formData.append('budget_max', Number(budgetRange.max));
     formData.append('install', install);
-    formData.append('lot_width', Number(lotWidth));
-    formData.append('lot_length', Number(lotLength));
+    formData.append('lot_width', Number(lotW));
+    formData.append('lot_length', Number(lotL));
     formData.append('preferred_plant_ids', JSON.stringify(preferredPlants));
     formData.append('groundcover', groundcoverOn ? 'auto' : 'off');
     formData.append('plant_qty', JSON.stringify(Object.entries(plantQty)
@@ -708,7 +778,8 @@ export default function AIGardenDesigner() {
     formData.append('features', JSON.stringify(Object.entries(featureQty).map(([id, quantity]) => ({ id: Number(id), quantity }))));
     // The photo stays in the browser for the AR view; only the confirmed zones are sent
     formData.append('keep_clear_zones', JSON.stringify(keepClear));
-    formData.append('site_survey', JSON.stringify(survey));
+    formData.append('site_survey', JSON.stringify(yard));
+    if (isExample) formData.append('example', '1');
     formData.append('seed', variationSeed);
     if (sun) formData.append('sun', sun);
     formData.append('maintenance', maintenance);
@@ -720,22 +791,25 @@ export default function AIGardenDesigner() {
         const inventoryIds = new Set(catalog.map(item => String(item.id)));
         const validated = tagLayouts(response.data.designs.map(design => ({
           ...design,
+          photo_basis: response.data.photo_basis || [],
           plants: (design.plants || []).filter(p =>
             p.is_existing || inventoryIds.has(String(p.plant_id))
           ),
-        })), { install, scope: response.data.scope || scope, newLawn: lawn !== 'keep', lot: [Number(lotWidth), Number(lotLength)], keepClear, survey });
+        })), { install, scope: response.data.scope || scope, newLawn: lawn !== 'keep', lot: [Number(lotW), Number(lotL)], keepClear, survey: yard });
         setEditHistory({});
         setGeneratedLayouts(validated);
-        setSlide(0);
-        setActiveLayout(null);
+        // Open the first option in 3D straight away; the option tabs above it switch between them
+        setActiveLayout(validated[0] || null);
         setNotice(response.data.notice || '');
         if (response.data.budget_warning) setBudgetWarning(response.data.budget_warning);
         setRestored(null);
+        return true;
       } else {
         throw new Error("Invalid response format");
       }
     } catch (err) {
       setError(err.response?.data?.error || err.response?.data?.detail || err.message || 'An unexpected error occurred.');
+      return false;
     } finally {
       setLoading(false);
     }
@@ -746,24 +820,68 @@ export default function AIGardenDesigner() {
     setEditPanel(null);
     setTidyPreview(null);
     setMirrorNote('');
-    if (carousel) setTimeout(() => previewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+    // No scrolling: the option tabs stay pinned above the 3D view, so the customer stays where they are
+  };
+  // Option tabs: arrow keys move between them (WAI-ARIA tabs pattern)
+  const onOptionKey = (e, index) => {
+    const n = generatedLayouts.length;
+    const next = e.key === 'ArrowRight' ? (index + 1) % n : e.key === 'ArrowLeft' ? (index - 1 + n) % n
+      : e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : null;
+    if (next === null) return;
+    e.preventDefault();
+    handleSelectLayout(generatedLayouts[next]);
+    document.getElementById(`design-option-${next}`)?.focus();
   };
 
-  const onCarouselScroll = () => {
-    const el = carouselRef.current;
-    if (!el?.children.length) return;
-    const cards = [...el.children];
-    // Scrolled to the end: the last card counts as shown even if it can't reach the centre
-    if (el.scrollLeft + el.clientWidth >= el.scrollWidth - 4) { setSlide(cards.length - 1); return; }
-    const mid = el.scrollLeft + el.clientWidth / 2;
-    const dist = cards.map(c => Math.abs(c.offsetLeft - el.offsetLeft + c.offsetWidth / 2 - mid));
-    setSlide(dist.indexOf(Math.min(...dist)));
+  // ── Guided form ────────────────────────────────────────────────────────────────
+  const lotError = () => {
+    const w = Number(lotWidth), l = Number(lotLength);
+    if (!(w >= 1 && w <= 100) || !(l >= 1 && l <= 100)) return 'Enter the yard\'s width and length in metres (1 to 100 m each).';
+    return '';
   };
-  const goToSlide = (i) => {
-    const el = carouselRef.current;
-    const card = el?.children[i];
-    if (!card) return;
-    el.scrollTo({ left: card.offsetLeft - el.offsetLeft - (el.clientWidth - card.offsetWidth) / 2, behavior: 'smooth' });
+  // Leaving step 1 needs a usable yard size; every other step is optional
+  const goToStep = (n) => {
+    if (n > 1) {
+      const problem = lotError();
+      setLotProblem(problem);
+      if (problem) { setFormStep(1); scrollToCard(); return; }
+    }
+    setFormStep(Math.max(1, Math.min(FORM_STEPS.length, n)));
+    scrollToCard();
+  };
+  const handleFormSubmit = (e) => {
+    e.preventDefault();
+    // Enter in a field moves on a step; only the Generate buttons (data-generate) make designs
+    if (!e.nativeEvent?.submitter?.dataset?.generate) { goToStep(formStep + 1); return; }
+    const problem = lotError();
+    setLotProblem(problem);
+    if (problem) { setFormStep(1); scrollToCard(); return; }
+    handleGenerateDesigns(e);
+  };
+
+  // "See an example first": fill in the example yard and make its designs straight away
+  const tryExample = async () => {
+    const yard = exampleSurvey();
+    const before = example?.before || { lotWidth, lotLength, survey };
+    setExample({ before });
+    setLotWidth(EXAMPLE_YARD.width);
+    setLotLength(EXAMPLE_YARD.length);
+    setSurvey(yard);
+    setLotProblem('');
+    const ok = await handleGenerateDesigns(null, seed, { lotWidth: EXAMPLE_YARD.width, lotLength: EXAMPLE_YARD.length, survey: yard, example: true });
+    if (!ok) {   // no example to show: the customer's own answers come back (the error stays on screen)
+      setLotWidth(before.lotWidth); setLotLength(before.lotLength); setSurvey(before.survey);
+      setExample(null);
+    }
+  };
+  // Back from the example to the customer's own yard: their answers return, step 1
+  const leaveExample = () => {
+    const before = example?.before;
+    if (before) { setLotWidth(before.lotWidth); setLotLength(before.lotLength); setSurvey(before.survey); }
+    setExample(null);
+    setGeneratedLayouts([]); setError(''); setActiveLayout(null); setEditHistory({}); setRestored(null);
+    setFormStep(1);
+    scrollToCard();
   };
 
   const handleShowVariations = () => {
@@ -783,6 +901,7 @@ export default function AIGardenDesigner() {
         placedItems: lotPlantsToStudioItems(design.plants || [], catalog, w, l),
         // The beds and lawn come along, so the Studio shows the same garden (dropped if the lot is resized)
         dimensions: { width: w, length: l, terrainType: 'flat', outline: survey.outline || null,
+          sunFacing: surveyFacing(survey),   // the real sun path in the Studio (data/sunPath.js)
           ...(design.garden_plan?.lawn && { gardenPlan: { ...design.garden_plan, newLawn: lawn !== 'keep' } }) },
         depthData: null,
         originalImageUrl: null,
@@ -791,9 +910,15 @@ export default function AIGardenDesigner() {
       },
     });
     dispatch({ type: 'SET_DESIGN_META', payload: { isDirty: true } });
+    // The Studio orders plants for delivery, and specimens are planted by our crew only: say so
+    if ((design.plants || []).some(p => p.size === 'specimen')) {
+      toast({ id: 'studio-specimen', type: 'info', title: 'Standard sizes in the Studio',
+        message: 'The Studio orders plants for delivery, so the bigger specimen sizes stay with this design’s installed quote.' });
+    }
     navigate('/studio');
   };
-  const handleReset = () => { setGeneratedLayouts([]); setError(''); setActiveLayout(null); setEditHistory({}); };
+  // "Change my answers": back to the form (answers kept) on the review step
+  const handleReset = () => { setExample(null); setGeneratedLayouts([]); setError(''); setActiveLayout(null); setEditHistory({}); setFormStep(FORM_STEPS.length); scrollToCard(); };
 
   // ── Editing a design in the 3D view (move, turn, remove) ──────────────────────
   // The price is re-done by the server's rate card (POST /pricing/estimate/) on the design's own
@@ -837,12 +962,20 @@ export default function AIGardenDesigner() {
 
   const defaultCtx = () => ({ install, scope, newLawn: lawn !== 'keep', lot: [Number(lotWidth), Number(lotLength)] });
   const estimateBody = (layout, ctx) => {
+    // Counted by plant and size: a specimen-size plant is its own line at its own price (backend pricing.py)
     const counts = {};
-    layout.plants.forEach(p => { if (!p.is_existing) counts[p.plant_id] = (counts[p.plant_id] || 0) + 1; });
+    layout.plants.forEach(p => {
+      if (p.is_existing) return;
+      const key = p.size === 'specimen' ? `${p.plant_id}:specimen` : String(p.plant_id);
+      counts[key] = (counts[key] || 0) + 1;
+    });
     (layout.groundcover || []).forEach(g => { counts[g.plant_id] = (counts[g.plant_id] || 0) + Math.round(Number(g.area_sqm) || 0); });
     const area = yardArea(ctx.survey, ctx.lot[0], ctx.lot[1]);   // the yard's own shape when it has one
     return {
-      items: Object.entries(counts).map(([pid, quantity]) => ({ product_id: Number(pid), quantity })),
+      items: Object.entries(counts).map(([key, quantity]) => {
+        const [pid, size] = key.split(':');
+        return { product_id: Number(pid), quantity, ...(size && { size }) };
+      }),
       area_sqm: area,
       lawn_sqm: ctx.install ? Math.min(area, Number(layout.garden_plan?.lawn_area) || 0) : 0,
       new_lawn: ctx.newLawn, scope: ctx.scope || 'makeover', install: ctx.install,
@@ -861,10 +994,14 @@ export default function AIGardenDesigner() {
     const cur = activeLayout;
     if (!cur) return;
     const base = cur.price_ctx || defaultCtx();
+    // Plants only: specimen sizes are planted by our crew, so the plants go back to the standard size
+    const sized = !installNow && cur.plants.some(p => p.size);
     patchLayout(cur.edit_id, {
       price_ctx: { ...base, install: installNow, scope: scopeChoice || base.scope || 'makeover' },
       terms_switched: true, pricing: 'pending',
+      ...(sized && { plants: cur.plants.map(({ size, ...p }) => p) }),   // eslint-disable-line no-unused-vars
     });
+    if (sized) setMirrorNote('Bigger specimen sizes are planted by our crew only, so these plants are back to the standard size.');
     reprice(cur.edit_id);
   };
 
@@ -924,6 +1061,25 @@ export default function AIGardenDesigner() {
       setTidyNote("Couldn't tidy up just now. Please try again.");
     } finally {
       setTidying(false);
+    }
+  };
+  // "Move apart" in a plant's details: the engine moves just that plant, the shortest distance (one more edit:
+  // Undo takes it back); what it did shows in that plant's details
+  const [fixNote, setFixNote] = useState(null);   // { uid, text, busy }
+  const handleFixOne = async (uid) => {
+    const cur = activeLayout;
+    if (!cur || fixNote?.busy) return;
+    const ctx = cur.price_ctx || { lot: [Number(lotWidth), Number(lotLength)], keepClear, survey };
+    setFixNote({ uid, text: 'Finding it a spot with room…', busy: true });
+    try {
+      const { data } = await axios.post(`${API_ROOT}/layout-review/`, { ...layoutBody(cur, ctx), tidy_uid: uid }, { timeout: EDIT_TIMEOUT });
+      const moves = new Map((data.moves || []).filter(m => m.uid).map(m => [m.uid, m]));
+      if (moves.size) {
+        handlePlantsEdit(cur.plants.map(p => (moves.has(p.uid) ? { ...p, x: moves.get(p.uid).x, z: moves.get(p.uid).z } : p)), { noMirror: true });
+      }
+      setFixNote({ uid, text: (data.tidy_notes || []).join(' ') || 'Done.', busy: false });
+    } catch {
+      setFixNote({ uid, text: "Couldn't move it just now. Please try again.", busy: false });
     }
   };
   const applyTidy = () => {
@@ -1021,13 +1177,13 @@ export default function AIGardenDesigner() {
       }
       const data = {
         layouts: generatedLayouts, activeId, budgetRange, lotWidth, lotLength, featureQty, preferredPlants, plantQty,
-        install, scope, lawn, sun, maintenance, keepClear, survey, hadPhoto: !!imagePreview,
+        install, scope, lawn, sun, maintenance, keepClear, survey, hadPhoto: !!imagePreview, example,
       };
       if (ownerId) saveAiSession(ownerId, data); else saveGuestDesign(data);
     }, 600);
     return () => clearTimeout(t);
   }, [generatedLayouts, activeId, ownerId, budgetRange, lotWidth, lotLength, featureQty, preferredPlants, plantQty,
-    install, scope, lawn, sun, maintenance, keepClear, survey, imagePreview]);
+    install, scope, lawn, sun, maintenance, keepClear, survey, imagePreview, example]);
 
   // Analyse the uploaded photo's average colour to warm/cool the 3D lighting
   useEffect(() => {
@@ -1062,7 +1218,8 @@ export default function AIGardenDesigner() {
     plant_breakdown: layout.plant_breakdown || [],
     // The pins and the beds/lawn plan travel with the design so the office and crew see the same garden
     dimensions: { width: Number(lotWidth), length: Number(lotLength), ...(photoSetup && { photoCorners: photoSetup }),
-      ...((layout.price_ctx?.survey?.items?.length || layout.price_ctx?.survey?.sun || layout.price_ctx?.survey?.outline) && { siteSurvey: layout.price_ctx.survey }),
+      ...((layout.price_ctx?.survey?.items?.length || layout.price_ctx?.survey?.sun || layout.price_ctx?.survey?.outline
+        || layout.price_ctx?.survey?.photo) && { siteSurvey: layout.price_ctx.survey }),
       ...(layout.garden_plan?.lawn && { gardenPlan: { ...layout.garden_plan, newLawn: lawn !== 'keep' } }),
       ...(layout.groundcover?.length && { groundcover: layout.groundcover }),
       // The customer moved, turned or removed things after the AI designed it
@@ -1080,8 +1237,12 @@ export default function AIGardenDesigner() {
     const key = designKey(layout);
     const saved = savedDesignsRef.current;
     if (!saved[key]) {
-      saved[key] = api.post('/designs/', designPayloadFor(layout)).then(r => r.data.id)
-        .catch((e) => { delete saved[key]; throw e; });   // a failed save can be tried again
+      saved[key] = api.post('/designs/', designPayloadFor(layout)).then(r => {
+        // The design card's picture (dashboard, My designs), drawn in the background (data/designPreview.js)
+        queuePreview(r.data.id, { plants: layout.plants, gardenPlan: layout.garden_plan, groundcover: layout.groundcover,
+          survey: layout.price_ctx?.survey || survey, lotWidth: Number(lotWidth), lotLength: Number(lotLength) }, r.data.revision);
+        return r.data.id;
+      }).catch((e) => { delete saved[key]; throw e; });   // a failed save can be tried again
     }
     return saved[key];
   };
@@ -1176,7 +1337,7 @@ export default function AIGardenDesigner() {
       const { before, after } = await canvas.renderPhotoPreview();
       const { composeBeforeAfter, canvasToJpeg } = await import('../data/photoPreview');
       const picture = composeBeforeAfter({ before, after, title: activeLayout.design_name,
-        stage: GROWTH_STAGES.find(g => g.key === growthStage)?.label });
+        stage: growthLabel(growthStage) });
       const blob = await canvasToJpeg(picture);
       const name = designFileName(activeLayout.design_name, 'before-after', 'jpg');
       saveBlob(blob, name);
@@ -1270,6 +1431,33 @@ export default function AIGardenDesigner() {
       setBookingLoading(false);
     }
   };
+
+  // Step 4 · Review: the answers in plain words (every row links back to its step)
+  const peso = (n) => `₱${Number(n || 0).toLocaleString()}`;
+  const featureCount = Object.values(featureQty).filter(q => Number(q) > 0).length;   // kinds picked (stones come by the dozen)
+  const pickedNames = selectedPlantObjects.map(p => p.name.split(' (')[0]);
+  const reviewRows = [
+    { step: 1, label: 'Yard', value: [
+      `${Number(lotWidth) || '?'} × ${Number(lotLength) || '?'} m (about ${Math.round(yardArea(survey, Number(lotWidth), Number(lotLength)) || lotAreaNow)} m²)`,
+      imagePreview ? 'photo added' : 'no photo',
+      hasSurvey(survey) ? 'yard marked' : null,
+    ].filter(Boolean).join(' · ') },
+    { step: 2, label: 'Budget', value: `${peso(budgetRange.min)} – ${peso(budgetRange.max)} · ${
+      !install ? 'plants only (no installation)' : scope === 'existing' ? 'planted into my existing garden' : 'full garden makeover'}` },
+    { step: 2, label: 'Style', value: [
+      survey.sun ? 'sun worked out from your yard' : sun ? SUN_LABELS[sun] : 'sun: not sure',
+      UPKEEP_LABELS[maintenance],
+      install && scope === 'makeover' ? (lawn === 'keep' ? 'keep my grass' : 'new grass') : null,
+    ].filter(Boolean).join(' · ').replace(/^./, c => c.toUpperCase()) },
+    { step: 3, label: 'Plants', value: pickedNames.length
+        ? `Only the ${pickedNames.length} you picked: ${pickedNames.slice(0, 3).join(', ')}${pickedNames.length > 3 ? ` and ${pickedNames.length - 3} more` : ''}`
+        : 'We choose from our whole catalog',
+      note: compatibilityWarnings.length ? `${compatibilityWarnings.length} compatibility note${compatibilityWarnings.length > 1 ? 's' : ''}: the layout keeps those plants apart.` : null },
+    { step: 3, label: 'Extras', value: [
+      groundcoverOn ? 'groundcover between plants' : 'mulched beds',
+      featureCount ? `${featureCount} kind${featureCount > 1 ? 's' : ''} of garden feature` : 'no garden features',
+    ].join(' · ').replace(/^./, c => c.toUpperCase()) },
+  ];
 
   const styles = {
     editBtn: (off, big) => ({
@@ -1456,22 +1644,39 @@ export default function AIGardenDesigner() {
       borderRadius: '8px',
       transition: 'all 0.15s',
     },
-    layoutsGrid: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fill, minmax(min(260px, 100%), 1fr))',
-      gap: '1.25rem',
+    // ── Guided form ──
+    stepTitle: { fontSize: '1.2rem', fontWeight: 800, color: color.ink, margin: 0 },
+    stepHint: { fontSize: '0.82rem', color: '#64748B', margin: '4px 0 0', lineHeight: 1.45 },
+    fieldHint: { fontSize: '0.72rem', color: '#64748B', lineHeight: 1.4 },
+    linkBtn: { background: 'none', border: 'none', padding: 0, color: color.brandDeep, fontWeight: 700, textDecoration: 'underline', cursor: 'pointer', fontSize: 'inherit', fontFamily: 'inherit' },
+    // Back / Generate now / Next: pinned to the bottom of the screen while the step is taller than it
+    stepBar: {
+      position: 'sticky', bottom: 0, zIndex: 20, display: 'flex', alignItems: 'center', gap: 8,
+      margin: '1.75rem calc(-1 * clamp(1.25rem, 4vw, 2.25rem)) calc(-1 * clamp(1.25rem, 4vw, 2.25rem))',
+      padding: '12px clamp(1.25rem, 4vw, 2.25rem) calc(12px + env(safe-area-inset-bottom, 0px))',
+      background: 'rgba(255,255,255,0.96)', backdropFilter: 'blur(8px)', borderTop: `1px solid ${color.border}`,
+      borderRadius: `0 0 ${radius.card}px ${radius.card}px`,
     },
-    // Swipe carousel: one card per view with the next one peeking in
-    layoutsCarousel: {
-      display: 'flex',
-      gap: '12px',
-      overflowX: 'auto',
-      scrollSnapType: 'x mandatory',
-      scrollbarWidth: 'none',
-      WebkitOverflowScrolling: 'touch',
-      padding: '4px 2px 8px',
-      alignItems: 'stretch',
-    },
+    stepBack: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4, minHeight: 44, minWidth: 44, padding: '0 14px', border: `1px solid ${color.border}`, background: color.white, color: color.text, fontWeight: 700, fontSize: '0.85rem', borderRadius: `${radius.button}px`, cursor: 'pointer', fontFamily: 'inherit' },
+    stepGhost: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, minHeight: 44, padding: '0 14px', border: `1px solid ${color.border}`, background: color.white, color: color.brandDeep, fontWeight: 700, fontSize: '0.85rem', borderRadius: `${radius.button}px`, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' },
+    stepNext: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, minHeight: 44, padding: '0 20px', border: 'none', background: color.brand, color: color.white, fontWeight: 800, fontSize: '0.9rem', borderRadius: `${radius.button}px`, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap', boxShadow: '0 4px 14px rgba(16,185,129,0.2)' },
+    // ── Results: option tabs pinned under the top bar, above the 3D view ──
+    optionBar: (n) => ({
+      position: 'sticky', top: 60, zIndex: 30, display: 'grid', gridTemplateColumns: `repeat(${n}, minmax(0, 1fr))`, gap: phone ? 6 : 10,
+      padding: '8px 0', background: 'rgba(255,255,255,0.96)', backdropFilter: 'blur(8px)',
+    }),
+    optionTab: (on) => ({
+      display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, minWidth: 0, textAlign: 'left',
+      padding: phone ? '8px 10px' : '10px 14px', borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit',
+      border: `2px solid ${on ? color.brand : color.border}`, background: on ? '#ECFDF5' : color.white,
+      boxShadow: on ? '0 4px 14px rgba(16,185,129,0.18)' : 'none', transition: 'all 0.18s',
+    }),
+    optionTop: { display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.66rem', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase' },
+    optionName: { maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: phone ? '0.78rem' : '0.88rem', fontWeight: 700, color: color.ink },
+    optionPrice: { fontSize: phone ? '0.85rem' : '1rem', fontWeight: 800, color: color.ink },
+    detailsGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(300px, 100%), 1fr))', gap: '1rem', marginTop: '1rem' },
+    detailsCard: { background: color.white, border: `1px solid ${color.border}`, borderRadius: 12, padding: '1rem 1.1rem' },
+    detailsTitle: { fontSize: '0.9rem', fontWeight: 800, color: color.ink, margin: '0 0 2px' },
     layoutCard: { ...cardStyle, overflow: 'hidden', transition: 'transform 0.25s, box-shadow 0.25s', boxShadow: '0 2px 12px rgba(15,23,42,0.05)' },
     layoutCardTop: { background: color.white, padding: '1.5rem 1.5rem 1rem', borderBottom: `1px solid ${color.divider}` },
     layoutBadge: { fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: color.brandDeep, background: color.brandSurface, border: `1px solid ${color.brandBorder}`, borderRadius: '100px', padding: '3px 10px', display: 'inline-block', marginBottom: '10px' },
@@ -1511,10 +1716,6 @@ export default function AIGardenDesigner() {
       fontFamily: 'monospace',
     },
     selectBtn: { width: '100%', padding: '11px 20px', background: color.brand, color: color.white, fontWeight: 700, fontSize: '0.85rem', border: 'none', borderRadius: `${radius.button}px`, cursor: 'pointer', marginTop: '1.25rem', transition: 'background 0.2s' },
-    carouselArrow: {
-      width: 36, height: 36, borderRadius: '50%', border: `1px solid ${color.border}`, background: color.white,
-      color: color.text, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
-    },
     previewPanel: {
       marginTop: '2rem',
       background: '#F8FAFC',
@@ -1559,8 +1760,8 @@ export default function AIGardenDesigner() {
   return (
     <>
       <style>{`
-        .ai-carousel::-webkit-scrollbar { display: none; }
-        .carousel-arrow:not(:disabled):hover { border-color: #10B981 !important; color: #059669 !important; }
+        .option-tab[aria-selected="false"]:hover { border-color: #6EE7B7 !important; background: #F0FDF4 !important; }
+        .option-tab:focus-visible { outline: 3px solid rgba(16,185,129,0.45); outline-offset: 2px; }
         @keyframes spin { to { transform: rotate(360deg); } }
         @keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
         .garden-input:focus { border-color: #059669 !important; box-shadow: 0 0 0 3px rgba(5,150,105,0.12) !important; }
@@ -1694,16 +1895,8 @@ export default function AIGardenDesigner() {
 
         <div className="w-full max-w-6xl flex flex-col gap-6">
 
-          {/* Hero Banner */}
-          <PageHero
-            eyebrow={<><Compass size={11} /> AI-Powered · 3D Visualization</>}
-            title="Design your dream garden in 3D"
-            subtitle="Set your budget, define the lot, pick your flora, and let the AI compose a garden layout tailored to your space."
-            decoration={<BotanicalSVG />}
-          />
-
           {/* Main Card */}
-          <div style={styles.card}>
+          <div ref={cardRef} style={{ ...styles.card, scrollMarginTop: 72 }}>
 
             {/* Error */}
             {error && (
@@ -1718,362 +1911,428 @@ export default function AIGardenDesigner() {
 
             {/* FORM */}
             {!loading && generatedLayouts.length === 0 && (
-              <form onSubmit={handleGenerateDesigns}>
+              <form onSubmit={handleFormSubmit} noValidate>
+                {/* One plain line instead of a banner: what this page does and what's required */}
+                <p style={{ margin: '0 0 1rem', fontSize: '0.82rem', color: '#64748B', lineHeight: 1.45 }}>
+                  <b style={{ color: '#0F172A' }}>AI garden designer.</b> Answer 4 short steps and we make 3 designs to compare in 3D.
+                  Only your yard size is required.
+                </p>
+                <FormStepper step={formStep} onStep={goToStep} phone={phone} />
+                <div style={{ marginBottom: '1.25rem' }}>
+                  <h2 style={styles.stepTitle}>{FORM_STEPS[formStep - 1].title}</h2>
+                  <p style={styles.stepHint}>{FORM_STEPS[formStep - 1].hint}</p>
+                </div>
 
-                {/* Dimensions, then the budget range (its suggestion depends on the area) */}
-                <div style={styles.grid3}>
-                  <div style={{ ...styles.inputGroup, gridColumn: '1 / -1' }}>
-                    {budgetWarning && (
-                      <div style={{ marginTop: '6px', display: 'flex', alignItems: 'flex-start', gap: '6px', padding: '8px 10px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px' }}>
-                        <ShieldAlert size={13} style={{ color: '#d97706', flexShrink: 0, marginTop: 1 }} />
-                        <span style={{ fontSize: '0.7rem', color: '#92400e', fontWeight: 600, lineHeight: 1.35 }}>{budgetWarning}</span>
-                      </div>
+                {/* Step 1 · Your yard: the size (required), then an optional photo and "Mark your yard" */}
+                <div hidden={formStep !== 1}>
+                  {/* For the customer who isn't ready to measure: see real designs for a sample yard first */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px 14px', flexWrap: 'wrap', padding: '10px 14px', marginBottom: '1.25rem',
+                    border: '1.5px dashed #A7F3D0', borderRadius: 12, background: '#F0FDF4' }}>
+                    <span style={{ flex: '1 1 260px', fontSize: '0.8rem', color: '#065F46', lineHeight: 1.45 }}>
+                      <b>Not ready to measure?</b> See 3 designs for a sample {EXAMPLE_YARD.width} × {EXAMPLE_YARD.length} m yard first.
+                      It doesn't use your daily AI designs.
+                    </span>
+                    <button type="button" onClick={tryExample} className="secondary-btn"
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minHeight: 40, padding: '0 14px', borderRadius: 10,
+                        border: '1.5px solid #10B981', background: '#fff', color: '#047857', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer', fontFamily: 'inherit' }}>
+                      <Wand2 size={15} aria-hidden="true" /> See an example
+                    </button>
+                  </div>
+                  {/* The yard size (the budget suggestion in step 2 depends on the area) */}
+                  <div style={styles.grid3}>
+                    {/* Above the fields, so the step bar pinned to the bottom of a phone screen can't hide it */}
+                    {lotProblem && (
+                      <p role="alert" style={{ gridColumn: '1 / -1', margin: 0, padding: '8px 12px', borderRadius: 10, background: '#FEF2F2',
+                        border: '1px solid #FECACA', fontSize: '0.8rem', fontWeight: 700, color: '#B91C1C' }}>{lotProblem}</p>
                     )}
+                    <div style={styles.inputGroup}>
+                      <label htmlFor="ai-lot-width" style={styles.sectionLabel}>Yard width (m)</label>
+                      <input
+                        id="ai-lot-width" type="number" inputMode="decimal" step="0.1" min="1" max="100" value={lotWidth}
+                        onChange={e => { setLotWidth(e.target.value); setLotProblem(''); }}
+                        aria-describedby="ai-lot-width-hint" aria-invalid={!!lotProblem}
+                        className="garden-input"
+                        style={styles.input} required
+                      />
+                      <span id="ai-lot-width-hint" style={styles.fieldHint}>Side to side, as you stand at the house</span>
+                    </div>
+                    <div style={styles.inputGroup}>
+                      <label htmlFor="ai-lot-length" style={styles.sectionLabel}>Yard length (m)</label>
+                      <input
+                        id="ai-lot-length" type="number" inputMode="decimal" step="0.1" min="1" max="100" value={lotLength}
+                        onChange={e => { setLotLength(e.target.value); setLotProblem(''); }}
+                        aria-describedby="ai-lot-length-hint" aria-invalid={!!lotProblem}
+                        className="garden-input"
+                        style={styles.input} required
+                      />
+                      <span id="ai-lot-length-hint" style={styles.fieldHint}>From the house to the back fence</span>
+                    </div>
+                    <div style={{ ...styles.inputGroup, justifyContent: 'center' }}>
+                      <span style={styles.sectionLabel}>Area</span>
+                      <span style={{ fontSize: '1.05rem', fontWeight: 800, color: '#0F172A' }}>
+                        {lotAreaNow > 0 ? `≈ ${Math.round(lotAreaNow)} m²` : '—'}
+                      </span>
+                      <span style={styles.fieldHint}>Not sure? A rough guess is fine: we measure at the site visit.</span>
+                    </div>
                   </div>
-                  <div style={styles.inputGroup}>
-                    <label style={styles.sectionLabel}>Lot Width (m)</label>
-                    <input
-                      type="number" step="0.1" min="1" max="100" value={lotWidth}
-                      onChange={e => setLotWidth(e.target.value)}
-                      className="garden-input"
-                      style={styles.input} required
-                    />
+                  {/* The yard's shape comes before the photo: a shaped yard changes how the photo is lined up */}
+                  <div style={{ marginTop: '1.25rem' }}>
+                    <YardShapeStep W={Number(lotWidth) || 0} L={Number(lotLength) || 0} outline={survey.outline}
+                      onOutline={(outline) => setSurvey(sv => ({ ...sv, outline }))} />
                   </div>
-                  <div style={styles.inputGroup}>
-                    <label style={styles.sectionLabel}>Lot Length (m)</label>
-                    <input
-                      type="number" step="0.1" min="1" max="100" value={lotLength}
-                      onChange={e => setLotLength(e.target.value)}
-                      className="garden-input"
-                      style={styles.input} required
-                    />
-                  </div>
-                </div>
+                  <hr style={styles.divider} />
+                  {/* Image Upload */}
+                  <div style={{ marginBottom: '1.75rem' }}>
+                    <label style={styles.sectionLabel}>Photo of your yard <span style={{ color: '#94A3B8', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>(optional · helps the design fit)</span></label>
+                    <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
+                      <label className="upload-zone" style={{ ...styles.uploadZone, flex: 1, ...(photoOver ? { borderColor: '#10B981', background: '#ECFDF5' } : {}) }}
+                        onDragOver={(e) => { e.preventDefault(); setPhotoOver(true); }} onDragLeave={() => setPhotoOver(false)}
+                        onDrop={(e) => { e.preventDefault(); setPhotoOver(false); takePhoto(e.dataTransfer.files?.[0]); }}>
+                        <div style={styles.uploadIcon}>
+                          <Upload size={16} color="#10B981" />
+                        </div>
+                        <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#334155', marginBottom: '4px' }}>
+                          Drop a photo of your garden space
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#94A3B8' }}>
+                          JPG, PNG or WebP · max 15 MB
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: '#64748B', marginTop: 8, lineHeight: 1.45, maxWidth: 420, marginInline: 'auto' }}>
+                          Best photo: from the house side, phone held level, showing <b>both back corners</b> and the <b>bottom of both side fences</b>.
+                          A long yard? Hold the phone sideways. A photo from an upstairs window works too.
+                        </div>
+                        <input type="file" accept={PHOTO_ACCEPT} style={{ display: 'none' }}
+                          onChange={(e) => { takePhoto(e.target.files?.[0]); e.target.value = ''; }} />
+                        {photoError && (
+                          <div role="alert" style={{ marginTop: 8, fontSize: '0.78rem', fontWeight: 600, color: '#B91C1C' }}>{photoError}</div>
+                        )}
+                      </label>
 
-                <div style={{ marginTop: '1.25rem' }}>
-                  <label style={styles.sectionLabel}>Budget</label>
-                  <BudgetPicker
-                    areaSqm={lotAreaNow}
-                    lotWidth={lotWidth}
-                    lotLength={lotLength}
-                    install={install}
-                    onInstallChange={setInstall}
-                    scope={scope}
-                    onScopeChange={setScope}
-                    lawn={lawn}
-                    range={budgetRange}
-                    onRangeChange={setBudgetRange}
-                    rates={rates}
-                  />
-                </div>
-
-                {/* The yard's conditions: which plants will thrive, how much care, the lawn */}
-                <div style={{ marginTop: '1.25rem', display: 'grid', gap: '0.9rem' }}>
-                  {survey.sun ? (
-                    // Mark your yard → Sun & shade: worked out spot by spot, so the whole-yard answer isn't needed
-                    <p style={{ margin: 0, fontSize: '0.8rem', color: '#475569' }}>
-                      <b style={{ color: '#0F172A' }}>Sun on the garden:</b> worked out for every spot from which way your yard faces (in Mark your yard below).
-                    </p>
-                  ) : (
-                    <ChoiceChips label="Sun on the garden" value={sun} onChange={setSun} touch={touch} options={[
-                      ['full', 'Full sun', '6+ hours of direct sun'], ['part', 'Part sun', '3–6 hours'],
-                      ['shade', 'Mostly shade', 'under 3 hours'], [null, 'Not sure', 'we check at the site visit'],
-                    ]} />
-                  )}
-                  <ChoiceChips label="Upkeep you want" value={maintenance} onChange={setMaintenance} touch={touch} options={[
-                    ['low', 'Low', 'fewer, hardier plants'], ['medium', 'Medium', 'regular watering'],
-                    ['high', 'I love gardening', 'richer planting'],
-                  ]} />
-                  {install && scope === 'makeover' && (
-                    <ChoiceChips label="The open lawn" value={lawn} onChange={setLawn} touch={touch} options={[
-                      ['new', 'Lay new grass', 'turf supplied & laid'], ['keep', 'Keep my grass', 'we leave the lawn as it is'],
-                    ]} />
-                  )}
-                </div>
-
-                <hr style={styles.divider} />
-
-                {/* Image Upload */}
-                <div style={{ marginBottom: '1.75rem' }}>
-                  <label style={styles.sectionLabel}>Reference Photo <span style={{ color: '#94A3B8', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>(optional)</span></label>
-                  <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
-                    <label className="upload-zone" style={{ ...styles.uploadZone, flex: 1, ...(photoOver ? { borderColor: '#10B981', background: '#ECFDF5' } : {}) }}
-                      onDragOver={(e) => { e.preventDefault(); setPhotoOver(true); }} onDragLeave={() => setPhotoOver(false)}
-                      onDrop={(e) => { e.preventDefault(); setPhotoOver(false); takePhoto(e.dataTransfer.files?.[0]); }}>
-                      <div style={styles.uploadIcon}>
-                        <Upload size={16} color="#10B981" />
-                      </div>
-                      <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#334155', marginBottom: '4px' }}>
-                        Drop a photo of your garden space
-                      </div>
-                      <div style={{ fontSize: '0.75rem', color: '#94A3B8' }}>
-                        JPG, PNG or WebP · max 15 MB
-                      </div>
-                      <div style={{ fontSize: '0.72rem', color: '#64748B', marginTop: 8, lineHeight: 1.45, maxWidth: 420, marginInline: 'auto' }}>
-                        Best photo: from the house side, phone held level, showing <b>both back corners</b> and the <b>bottom of both side fences</b>.
-                        A long yard? Hold the phone sideways. A photo from an upstairs window works too.
-                      </div>
-                      <input type="file" accept={PHOTO_ACCEPT} style={{ display: 'none' }}
-                        onChange={(e) => { takePhoto(e.target.files?.[0]); e.target.value = ''; }} />
-                      {photoError && (
-                        <div role="alert" style={{ marginTop: 8, fontSize: '0.78rem', fontWeight: 600, color: '#B91C1C' }}>{photoError}</div>
+                      {imagePreview && (
+                        <div style={{ position: 'relative', width: '88px', height: '88px', borderRadius: '12px', overflow: 'hidden', flexShrink: 0, border: '1.5px solid #E2E8F0' }} className="group">
+                          <img src={imagePreview} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          <button
+                            type="button" onClick={handleRemoveImage}
+                            style={{ position: 'absolute', inset: 0, background: 'rgba(15,23,42,0.7)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#FFFFFF', fontSize: '0.65rem', fontWeight: 700, border: 'none', cursor: 'pointer', gap: '4px' }}
+                          >
+                            <X size={14} /><span>Remove</span>
+                          </button>
+                        </div>
                       )}
-                    </label>
-
-                    {imagePreview && (
-                      <div style={{ position: 'relative', width: '88px', height: '88px', borderRadius: '12px', overflow: 'hidden', flexShrink: 0, border: '1.5px solid #E2E8F0' }} className="group">
-                        <img src={imagePreview} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                        <button
-                          type="button" onClick={handleRemoveImage}
-                          style={{ position: 'absolute', inset: 0, background: 'rgba(15,23,42,0.7)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#FFFFFF', fontSize: '0.65rem', fontWeight: 700, border: 'none', cursor: 'pointer', gap: '4px' }}
-                        >
-                          <X size={14} /><span>Remove</span>
-                        </button>
-                      </div>
-                    )}
+                    </div>
+                    <YardSurvey imageUrl={imagePreview} lotWidth={lotWidth} lotLength={lotLength}
+                      pinSetup={photoSetup} pinMode={pinMode} onPinMode={setPinMode} onPins={setPhotoCorners}
+                      pinAnchors={pinAnchors} onPinAnchors={setPinAnchors}
+                      pinVantage={photoVantage} onPinVantage={setPhotoVantage} pinFront={photoFront} onPinFront={setPhotoFront}
+                      onLotSize={(w, l) => { setLotWidth(w); setLotLength(l); }}
+                      survey={survey} onSurvey={setSurvey}
+                      lawn={lawn} onLawn={setLawn} lawnApplies={install && scope === 'makeover'} />
                   </div>
-                  <YardSurvey imageUrl={imagePreview} lotWidth={lotWidth} lotLength={lotLength}
-                    pinSetup={photoSetup} pinMode={pinMode} onPinMode={setPinMode} onPins={setPhotoCorners}
-                    pinAnchors={pinAnchors} onPinAnchors={setPinAnchors}
-                    pinVantage={photoVantage} onPinVantage={setPhotoVantage} pinFront={photoFront} onPinFront={setPhotoFront}
-                    onLotSize={(w, l) => { setLotWidth(w); setLotLength(l); }}
-                    survey={survey} onSurvey={setSurvey} />
+                  <p style={{ margin: 0, fontSize: '0.78rem', color: '#64748B' }}>
+                    Rather place every plant yourself?{' '}
+                    <button type="button" onClick={handleDesignManually} style={styles.linkBtn}>Design manually in the 3D Studio</button>
+                  </p>
                 </div>
 
-                <hr style={styles.divider} />
-
-                {/* Plant Picker */}
-                <div>
-                  <label style={styles.sectionLabel}>Your Plants <span style={{ color: '#94A3B8', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>(optional)</span></label>
-                  <p style={{ margin: '0 0 10px', fontSize: '0.78rem', color: '#64748B', lineHeight: 1.45 }}>
-                    {selectedPlantObjects.length
-                      ? <>Every design uses <strong style={{ color: '#065F46' }}>only the {selectedPlantObjects.length} plant{selectedPlantObjects.length > 1 ? 's' : ''} you picked</strong>, and includes {selectedPlantObjects.length > 1 ? 'each of them' : 'it'} (if one can't fit, the design says why). Clear them all and we choose from the whole catalog.</>
-                      : 'Pick plants and every design uses only those. Leave this empty and we choose from the whole catalog.'}
-                  </p>
-                  {missingLayers.length > 0 && (
-                    <p role="note" style={{ margin: '0 0 10px', padding: '8px 10px', borderRadius: 10, background: '#F0FDF4', border: '1px solid #BBF7D0', fontSize: '0.75rem', color: '#166534', lineHeight: 1.45 }}>
-                      <strong>Design tip:</strong> your picks have no {missingLayers.join(' or ')} plants. Gardens look fuller with
-                      tall plants at the back, mid-height in the middle and low ones in front: add one of each height for a layered design.
-                    </p>
-                  )}
-                  {inventoryLoading ? (
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '10px' }}>
-                      {Array.from({ length: 6 }).map((_, i) => (
-                        <div key={i} style={{ height: '60px', borderRadius: '12px', background: '#F1F5F9', animation: 'pulse 1.4s ease-in-out infinite' }} />
-                      ))}
-                    </div>
-                  ) : inventoryError ? (
-                    <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 12px', borderRadius: 10,
-                      border: '1px solid #FDE68A', background: '#FFFBEB', fontSize: '0.8rem', color: '#92400E', fontWeight: 600 }}>
-                      We couldn't load our plants just now (the connection dropped or the server is restarting).
-                      <button type="button" onClick={retryInventory}
-                        style={{ minHeight: 34, padding: '0 12px', borderRadius: 8, border: '1px solid #F59E0B', background: '#fff', color: '#92400E',
-                          fontWeight: 800, cursor: 'pointer', fontFamily: 'inherit' }}>
-                        Retry
-                      </button>
-                    </div>
-                  ) : inventory.length === 0 ? (
-                    <p style={{ fontSize: '0.8rem', color: '#94A3B8', fontStyle: 'italic' }}>No plants found in inventory.</p>
-                  ) : (
-                    <div style={styles.plantsGrid}>
-                      {inventory.filter(plant => !plant.is_groundcover).map(plant => {
-                        const id = String(plant.id);
-                        const isSelected = preferredPlants.includes(id);
-                        const stock = Math.max(0, Number(plant.stock_quantity) || 0);
-                        const max = Math.max(1, Math.min(300, stock));
-                        const room = isSelected ? roomFor(plant) : null;
-                        const qty = plantQty[id];
-                        return (
-                          // The card is the frame: the tap area picks the plant, the amount row lives inside it
-                          <div key={plant.id} className="plant-card" style={{ ...styles.plantCard(isSelected), cursor: 'default' }}>
-                            <button type="button" onClick={() => handleTogglePlant(id)} aria-pressed={isSelected}
-                              style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, width: '100%', minWidth: 0, padding: 0,
-                                border: 'none', background: 'transparent', font: 'inherit', textAlign: 'left', cursor: 'pointer' }}>
-                              <PlantThumb item={plant} style={styles.plantPhoto} />
-                              <span style={styles.plantInfo}>
-                                <span style={styles.plantName(isSelected)}>{plant.name}</span>
-                                <span style={styles.plantPrice(isSelected)}>₱{Number(plant.unit_price).toLocaleString()}</span>
-                                <NeedChips plant={plant} />
-                              </span>
-                            </button>
-                            {isSelected && (
-                              <span style={styles.plantCheck}>
-                                <Check size={10} color="#fff" />
-                              </span>
-                            )}
-                            {isSelected && (
-                              <div style={{ paddingTop: 8, borderTop: '1px solid #D1FAE5', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.72rem', fontWeight: 700, color: '#065F46' }}>
-                                  How many
-                                  <input type="number" inputMode="numeric" min="1" max={max} step="1" placeholder="Let us decide"
-                                    value={qty ?? ''} onChange={e => setPlantAmount(id, e.target.value, max)}
-                                    aria-label={`How many ${plant.name} (leave empty and we decide)`}
-                                    style={{ flex: 1, minWidth: 0, height: 32, padding: '0 8px', borderRadius: 8, border: '1.5px solid #A7F3D0',
-                                      fontSize: '0.78rem', fontWeight: 700, color: '#065F46', background: '#fff', fontFamily: 'inherit' }} />
-                                </label>
-                                <span style={{ fontSize: '0.68rem', color: qty && room && qty > room ? '#B45309' : '#64748B', lineHeight: 1.35 }}>
-                                  {qty
-                                    ? (room && qty > room ? `More than fits easily (room for about ${room}); we'll fit what we can and tell you.` : `Room for about ${room ?? '?'} in your yard.`)
-                                    : `We'll choose. Room for about ${room ?? '?'}${stock < (room || 0) ? ` · ${stock} in stock` : ''}.`}
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
+                {/* Step 2 · Budget & style */}
+                <div hidden={formStep !== 2}>
+                  {budgetWarning && (
+                    <div style={{ marginBottom: '1rem', display: 'flex', alignItems: 'flex-start', gap: '6px', padding: '8px 10px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px' }}>
+                      <ShieldAlert size={13} style={{ color: '#d97706', flexShrink: 0, marginTop: 1 }} />
+                      <span style={{ fontSize: '0.75rem', color: '#92400e', fontWeight: 600, lineHeight: 1.35 }}>{budgetWarning}</span>
                     </div>
                   )}
-
-                  {/* Botanical Compatibility Advisory */}
-                  {compatibilityWarnings.length > 0 && (
-                    <div style={{
-                      marginTop: '1rem',
-                      background: '#FFFBEB',
-                      border: '1.5px solid #FCD34D',
-                      borderRadius: '12px',
-                      padding: '14px 16px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '8px',
-                      animation: 'fadeUp 0.3s ease-out both',
-                    }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#B45309', fontWeight: 800, fontSize: '0.85rem' }}>
-                        <ShieldAlert size={17} style={{ flexShrink: 0 }} />
-                        <span>Botanical Compatibility Advisory ({compatibilityWarnings.length})</span>
-                      </div>
-                      <p style={{ margin: 0, fontSize: '0.78rem', color: '#78350F', lineHeight: 1.45 }}>
-                        Some of the plants you picked have different sun, water or root needs. You can still generate: the layout keeps them apart as described below.
+                  <div style={{ marginTop: '1.25rem' }}>
+                    <label style={styles.sectionLabel}>Budget</label>
+                    <BudgetPicker
+                      areaSqm={lotAreaNow}
+                      lotWidth={lotWidth}
+                      lotLength={lotLength}
+                      install={install}
+                      onInstallChange={setInstall}
+                      scope={scope}
+                      onScopeChange={setScope}
+                      lawn={lawn}
+                      range={budgetRange}
+                      onRangeChange={setBudgetRange}
+                      rates={rates}
+                    />
+                  </div>
+                  {/* The yard's conditions: which plants will thrive, how much care, the lawn */}
+                  <div style={{ marginTop: '1.25rem', display: 'grid', gap: '0.9rem' }}>
+                    {survey.sun ? (
+                      // Mark your yard → Sun & shade: worked out spot by spot, so the whole-yard answer isn't needed
+                      <p style={{ margin: 0, fontSize: '0.8rem', color: '#475569' }}>
+                        <b style={{ color: '#0F172A' }}>Sun on the garden:</b> worked out for every spot from which way your yard faces (in Mark your yard below).
                       </p>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '2px' }}>
-                        {compatibilityWarnings.map(w => (
-                          <div key={w.id} style={{
-                            background: 'rgba(255, 255, 255, 0.7)',
-                            border: '1px solid #FDE68A',
-                            borderRadius: '8px',
-                            padding: '8px 12px',
-                            fontSize: '0.75rem',
-                          }}>
-                            <div style={{ fontWeight: 700, color: '#92400E', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              <span>{w.icon}</span>
-                              <span>{w.title}</span>
-                            </div>
-                            <div style={{ color: '#451A03', marginTop: '2px', lineHeight: 1.4 }}>
-                              {w.message}
-                            </div>
-                            <div style={{ color: '#047857', marginTop: '4px', fontStyle: 'italic', fontSize: '0.72rem' }}>
-                              💡 <strong>Horticultural tip:</strong> {w.recommendation}
-                            </div>
-                          </div>
+                    ) : (
+                      <ChoiceChips label="Sun on the garden" value={sun} onChange={setSun} touch={touch} options={[
+                        ['full', 'Full sun', '6+ hours of direct sun'], ['part', 'Part sun', '3–6 hours'],
+                        ['shade', 'Mostly shade', 'under 3 hours'], [null, 'Not sure', 'we check at the site visit'],
+                      ]} />
+                    )}
+                    <ChoiceChips label="Upkeep you want" value={maintenance} onChange={setMaintenance} touch={touch} options={[
+                      ['low', 'Low', 'fewer, hardier plants'], ['medium', 'Medium', 'regular watering'],
+                      ['high', 'I love gardening', 'richer planting'],
+                    ]} />
+                    {install && scope === 'makeover' && (
+                      <ChoiceChips label="The open lawn" value={lawn} onChange={setLawn} touch={touch} options={[
+                        ['new', 'Lay new grass', 'turf supplied & laid'], ['keep', 'Keep my grass', 'we leave the lawn as it is'],
+                      ]} />
+                    )}
+                  </div>
+                </div>
+
+                {/* Step 3 · Plants & features (all optional) */}
+                <div hidden={formStep !== 3}>
+                  {/* Plant Picker */}
+                  <div>
+                    <label style={styles.sectionLabel}>Your Plants <span style={{ color: '#94A3B8', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>(optional)</span></label>
+                    <p style={{ margin: '0 0 10px', fontSize: '0.78rem', color: '#64748B', lineHeight: 1.45 }}>
+                      {selectedPlantObjects.length
+                        ? <>Every design uses <strong style={{ color: '#065F46' }}>only the {selectedPlantObjects.length} plant{selectedPlantObjects.length > 1 ? 's' : ''} you picked</strong>, and includes {selectedPlantObjects.length > 1 ? 'each of them' : 'it'} (if one can't fit, the design says why). Clear them all and we choose from the whole catalog.</>
+                        : 'Pick plants and every design uses only those. Leave this empty and we choose from the whole catalog.'}
+                    </p>
+                    {missingLayers.length > 0 && (
+                      <p role="note" style={{ margin: '0 0 10px', padding: '8px 10px', borderRadius: 10, background: '#F0FDF4', border: '1px solid #BBF7D0', fontSize: '0.75rem', color: '#166534', lineHeight: 1.45 }}>
+                        <strong>Design tip:</strong> your picks have no {missingLayers.join(' or ')} plants. Gardens look fuller with
+                        tall plants at the back, mid-height in the middle and low ones in front: add one of each height for a layered design.
+                      </p>
+                    )}
+                    {inventoryLoading ? (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '10px' }}>
+                        {Array.from({ length: 6 }).map((_, i) => (
+                          <div key={i} style={{ height: '60px', borderRadius: '12px', background: '#F1F5F9', animation: 'pulse 1.4s ease-in-out infinite' }} />
                         ))}
                       </div>
+                    ) : inventoryError ? (
+                      <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 12px', borderRadius: 10,
+                        border: '1px solid #FDE68A', background: '#FFFBEB', fontSize: '0.8rem', color: '#92400E', fontWeight: 600 }}>
+                        We couldn't load our plants just now (the connection dropped or the server is restarting).
+                        <button type="button" onClick={retryInventory}
+                          style={{ minHeight: 34, padding: '0 12px', borderRadius: 8, border: '1px solid #F59E0B', background: '#fff', color: '#92400E',
+                            fontWeight: 800, cursor: 'pointer', fontFamily: 'inherit' }}>
+                          Retry
+                        </button>
+                      </div>
+                    ) : inventory.length === 0 ? (
+                      <p style={{ fontSize: '0.8rem', color: '#94A3B8', fontStyle: 'italic' }}>No plants found in inventory.</p>
+                    ) : (
+                      <div style={styles.plantsGrid}>
+                        {inventory.filter(plant => !plant.is_groundcover).map(plant => {
+                          const id = String(plant.id);
+                          const isSelected = preferredPlants.includes(id);
+                          const stock = Math.max(0, Number(plant.stock_quantity) || 0);
+                          const max = Math.max(1, Math.min(300, stock));
+                          const room = isSelected ? roomFor(plant) : null;
+                          const qty = plantQty[id];
+                          return (
+                            // The card is the frame: the tap area picks the plant, the amount row lives inside it
+                            <div key={plant.id} className="plant-card" style={{ ...styles.plantCard(isSelected), cursor: 'default' }}>
+                              <button type="button" onClick={() => handleTogglePlant(id)} aria-pressed={isSelected}
+                                style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, width: '100%', minWidth: 0, padding: 0,
+                                  border: 'none', background: 'transparent', font: 'inherit', textAlign: 'left', cursor: 'pointer' }}>
+                                <PlantThumb item={plant} style={styles.plantPhoto} />
+                                <span style={styles.plantInfo}>
+                                  <span style={styles.plantName(isSelected)}>{plant.name}</span>
+                                  <span style={styles.plantPrice(isSelected)}>₱{Number(plant.unit_price).toLocaleString()}</span>
+                                  <NeedChips plant={plant} />
+                                </span>
+                              </button>
+                              {isSelected && (
+                                <span style={styles.plantCheck}>
+                                  <Check size={10} color="#fff" />
+                                </span>
+                              )}
+                              {isSelected && (
+                                <div style={{ paddingTop: 8, borderTop: '1px solid #D1FAE5', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.72rem', fontWeight: 700, color: '#065F46' }}>
+                                    How many
+                                    <input type="number" inputMode="numeric" min="1" max={max} step="1" placeholder="Let us decide"
+                                      value={qty ?? ''} onChange={e => setPlantAmount(id, e.target.value, max)}
+                                      aria-label={`How many ${plant.name} (leave empty and we decide)`}
+                                      style={{ flex: 1, minWidth: 0, height: 32, padding: '0 8px', borderRadius: 8, border: '1.5px solid #A7F3D0',
+                                        fontSize: '0.78rem', fontWeight: 700, color: '#065F46', background: '#fff', fontFamily: 'inherit' }} />
+                                  </label>
+                                  <span style={{ fontSize: '0.68rem', color: qty && room && qty > room ? '#B45309' : '#64748B', lineHeight: 1.35 }}>
+                                    {qty
+                                      ? (room && qty > room ? `More than fits easily (room for about ${room}); we'll fit what we can and tell you.` : `Room for about ${room ?? '?'} in your yard.`)
+                                      : `We'll choose. Room for about ${room ?? '?'}${stock < (room || 0) ? ` · ${stock} in stock` : ''}.`}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Botanical Compatibility Advisory */}
+                    {compatibilityWarnings.length > 0 && (
+                      <div style={{
+                        marginTop: '1rem',
+                        background: '#FFFBEB',
+                        border: '1.5px solid #FCD34D',
+                        borderRadius: '12px',
+                        padding: '14px 16px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '8px',
+                        animation: 'fadeUp 0.3s ease-out both',
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#B45309', fontWeight: 800, fontSize: '0.85rem' }}>
+                          <ShieldAlert size={17} style={{ flexShrink: 0 }} />
+                          <span>Botanical Compatibility Advisory ({compatibilityWarnings.length})</span>
+                        </div>
+                        <p style={{ margin: 0, fontSize: '0.78rem', color: '#78350F', lineHeight: 1.45 }}>
+                          Some of the plants you picked have different sun, water or root needs. You can still generate: the layout keeps them apart as described below.
+                        </p>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '2px' }}>
+                          {compatibilityWarnings.map(w => (
+                            <div key={w.id} style={{
+                              background: 'rgba(255, 255, 255, 0.7)',
+                              border: '1px solid #FDE68A',
+                              borderRadius: '8px',
+                              padding: '8px 12px',
+                              fontSize: '0.75rem',
+                            }}>
+                              <div style={{ fontWeight: 700, color: '#92400E', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span>{w.icon}</span>
+                                <span>{w.title}</span>
+                              </div>
+                              <div style={{ color: '#451A03', marginTop: '2px', lineHeight: 1.4 }}>
+                                {w.message}
+                              </div>
+                              <div style={{ color: '#047857', marginTop: '4px', fontStyle: 'italic', fontSize: '0.72rem' }}>
+                                💡 <strong>Horticultural tip:</strong> {w.recommendation}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  {/* Garden features: seating and accent rocks, placed before any plant */}
+                  {inventory.some(i => i.is_groundcover && Number(i.stock_quantity) > 0) && (
+                    <div style={{ marginTop: '1.5rem' }}>
+                      <label style={styles.sectionLabel}>Groundcover in the beds</label>
+                      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', borderRadius: 12, cursor: 'pointer',
+                        border: `1.5px solid ${groundcoverOn ? '#6EE7B7' : '#E2E8F0'}`, background: groundcoverOn ? '#ECFDF5' : '#fff' }}>
+                        <input type="checkbox" checked={groundcoverOn} onChange={e => setGroundcoverOn(e.target.checked)}
+                          style={{ width: 18, height: 18, marginTop: 2, accentColor: '#059669', flexShrink: 0 }} />
+                        <span style={{ fontSize: '0.8rem', color: '#334155', lineHeight: 1.5 }}>
+                          <b>Fill the beds between plants with groundcover</b> (recommended). Plants are spaced for their grown size;
+                          groundcover such as {inventory.filter(i => i.is_groundcover).slice(0, 2).map(i => i.name.split(' (')[0]).join(' or ')} covers the
+                          soil between them within about a year, with a shade-loving one under the trees. Fewer weeds, no bare soil.
+                          Priced per m²; switch it off for mulched beds.
+                        </span>
+                      </label>
+                    </div>
+                  )}
+
+                  {featureItems.length > 0 && (
+                    <div style={{ marginTop: '1.5rem' }}>
+                      <label style={styles.sectionLabel}>Garden Features <span style={{ color: '#94A3B8', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>(optional)</span></label>
+                      <p style={{ margin: '0 0 10px', fontSize: '0.78rem', color: '#64748B', lineHeight: 1.45 }}>
+                        A seating spot gets open ground and a path to the house; boulders go in small groups in the planting beds, and small
+                        garden stones (by the half dozen) in looser clusters along them. A water feature goes where the eye lands across the
+                        lawn, pots frame the way in and the seating, and garden lights line the walkways and the edge of the lawn.
+                        They are placed first and paid for from your budget before the plants.
+                      </p>
+                      <div style={styles.plantsGrid}>
+                        {featureItems.map(item => {
+                          const id = String(item.id);
+                          const qty = featureQty[id] || 0;
+                          const kind = featureKind(item);
+                          const info = FEATURE_INFO[kind];
+                          const isSeat = kind === 'seat';
+                          const isStone = isSmallStone(item);
+                          const canAdd = (isSeat ? seatTotal < MAX_SEATS : qty < limitOf(item)) && qty < (Number(item.stock_quantity) || 0);
+                          const unit = isStone ? ['stone', 'stones'] : info.unit;
+                          return (
+                            // The card is the frame; the tap area and the counter both live inside it,
+                            // so a selected card grows with its row instead of hanging a counter below it
+                            <div key={id} className="plant-card"
+                              style={{ ...styles.plantCard(qty > 0), cursor: 'default', opacity: !qty && !canAdd ? 0.55 : 1 }}>
+                              <button type="button" onClick={() => toggleFeature(item)} aria-pressed={qty > 0}
+                                disabled={!qty && !canAdd}
+                                style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, width: '100%', minWidth: 0, padding: 0,
+                                  border: 'none', background: 'transparent', font: 'inherit', textAlign: 'left',
+                                  cursor: !qty && !canAdd ? 'not-allowed' : 'pointer' }}>
+                                <PlantThumb item={item} style={styles.plantPhoto} />
+                                <span style={styles.plantInfo}>
+                                  <span style={styles.plantName(qty > 0)}>{item.name}</span>
+                                  <span style={styles.plantPrice(qty > 0)}>₱{Number(item.unit_price).toLocaleString()} each{isStone ? ` · ₱${(Number(item.unit_price) * 12).toLocaleString()} a dozen` : ''}</span>
+                                  <span style={{ display: 'flex', marginTop: 6 }}>
+                                    <span style={chip(info.fg, info.bg)}>{isStone ? 'Garden stones' : info.label}</span>
+                                  </span>
+                                </span>
+                              </button>
+                              {qty > 0 && <span style={styles.plantCheck}><Check size={10} color="#fff" /></span>}
+                              {qty > 0 && (
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6,
+                                  paddingTop: 8, borderTop: '1px solid #D1FAE5' }}>
+                                  <button type="button" onClick={() => changeFeatureQty(item, -1)} aria-label={isStone ? `${STONE_STEP} fewer ${item.name}` : `One less ${item.name}`}
+                                    style={styles.stepBtn(true)}>−</button>
+                                  <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#065F46', minWidth: 0 }} aria-live="polite">
+                                    {qty}<span style={{ fontWeight: 600, color: '#64748B', fontSize: '0.7rem' }}> {qty > 1 ? unit[1] : unit[0]}</span>
+                                  </span>
+                                  <button type="button" onClick={() => changeFeatureQty(item, 1)} disabled={!canAdd} aria-label={isStone ? `${STONE_STEP} more ${item.name}` : `One more ${item.name}`}
+                                    style={styles.stepBtn(canAdd)}>+</button>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {featureItems.some(i => featureKind(i) === 'rock') && (
+                        <p style={{ margin: '8px 0 0', fontSize: '0.72rem', color: '#64748B' }}>
+                          Your yard (about {Math.round(yardArea(survey, Number(lotWidth), Number(lotLength)))} m²) takes up to {rockMax.boulders} of each
+                          boulder and {rockMax.stones} of each small stone: more would crowd the beds.
+                        </p>
+                      )}
+                      {featureItems.some(i => ['light', 'water'].includes(featureKind(i)) && featureQty[String(i.id)]) && (
+                        <p style={{ margin: '8px 0 0', fontSize: '0.72rem', color: '#64748B' }}>
+                          Garden lights and water features need an outdoor power point within reach; we confirm it at the site visit.
+                        </p>
+                      )}
+                      {seatTotal >= MAX_SEATS && (
+                        <p style={{ margin: '8px 0 0', fontSize: '0.72rem', color: '#64748B' }}>Up to {MAX_SEATS} seats make one seating spot.</p>
+                      )}
                     </div>
                   )}
                 </div>
 
-                {/* Garden features: seating and accent rocks, placed before any plant */}
-                {inventory.some(i => i.is_groundcover && Number(i.stock_quantity) > 0) && (
-                  <div style={{ marginTop: '1.5rem' }}>
-                    <label style={styles.sectionLabel}>Groundcover in the beds</label>
-                    <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', borderRadius: 12, cursor: 'pointer',
-                      border: `1.5px solid ${groundcoverOn ? '#6EE7B7' : '#E2E8F0'}`, background: groundcoverOn ? '#ECFDF5' : '#fff' }}>
-                      <input type="checkbox" checked={groundcoverOn} onChange={e => setGroundcoverOn(e.target.checked)}
-                        style={{ width: 18, height: 18, marginTop: 2, accentColor: '#059669', flexShrink: 0 }} />
-                      <span style={{ fontSize: '0.8rem', color: '#334155', lineHeight: 1.5 }}>
-                        <b>Fill the beds between plants with groundcover</b> (recommended). Plants are spaced for their grown size;
-                        groundcover such as {inventory.filter(i => i.is_groundcover).slice(0, 2).map(i => i.name.split(' (')[0]).join(' or ')} covers the
-                        soil between them within about a year, with a shade-loving one under the trees. Fewer weeds, no bare soil.
-                        Priced per m²; switch it off for mulched beds.
-                      </span>
-                    </label>
-                  </div>
-                )}
+                {/* Step 4 · Review: every answer, each with a way back to change it */}
+                {formStep === FORM_STEPS.length && <ReviewAnswers rows={reviewRows} onEdit={goToStep} />}
 
-                {featureItems.length > 0 && (
-                  <div style={{ marginTop: '1.5rem' }}>
-                    <label style={styles.sectionLabel}>Garden Features <span style={{ color: '#94A3B8', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>(optional)</span></label>
-                    <p style={{ margin: '0 0 10px', fontSize: '0.78rem', color: '#64748B', lineHeight: 1.45 }}>
-                      A seating spot gets open ground and a path to the house; boulders go in small groups in the planting beds, and small
-                      garden stones (by the half dozen) in looser clusters along them. A water feature goes where the eye lands across the
-                      lawn, pots frame the way in and the seating, and garden lights line the walkways and the edge of the lawn.
-                      They are placed first and paid for from your budget before the plants.
-                    </p>
-                    <div style={styles.plantsGrid}>
-                      {featureItems.map(item => {
-                        const id = String(item.id);
-                        const qty = featureQty[id] || 0;
-                        const kind = featureKind(item);
-                        const info = FEATURE_INFO[kind];
-                        const isSeat = kind === 'seat';
-                        const isStone = isSmallStone(item);
-                        const canAdd = (isSeat ? seatTotal < MAX_SEATS : qty < limitOf(item)) && qty < (Number(item.stock_quantity) || 0);
-                        const unit = isStone ? ['stone', 'stones'] : info.unit;
-                        return (
-                          // The card is the frame; the tap area and the counter both live inside it,
-                          // so a selected card grows with its row instead of hanging a counter below it
-                          <div key={id} className="plant-card"
-                            style={{ ...styles.plantCard(qty > 0), cursor: 'default', opacity: !qty && !canAdd ? 0.55 : 1 }}>
-                            <button type="button" onClick={() => toggleFeature(item)} aria-pressed={qty > 0}
-                              disabled={!qty && !canAdd}
-                              style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, width: '100%', minWidth: 0, padding: 0,
-                                border: 'none', background: 'transparent', font: 'inherit', textAlign: 'left',
-                                cursor: !qty && !canAdd ? 'not-allowed' : 'pointer' }}>
-                              <PlantThumb item={item} style={styles.plantPhoto} />
-                              <span style={styles.plantInfo}>
-                                <span style={styles.plantName(qty > 0)}>{item.name}</span>
-                                <span style={styles.plantPrice(qty > 0)}>₱{Number(item.unit_price).toLocaleString()} each{isStone ? ` · ₱${(Number(item.unit_price) * 12).toLocaleString()} a dozen` : ''}</span>
-                                <span style={{ display: 'flex', marginTop: 6 }}>
-                                  <span style={chip(info.fg, info.bg)}>{isStone ? 'Garden stones' : info.label}</span>
-                                </span>
-                              </span>
-                            </button>
-                            {qty > 0 && <span style={styles.plantCheck}><Check size={10} color="#fff" /></span>}
-                            {qty > 0 && (
-                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6,
-                                paddingTop: 8, borderTop: '1px solid #D1FAE5' }}>
-                                <button type="button" onClick={() => changeFeatureQty(item, -1)} aria-label={isStone ? `${STONE_STEP} fewer ${item.name}` : `One less ${item.name}`}
-                                  style={styles.stepBtn(true)}>−</button>
-                                <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#065F46', minWidth: 0 }} aria-live="polite">
-                                  {qty}<span style={{ fontWeight: 600, color: '#64748B', fontSize: '0.7rem' }}> {qty > 1 ? unit[1] : unit[0]}</span>
-                                </span>
-                                <button type="button" onClick={() => changeFeatureQty(item, 1)} disabled={!canAdd} aria-label={isStone ? `${STONE_STEP} more ${item.name}` : `One more ${item.name}`}
-                                  style={styles.stepBtn(canAdd)}>+</button>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                    {featureItems.some(i => featureKind(i) === 'rock') && (
-                      <p style={{ margin: '8px 0 0', fontSize: '0.72rem', color: '#64748B' }}>
-                        Your yard (about {Math.round(yardArea(survey, Number(lotWidth), Number(lotLength)))} m²) takes up to {rockMax.boulders} of each
-                        boulder and {rockMax.stones} of each small stone: more would crowd the beds.
-                      </p>
+                {/* Step bar: pinned to the bottom of the screen while the form is longer than it */}
+                <div style={styles.stepBar}>
+                  {formStep > 1 ? (
+                    <button type="button" onClick={() => goToStep(formStep - 1)} className="back-btn" style={styles.stepBack} aria-label="Back to the previous step">
+                      <ChevronLeft size={16} aria-hidden="true" />{!phone && ' Back'}
+                    </button>
+                  ) : <span />}
+                  <div style={{ display: 'flex', gap: 8, marginLeft: 'auto', minWidth: 0 }}>
+                    {formStep >= 2 && formStep < FORM_STEPS.length && (
+                      <button type="submit" data-generate="1" className="secondary-btn" style={styles.stepGhost}
+                        title="Only the yard size is needed: we fill in the rest">
+                        <Sparkles size={14} aria-hidden="true" /> {phone ? 'Generate' : 'Generate now'}
+                      </button>
                     )}
-                    {featureItems.some(i => ['light', 'water'].includes(featureKind(i)) && featureQty[String(i.id)]) && (
-                      <p style={{ margin: '8px 0 0', fontSize: '0.72rem', color: '#64748B' }}>
-                        Garden lights and water features need an outdoor power point within reach; we confirm it at the site visit.
-                      </p>
-                    )}
-                    {seatTotal >= MAX_SEATS && (
-                      <p style={{ margin: '8px 0 0', fontSize: '0.72rem', color: '#64748B' }}>Up to {MAX_SEATS} seats make one seating spot.</p>
+                    {formStep < FORM_STEPS.length ? (
+                      // Separate keys: React must not reuse this button as the submit button below, or the click
+                      // that opens step 4 would also submit the form (the type flips to "submit" mid-click)
+                      <button key="next" type="button" onClick={() => goToStep(formStep + 1)} className="submit-btn" style={styles.stepNext}>
+                        {phone ? 'Next' : `Next: ${FORM_STEPS[formStep].short}`} <ChevronRight size={16} aria-hidden="true" />
+                      </button>
+                    ) : (
+                      <button key="generate" type="submit" data-generate="1" className="submit-btn" style={styles.stepNext}>
+                        <Sparkles size={16} aria-hidden="true" /> Generate 3 designs
+                      </button>
                     )}
                   </div>
-                )}
-
-                {/* Submit */}
-                <button type="submit" className="submit-btn" style={styles.submitBtn}>
-                  <Sparkles size={16} />
-                  Generate AI Garden Designs
-                </button>
-
-                <button 
-                  type="button" 
-                  className="secondary-btn" 
-                  style={styles.secondaryBtn} 
-                  onClick={handleDesignManually}
-                >
-                  Design Manually from Scratch
-                </button>
+                </div>
               </form>
             )}
 
@@ -2091,22 +2350,18 @@ export default function AIGardenDesigner() {
                     </div>
                   </div>
                 </div>
-                <div style={carousel ? styles.layoutsCarousel : styles.layoutsGrid} className="ai-carousel">
-                  {[0.7, 0.8, 0.9].map((op, i) => (
-                    <div key={i} style={{ ...styles.layoutCard, opacity: op, ...(carousel ? { flex: `0 0 ${phone ? '86%' : '58%'}` } : null) }}>
-                      <div style={styles.layoutCardTop}>
-                        <div style={{ height: '10px', width: '60px', background: '#E2E8F0', borderRadius: '8px', marginBottom: '12px' }} />
-                        <div style={{ height: '18px', width: '75%', background: '#F1F5F9', borderRadius: '8px', marginBottom: '10px' }} />
-                        <div style={{ height: '28px', width: '45%', background: '#D1FAE5', borderRadius: '8px' }} />
+                {/* The same shape as the results: three option tabs over the 3D view */}
+                <div aria-hidden="true">
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: phone ? 6 : 10 }}>
+                    {[0.9, 0.75, 0.6].map((op, i) => (
+                      <div key={i} style={{ ...styles.optionTab(false), opacity: op, cursor: 'default' }}>
+                        <div style={{ height: 8, width: '45%', background: '#E2E8F0', borderRadius: 6, marginBottom: 6, animation: 'pulse 1.4s ease-in-out infinite' }} />
+                        <div style={{ height: 12, width: '80%', background: '#F1F5F9', borderRadius: 6, marginBottom: 6, animation: 'pulse 1.4s ease-in-out infinite' }} />
+                        <div style={{ height: 14, width: '55%', background: '#D1FAE5', borderRadius: 6, animation: 'pulse 1.4s ease-in-out infinite' }} />
                       </div>
-                      <div style={styles.layoutBody}>
-                        {[1, 0.8, 0.65, 0.5, 0.35].map((lineOp, j) => (
-                          <div key={j} style={{ height: '12px', background: '#E2E8F0', borderRadius: '6px', marginBottom: '10px', opacity: lineOp }} />
-                        ))}
-                        <div style={{ height: '36px', background: '#E2E8F0', borderRadius: '10px', marginTop: '1.25rem', opacity: 0.5 }} />
-                      </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
+                  <div style={{ ...styles.canvasPlaceholder, marginTop: 12, height: phone ? 340 : 450, animation: 'pulse 1.4s ease-in-out infinite' }} />
                 </div>
               </div>
             )}
@@ -2126,10 +2381,25 @@ export default function AIGardenDesigner() {
                     </button>
                     <button onClick={handleReset} className="back-btn" style={styles.backBtn}>
                       <ArrowLeft size={14} />
-                      Adjust parameters
+                      Change my answers
                     </button>
                   </div>
                 </div>
+
+                {example && (
+                  <div role="status" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px 12px', flexWrap: 'wrap',
+                    padding: '10px 14px', background: '#FFFBEB', border: '1.5px solid #FDE68A', borderRadius: '12px', marginBottom: '1.25rem' }}>
+                    <span style={{ fontSize: '0.8rem', color: '#78350F', lineHeight: 1.45 }}>
+                      <strong>This is an example</strong>: a {EXAMPLE_YARD.width} × {EXAMPLE_YARD.length} m yard with a door from the house and a mango
+                      tree that stays. Look around in 3D, then design your own yard.
+                    </span>
+                    <button type="button" onClick={leaveExample}
+                      style={{ minHeight: 38, padding: '0 14px', borderRadius: 10, border: 'none', background: '#10B981', color: '#fff',
+                        fontWeight: 700, fontSize: '0.8rem', cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+                      Design my own yard
+                    </button>
+                  </div>
+                )}
 
                 {restored && (
                   <div role="status" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px 12px', flexWrap: 'wrap',
@@ -2140,7 +2410,7 @@ export default function AIGardenDesigner() {
                     </span>
                     <span style={{ display: 'inline-flex', gap: 8 }}>
                       <button type="button" onClick={() => setRestored(null)} style={styles.editBtn(false, touch)}>OK</button>
-                      <button type="button" onClick={() => { setRestored(null); handleReset(); }} style={styles.editBtn(false, touch)}>Start over</button>
+                      <button type="button" onClick={() => { setRestored(null); handleReset(); setFormStep(1); }} style={styles.editBtn(false, touch)}>Start over</button>
                     </span>
                   </div>
                 )}
@@ -2164,236 +2434,83 @@ export default function AIGardenDesigner() {
                   </div>
                 )}
 
-                <div
-                  ref={carouselRef}
-                  onScroll={carousel ? onCarouselScroll : undefined}
-                  className="ai-carousel"
-                  style={carousel ? styles.layoutsCarousel : styles.layoutsGrid}
-                  role={carousel ? 'region' : undefined}
-                  aria-roledescription={carousel ? 'carousel' : undefined}
-                  aria-label={carousel ? 'Garden design options' : undefined}
-                >
-                  {generatedLayouts.map((design, index) => (
-                    <div
-                      key={index}
-                      className="layout-card"
-                      aria-label={carousel ? `Option ${index + 1} of ${generatedLayouts.length}` : undefined}
-                      style={carousel
-                        ? { ...styles.layoutCard, flex: `0 0 ${phone ? '86%' : '58%'}`, scrollSnapAlign: 'center' }
-                        : styles.layoutCard}
-                    >
-                      <div style={{ ...styles.layoutCardTop, position: 'relative' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                            <span style={{ ...styles.layoutBadge, marginBottom: 0 }}>Option {index + 1}</span>
-                            <span title={design.source === 'ai' ? 'Designed by our AI, then checked by our design engine' : 'Designed by our rule-based design engine'}
-                              style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase', padding: '3px 8px', borderRadius: '99px',
-                                       background: design.source === 'ai' ? '#ECFDF5' : '#F1F5F9', color: design.source === 'ai' ? '#047857' : '#475569', border: `1px solid ${design.source === 'ai' ? '#A7F3D0' : '#E2E8F0'}` }}>
-                              {design.source === 'ai' ? <><Sparkles size={10} /> AI design</> : <><Cpu size={10} /> Smart layout</>}
-                            </span>
-                            {design.edited && (
-                              <span title="You changed this design after it was made"
-                                style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase', padding: '3px 8px', borderRadius: '99px',
-                                         background: '#FFFBEB', color: '#92400E', border: '1px solid #FDE68A' }}>
-                                <Pencil size={10} /> Edited
-                              </span>
-                            )}
+                {/* The yard photo's part in the design (backend site_survey.photo_facts), or how to give it one */}
+                {activeLayout?.photo_basis?.length > 0 ? (
+                  <div role="note" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px', marginBottom: '1rem',
+                    background: '#ECFDF5', border: '1.5px solid #A7F3D0', borderRadius: 12 }}>
+                    <Camera size={17} style={{ color: '#047857', flexShrink: 0, marginTop: 1 }} aria-hidden="true" />
+                    <span style={{ fontSize: '0.8rem', color: '#065F46', lineHeight: 1.45 }}>
+                      {activeLayout.photo_basis.length < 3
+                        ? <><strong>Based on your yard photo,</strong> we {photoSentence(activeLayout.photo_basis)}.</>
+                        : <><strong>Based on your yard photo, we:</strong>
+                          <ul style={{ margin: '4px 0 0', paddingLeft: 18, listStyle: 'disc' }}>
+                            {activeLayout.photo_basis.map(f => <li key={f}>{f}</li>)}
+                          </ul></>}
+                    </span>
+                  </div>
+                ) : imagePreview && !example && !(activeLayout?.price_ctx?.survey || survey)?.photo?.lined_up ? (   /* lined up but nothing taken from it: no nudge */
+                  <div role="note" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px 12px', flexWrap: 'wrap',
+                    padding: '10px 14px', marginBottom: '1rem', background: '#F8FAFC', border: '1.5px solid #E2E8F0', borderRadius: 12 }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'flex-start', gap: 10, fontSize: '0.8rem', color: '#475569', lineHeight: 1.45 }}>
+                      <Camera size={17} style={{ color: '#64748B', flexShrink: 0, marginTop: 1 }} aria-hidden="true" />
+                      <span>Your photo is only in the Photo Overlay so far. Line it up with your yard in step 1 and the design plans around what it shows.</span>
+                    </span>
+                    <button type="button" onClick={() => { handleReset(); setFormStep(1); }} style={styles.editBtn(false, touch)}>Line up my photo</button>
+                  </div>
+                ) : null}
+
+                {/* Option tabs: pinned under the top bar, so switching designs never needs a scroll back up */}
+                <p style={{ margin: '0 0 2px', fontSize: '0.8rem', color: '#64748B' }}>
+                  Pick an option to see it in 3D. Any changes you make to an option are kept when you switch.
+                </p>
+                <div role="tablist" aria-label="Your garden designs" style={styles.optionBar(generatedLayouts.length)}>
+                  {generatedLayouts.map((design, index) => {
+                    const on = activeLayout?.edit_id === design.edit_id;
+                    return (
+                      <button key={design.edit_id} id={`design-option-${index}`} type="button" role="tab" aria-selected={on}
+                        aria-controls="design-preview" tabIndex={on ? 0 : -1}
+                        onClick={() => handleSelectLayout(design)} onKeyDown={(e) => onOptionKey(e, index)}
+                        className="option-tab" style={styles.optionTab(on)}>
+                        <span style={{ ...styles.optionTop, color: on ? '#047857' : '#64748B' }}>
+                          Option {index + 1}
+                          <span title={design.source === 'ai' ? 'Designed by our AI, then checked by our design engine' : 'Designed by our rule-based design engine'}
+                            style={{ display: 'inline-flex' }}>
+                            {design.source === 'ai' ? <Sparkles size={11} aria-label="AI design" /> : <Cpu size={11} aria-label="Smart layout" />}
                           </span>
-                          {design.reasoning && (
-                            <div className="tooltip-container">
-                              <Info size={16} className="text-[#94A3B8] hover:text-[#059669] transition-colors" />
-                              <div className="tooltip-text">
-                                <div className="font-bold mb-1 pb-1 border-b border-white/10 text-[#6EE7B7] text-[0.8rem]">{design.source === 'ai' ? 'AI Design Reasoning' : 'Design Approach'}</div>
-                                {design.reasoning}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                        <h3 style={styles.layoutName}>{design.design_name}</h3>
-                        <div style={styles.layoutCost}>≈ ₱{design.total_cost.toLocaleString()}</div>
-                        {design.target_budget && (underUsed(design) ? (
-                          // Far under its target (beds full, cheap picks, little stock): say so plainly
-                          <div style={{ fontSize: '0.72rem', color: '#B45309', marginTop: '4px', fontWeight: 700 }}>
-                            Uses ₱{Number(design.total_cost).toLocaleString()} of ₱{Number(design.target_budget).toLocaleString()} · see why below
-                          </div>
-                        ) : (
-                          <div style={{ fontSize: '0.7rem', color: '#64748B', marginTop: '4px', fontWeight: 600 }}>
-                            Designed for your budget of ₱{Number(design.target_budget).toLocaleString()}
-                          </div>
-                        ))}
-                      </div>
-                      <div style={styles.layoutBody}>
-                        {(() => {
-                          const items = design.plants?.filter(p => !p.is_existing) || [];
-                          const featureIds = new Set(featureItems.map(f => String(f.id)));
-                          const nFeatures = items.filter(p => featureIds.has(String(p.plant_id))).length;
-                          const gcM2 = (design.groundcover || []).reduce((n, g) => n + Number(g.area_sqm || 0), 0);
-                          return <span style={styles.plantListLabel}>Flora Arrangement · {items.length - nFeatures} plants{nFeatures ? ` · ${nFeatures} garden feature${nFeatures > 1 ? 's' : ''}` : ''}{gcM2 ? ` · ${gcM2} m² groundcover` : ''}</span>;
-                        })()}
-                        {(() => {
-                          // A planting schedule: one row per plant with its quantity (the server's breakdown is
-                          // already ordered plants → rocks → seating), not one row per plant position
-                          const rows = plantingSchedule(design, catalog, featureItems);
-                          const shown = rows.slice(0, 6);
-                          const hidden = rows.length - shown.length;
+                          {design.edited && <Pencil size={11} aria-label="Edited by you" style={{ color: '#B45309' }} />}
+                        </span>
+                        <span style={styles.optionName}>{design.design_name}</span>
+                        <span style={{ ...styles.optionPrice, opacity: design.pricing === 'pending' ? 0.55 : 1 }}>
+                          ₱{Number(design.total_cost).toLocaleString()}
+                        </span>
+                        {budgetRange?.max > 0 && (() => {
+                          const total = Number(design.total_cost) || 0, max = Number(budgetRange.max), min = Number(budgetRange.min) || 0;
+                          const over = total - max, pct = Math.min(100, (total / max) * 100);
                           return (
-                            <div>
-                              {shown.map(row => (
-                                <div key={row.id} style={styles.plantItem}>
-                                  <span style={{ ...styles.plantItemName, display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                                    <PlantThumb item={row.detail} size={24} rounded={6} />
-                                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.name}</span>
-                                  </span>
-                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                                    {row.role && <span style={{ fontSize: '0.66rem', fontWeight: 700, color: '#64748B' }}>{row.role}</span>}
-                                    <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#0f172a', minWidth: 30, textAlign: 'right' }}>{row.unit ? `${row.quantity} ${row.unit}` : `× ${row.quantity}`}</span>
-                                  </span>
-                                </div>
-                              ))}
-                              {hidden > 0 && (
-                                <div style={{ textAlign: 'center', padding: '10px 0 2px', fontSize: '0.78rem', color: '#64748B', fontWeight: 600 }}>
-                                  + {hidden} more kind{hidden > 1 ? 's' : ''}
-                                </div>
-                              )}
-                            </div>
+                            <span style={{ display: 'block', width: '100%', marginTop: 4, opacity: design.pricing === 'pending' ? 0.55 : 1 }}>
+                              <span role="img" aria-label={`${Math.round((total / max) * 100)}% of your top budget`}
+                                style={{ position: 'relative', display: 'block', height: 4, borderRadius: 99, background: color.divider, overflow: 'hidden' }}>
+                                <span style={{ position: 'absolute', inset: 0, width: `${pct}%`, borderRadius: 99,
+                                  background: over > 0 ? '#F59E0B' : color.brand, transition: 'width 0.3s' }} />
+                                {min > 0 && min < max && (
+                                  <span style={{ position: 'absolute', top: 0, bottom: 0, left: `${(min / max) * 100}%`, width: 2, background: 'rgba(15,23,42,0.3)' }} />
+                                )}
+                              </span>
+                              <span style={{ display: 'block', marginTop: 3, fontSize: '0.66rem', fontWeight: 700, color: over > 0 ? '#B45309' : '#64748B' }}>
+                                {over > 0 ? `₱${Math.round(over).toLocaleString()} over${phone ? '' : ' budget'}` : phone ? 'In budget' : 'Within your budget'}
+                              </span>
+                            </span>
                           );
                         })()}
-                        {design.adjustments?.length > 0 && (
-                          <div style={{ marginTop: '0.75rem', padding: '8px 10px', borderRadius: '8px', background: '#F1F5F9', fontSize: '0.72rem', color: '#475569', lineHeight: 1.45 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 800, color: '#334155', marginBottom: '2px' }}>
-                              <Wrench size={11} /> What we adjusted
-                            </div>
-                            {design.adjustments.map((note, ni) => <div key={ni}>• {note}</div>)}
-                          </div>
-                        )}
-                        {design.budget_note && (underUsed(design) ? (
-                          <div role="note" style={{ marginTop: '0.6rem', padding: '8px 10px', borderRadius: '8px', background: '#FFFBEB',
-                            border: '1px solid #FDE68A', fontSize: '0.74rem', color: '#78350F', lineHeight: 1.45 }}>
-                            <Info size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} />{design.budget_note}
-                          </div>
-                        ) : (
-                          <div style={{ marginTop: '0.5rem', fontSize: '0.72rem', color: '#64748B', lineHeight: 1.45 }}>
-                            <Info size={11} style={{ verticalAlign: 'middle', marginRight: 4 }} />{design.budget_note}
-                          </div>
-                        ))}
-                        {/* Cost Breakdown — always visible */}
-                        {design.cost_breakdown && (
-                          <div style={{ marginTop: '1rem', borderTop: '1px solid #E2E8F0', paddingTop: '1rem' }}>
-                            <div style={{ fontSize: '9px', fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#94A3B8', marginBottom: '8px' }}>
-                              Cost Breakdown
-                            </div>
-                            {(design.cost_breakdown.lines || []).map(line => (
-                              <div key={line.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', padding: '5px 8px', borderRadius: '8px', background: line.key === 'plants' ? '#ECFDF5' : '#F8FAFC', marginBottom: '3px' }}>
-                                <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#334155' }}>{line.label}</span>
-                                <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#475569', whiteSpace: 'nowrap' }}>
-                                  ₱{Number(line.amount).toLocaleString()}
-                                </span>
-                              </div>
-                            ))}
-                            <div style={{ padding: '10px', borderRadius: '10px', background: '#ECFDF5', border: '1px solid #A7F3D0', marginTop: '6px' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#047857', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                                  Estimated total
-                                </span>
-                                <span style={{ fontSize: '0.9rem', fontWeight: 800, color: '#0F172A' }}>
-                                  ₱{Number(design.cost_breakdown.low).toLocaleString()}–₱{Number(design.cost_breakdown.high).toLocaleString()}
-                                </span>
-                              </div>
-                              <div style={{ fontSize: '0.66rem', color: '#64748B', marginTop: '3px' }}>
-                                Final price confirmed after a site inspection.
-                              </div>
-                            </div>
-
-                            {/* Plant BOM — still togglable */}
-                            <button
-                              type="button"
-                              onClick={() => toggleBreakdown(index)}
-                              style={{ background: 'transparent', border: 'none', color: '#059669', fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', padding: '8px 0 0', outline: 'none' }}
-                            >
-                              {expandedBreakdowns[index] ? 'Hide Plant List ▲' : 'View Plant List ▼'}
-                            </button>
-                            {expandedBreakdowns[index] && (
-                              <div style={{ marginTop: '8px', overflowX: 'auto' }} className="fade-in">
-                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem', textAlign: 'left' }}>
-                                  <thead>
-                                    <tr style={{ borderBottom: '1.5px solid #E2E8F0' }}>
-                                      <th style={{ padding: '6px 4px', color: '#94A3B8', fontWeight: 700 }}>Item</th>
-                                      <th style={{ padding: '6px 4px', color: '#94A3B8', fontWeight: 700, textAlign: 'center' }}>Qty</th>
-                                      <th style={{ padding: '6px 4px', color: '#94A3B8', fontWeight: 700, textAlign: 'right' }}>Unit</th>
-                                      <th style={{ padding: '6px 4px', color: '#94A3B8', fontWeight: 700, textAlign: 'right' }}>Subtotal</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {(design.plant_breakdown || []).map((item, itemIdx) => (
-                                      <tr key={itemIdx} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                                        <td style={{ padding: '8px 4px', fontWeight: 600, color: '#1E293B' }}><span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><PlantThumb item={catalog.find(i => String(i.id) === String(item.plant_id)) || catalog.find(i => i.name === item.name)} size={22} rounded={5} /> {item.name}</span></td>
-                                        <td style={{ padding: '8px 4px', textAlign: 'center', color: '#059669', fontWeight: 700 }}>{item.quantity}{item.unit ? ` ${item.unit}` : ''}</td>
-                                        <td style={{ padding: '8px 4px', textAlign: 'right', color: '#64748B' }}>₱{Number(item.unit_price).toLocaleString()}{item.unit ? ` / ${item.unit}` : ''}</td>
-                                        <td style={{ padding: '8px 4px', textAlign: 'right', fontWeight: 700, color: '#0F172A' }}>₱{Number(item.subtotal).toLocaleString()}</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            )}
-                          </div>
-                        )}
-
-                        <button
-                          onClick={() => handleSelectLayout(design)}
-                          className="select-btn"
-                          style={styles.selectBtn}
-                        >
-                          View in 3D →
-                        </button>
-                        <button
-                          onClick={() => handleEditInStudio(design)}
-                          className="secondary-btn"
-                          style={{ ...styles.secondaryBtn, marginTop: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
-                          title="Open this design in the 3D Studio to move, add or swap plants"
-                        >
-                          <Box size={14} /> Edit in Studio
-                        </button>
-                        {(Number(lotWidth) > LOT_MAX || Number(lotLength) > LOT_MAX) && (
-                          <p style={{ margin: '6px 0 0', fontSize: '0.7rem', color: '#92400E', lineHeight: 1.4 }}>
-                            The 3D Studio handles up to {LOT_MAX} × {LOT_MAX} m: it opens on a {LOT_MAX} m lot and offers to move plants beyond it inside.
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                      </button>
+                    );
+                  })}
                 </div>
-
-                {/* Carousel controls: arrows + one dot per option */}
-                {carousel && generatedLayouts.length > 1 && (
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '14px', marginTop: '10px' }}>
-                    <button type="button" onClick={() => goToSlide(slide - 1)} disabled={slide === 0} aria-label="Previous option"
-                      className="carousel-arrow" style={{ ...styles.carouselArrow, opacity: slide === 0 ? 0.35 : 1 }}>
-                      <ChevronLeft size={18} />
-                    </button>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      {generatedLayouts.map((d, i) => (
-                        <button key={i} type="button" onClick={() => goToSlide(i)} aria-label={`Show option ${i + 1}: ${d.design_name}`}
-                          aria-current={slide === i}
-                          style={{ width: slide === i ? 22 : 8, height: 8, borderRadius: 99, border: 'none', padding: 0, cursor: 'pointer',
-                                   background: slide === i ? color.brand : '#CBD5E1', transition: 'all 0.25s' }} />
-                      ))}
-                    </div>
-                    <button type="button" onClick={() => goToSlide(slide + 1)} disabled={slide === generatedLayouts.length - 1} aria-label="Next option"
-                      className="carousel-arrow" style={{ ...styles.carouselArrow, opacity: slide === generatedLayouts.length - 1 ? 0.35 : 1 }}>
-                      <ChevronRight size={18} />
-                    </button>
-                  </div>
-                )}
-                {carousel && generatedLayouts[slide] && (
-                  <p style={{ textAlign: 'center', fontSize: '0.75rem', color: color.muted, margin: '6px 0 0', fontWeight: 600 }}>
-                    Option {slide + 1} of {generatedLayouts.length} · {generatedLayouts[slide].design_name} · swipe to compare
-                  </p>
-                )}
 
                 {/* 3D / AR Preview */}
                 {activeLayout && (
-                  <div ref={previewRef} style={{ ...styles.previewPanel, scrollMarginTop: '72px' }} className="fade-in">
+                  <div id="design-preview" role="tabpanel" aria-labelledby={`design-option-${generatedLayouts.indexOf(activeLayout)}`}
+                    style={{ ...styles.previewPanel, marginTop: 8 }}>
                     <div style={styles.previewHeader}>
                       <div style={{ flex: '1 1 260px', minWidth: 0 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px 14px', flexWrap: 'wrap', marginBottom: '6px' }}>
@@ -2516,6 +2633,10 @@ export default function AIGardenDesigner() {
                             <RotateCcw size={14} aria-hidden="true" /> Reset to AI design
                           </button>
                         )}
+                        <button type="button" onClick={() => handleEditInStudio(activeLayout)} style={styles.editBtn(false, touch)}
+                          title="Open this design in the 3D Studio to move, add or swap plants with more tools">
+                          <Box size={14} aria-hidden="true" /> Open in 3D Studio
+                        </button>
                       </span>
                     </div>
 
@@ -2525,29 +2646,13 @@ export default function AIGardenDesigner() {
                       </p>
                     )}
 
-                    {activeLayout.edited && budgetRange?.max > 0 && (() => {
-                      const total = Number(activeLayout.total_cost) || 0;
-                      const min = Number(budgetRange.min) || 0, max = Number(budgetRange.max);
-                      const over = total - max;
-                      const pct = Math.min(100, (total / max) * 100);
-                      return (
-                        <div style={{ margin: '0 0 10px' }} aria-live="polite">
-                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', fontSize: '0.75rem', fontWeight: 700,
-                            color: over > 0 ? '#B45309' : color.muted }}>
-                            <span>{activeLayout.pricing === 'pending' ? 'Updating…' : `₱${total.toLocaleString()}`} of your ₱{min.toLocaleString()}–₱{max.toLocaleString()} budget</span>
-                            {over > 0 && activeLayout.pricing !== 'pending' && <span>₱{Math.round(over).toLocaleString()} over: remove or swap something to bring it back</span>}
-                          </div>
-                          <div role="img" aria-label={`Total ${Math.round(pct)}% of your top budget`}
-                            style={{ position: 'relative', height: 6, borderRadius: 99, background: color.divider, marginTop: 5, overflow: 'hidden' }}>
-                            <div style={{ position: 'absolute', inset: 0, width: `${pct}%`, borderRadius: 99,
-                              background: over > 0 ? '#F59E0B' : color.brand, transition: 'width 0.3s' }} />
-                            {min > 0 && min < max && (
-                              <div style={{ position: 'absolute', top: 0, bottom: 0, left: `${(min / max) * 100}%`, width: 2, background: 'rgba(15,23,42,0.35)' }} />
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })()}
+                    {/* The budget is shown on each option tab; here only what to do when the open one is over it */}
+                    {budgetRange?.max > 0 && activeLayout.pricing !== 'pending' && Number(activeLayout.total_cost) > Number(budgetRange.max) && (
+                      <p role="status" style={{ margin: '0 0 10px', fontSize: '0.75rem', fontWeight: 700, color: '#B45309' }}>
+                        ₱{Math.round(Number(activeLayout.total_cost) - Number(budgetRange.max)).toLocaleString()} over your top budget
+                        of ₱{Number(budgetRange.max).toLocaleString()}: remove or swap something to bring it back.
+                      </p>
+                    )}
 
                     {editPanel?.mode === 'add' && (
                       <EditPicker title="Add to this design" touch={touch} busy={panelBusy} error={panelError}
@@ -2563,6 +2668,47 @@ export default function AIGardenDesigner() {
                         sections={[{ label: 'Similar', options: swapOptions }]} onPick={handleSwap} onClose={() => setEditPanel(null)} costOf={swapCost}
                         emptyText={`No similar ${(swapItem.category || 'plant') === 'plant' ? 'plants' : 'items'} in stock right now. You can remove it or add something else.`} />
                     )}
+
+                    {/* View controls: a row ABOVE the picture, so nothing covers the garden (the year slider, the ground,
+                        lawn, sun and grid used to float on it and hid plants and their cards) */}
+                    <div role="toolbar" aria-label="View" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      gap: '10px 12px', flexWrap: 'wrap', margin: '0 0 10px', position: 'relative', zIndex: 6 }}>
+                      {!(activeView === 'ar' && editingCorners) && (
+                        <GrowthStagePicker value={growthStage} onChange={setGrowthStage} short={phone} inline style={{ flex: '1 1 340px' }} />
+                      )}
+                      {activeView !== 'ar' && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: phone ? 'flex-start' : 'flex-end', marginLeft: phone ? 0 : 'auto' }}>
+                          {canPhotoGround && (
+                            <div role="radiogroup" aria-label="Ground in the 3D view"
+                              style={{ display: 'inline-flex', padding: 3, borderRadius: 999, background: 'rgba(255,255,255,0.92)', boxShadow: '0 1px 4px rgba(0,0,0,0.18)' }}>
+                              {[['design', phone ? 'Design' : 'Design ground'], ['photo', phone ? 'My photo' : 'My yard photo']].map(([key, label]) => (
+                                <button key={key} type="button" role="radio" aria-checked={groundMode === key} onClick={() => setGroundChoice(key)}
+                                  title={key === 'photo' ? 'Your yard photo laid on the ground, under the new plants' : 'The new beds, lawn and paths of this design'}
+                                  style={{ minHeight: touch ? 38 : 28, padding: '0 10px', borderRadius: 999, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                                    fontSize: '0.72rem', fontWeight: 800, background: groundMode === key ? color.brand : 'transparent',
+                                    color: groundMode === key ? '#fff' : '#334155' }}>
+                                  {label}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          {groundMode === 'design' && activeLayout.garden_plan?.lawn && (
+                            <LawnLookSelect value={lawnLook} onChange={setLawnLook} touch={touch} short={phone} />
+                          )}
+                          <SunControl value={sunView} onChange={setSunView} touch={touch} phone={phone} up={false}
+                            facingKnown={surveyFacing(activeLayout.price_ctx?.survey || survey) != null} />
+                          <button type="button" onClick={() => setShowGrid(g => !g)} aria-pressed={showGrid}
+                            title="A 1 m grid over your lot, to judge distances"
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: 6,
+                              minHeight: touch ? 44 : 34, padding: '0 12px', borderRadius: 999, cursor: 'pointer', fontSize: '0.75rem', fontWeight: 800,
+                              fontFamily: 'inherit', border: `1.5px solid ${showGrid ? color.brand : 'rgba(255,255,255,0.9)'}`,
+                              background: showGrid ? '#ECFDF5' : 'rgba(255,255,255,0.92)', color: showGrid ? '#065F46' : '#334155',
+                              boxShadow: '0 1px 4px rgba(0,0,0,0.18)' }}>
+                            <Grid3x3 size={14} aria-hidden="true" /> {phone ? 'Grid' : '1 m grid'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
 
                     <div style={{ borderRadius: '12px', overflow: 'hidden', position: 'relative', height: phone ? 340 : 450 }}>
                       <ThreeGardenCanvas
@@ -2583,6 +2729,8 @@ export default function AIGardenDesigner() {
                         editable
                         onPlantsChange={handlePlantsEdit}
                         growthStage={growthStage}
+                        allowSpecimen={!!(activeLayout.price_ctx?.install ?? install)}
+                        sun={sunView && activeView !== 'ar' ? { hour: sunView.hour, day: SUN_SEASONS.find(s => s.key === sunView.season)?.day } : null}
                         notesByUid={notesByUid}
                         onSwapRequest={(uid) => openPanel({ mode: 'swap', uid })}
                         previewMoves={tidyPreview?.moves || null}
@@ -2593,42 +2741,12 @@ export default function AIGardenDesigner() {
                         photoGround={activeView !== 'ar' && groundMode === 'photo'}
                         onPhotoGround={setPhotoGroundStatus}
                         lawnLook={lawnLook}
+                        compactHover
+                        detailsTarget={phone ? null : detailsEl}
+                        detailsSheet={phone}
+                        onFixRequest={handleFixOne}
+                        fixNote={fixNote}
                       />
-                      {activeView !== 'ar' && (
-                        <div style={{ position: 'absolute', ...(phone ? { bottom: 10 } : { top: 10 }), right: 10, zIndex: 5,   /* phones: the growth picker spans the top */
-                          display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                          {canPhotoGround && (
-                            <div role="radiogroup" aria-label="Ground in the 3D view"
-                              style={{ display: 'inline-flex', padding: 3, borderRadius: 999, background: 'rgba(255,255,255,0.92)', boxShadow: '0 1px 4px rgba(0,0,0,0.18)' }}>
-                              {[['design', phone ? 'Design' : 'Design ground'], ['photo', phone ? 'My photo' : 'My yard photo']].map(([key, label]) => (
-                                <button key={key} type="button" role="radio" aria-checked={groundMode === key} onClick={() => setGroundChoice(key)}
-                                  title={key === 'photo' ? 'Your yard photo laid on the ground, under the new plants' : 'The new beds, lawn and paths of this design'}
-                                  style={{ minHeight: touch ? 38 : 28, padding: '0 10px', borderRadius: 999, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
-                                    fontSize: '0.72rem', fontWeight: 800, background: groundMode === key ? color.brand : 'transparent',
-                                    color: groundMode === key ? '#fff' : '#334155' }}>
-                                  {label}
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                          {groundMode === 'design' && activeLayout.garden_plan?.lawn && (
-                            <LawnLookSelect value={lawnLook} onChange={setLawnLook} touch={touch} short={phone} />
-                          )}
-                          <button type="button" onClick={() => setShowGrid(g => !g)} aria-pressed={showGrid}
-                            title="A 1 m grid over your lot, to judge distances"
-                            style={{ display: 'inline-flex', alignItems: 'center', gap: 6,
-                              minHeight: touch ? 44 : 34, padding: '0 12px', borderRadius: 999, cursor: 'pointer', fontSize: '0.75rem', fontWeight: 800,
-                              fontFamily: 'inherit', border: `1.5px solid ${showGrid ? color.brand : 'rgba(255,255,255,0.9)'}`,
-                              background: showGrid ? '#ECFDF5' : 'rgba(255,255,255,0.92)', color: showGrid ? '#065F46' : '#334155',
-                              boxShadow: '0 1px 4px rgba(0,0,0,0.18)' }}>
-                            <Grid3x3 size={14} aria-hidden="true" /> {phone ? 'Grid' : '1 m grid'}
-                          </button>
-                        </div>
-                      )}
-                      {!(activeView === 'ar' && editingCorners) && (
-                        <GrowthStagePicker value={growthStage} onChange={setGrowthStage} short={phone}
-                          style={{ position: 'absolute', top: 10, left: 10, zIndex: 5 }} />
-                      )}
 
                       {activeView === 'ar' && !imagePreview && (
                         <div style={{
@@ -2652,6 +2770,9 @@ export default function AIGardenDesigner() {
                         </div>
                       )}
                     </div>
+
+                    {/* The clicked plant's details and Turn / Swap / Remove (drawn here by the 3D view; a bottom sheet on phones) */}
+                    <div ref={setDetailsEl} />
 
                     {activeView !== 'ar' && groundMode === 'photo' && photoGroundStatus && photoGroundStatus.state !== 'off' && (
                       <p role="status" style={{ margin: '8px 2px 0', fontSize: '0.75rem', lineHeight: 1.5,
@@ -2788,6 +2909,126 @@ export default function AIGardenDesigner() {
                         )}
                       </div>
                     )}
+
+                    {/* What's in this option and what it costs: the details the old option cards carried */}
+                    {(() => {
+                      const design = activeLayout;
+                      const items = design.plants?.filter(p => !p.is_existing) || [];
+                      const featureIds = new Set(featureItems.map(f => String(f.id)));
+                      const nFeatures = items.filter(p => featureIds.has(String(p.plant_id))).length;
+                      const gcM2 = (design.groundcover || []).reduce((n, g) => n + Number(g.area_sqm || 0), 0);
+                      const rows = plantingSchedule(design, catalog, featureItems);
+                      const open = !!expandedBreakdowns[design.edit_id];
+                      return (
+                        <div style={styles.detailsGrid}>
+                          <section style={styles.detailsCard} aria-labelledby="design-whats-in">
+                            <h4 id="design-whats-in" style={styles.detailsTitle}>What's in this design</h4>
+                            <p style={{ margin: '0 0 8px', fontSize: '0.75rem', color: '#64748B' }}>
+                              {items.length - nFeatures} plants{nFeatures ? ` · ${nFeatures} garden feature${nFeatures > 1 ? 's' : ''}` : ''}{gcM2 ? ` · ${gcM2} m² groundcover` : ''}
+                            </p>
+                            {design.reasoning && (
+                              <p style={{ margin: '0 0 10px', padding: '8px 10px', borderRadius: 8, background: '#F8FAFC', fontSize: '0.78rem', color: '#334155', lineHeight: 1.5 }}>
+                                <strong style={{ color: '#047857' }}>{design.source === 'ai' ? 'Why this design: ' : 'Design approach: '}</strong>{design.reasoning}
+                              </p>
+                            )}
+                            {rows.map(row => (
+                              <div key={row.id} style={styles.plantItem}>
+                                <span style={{ ...styles.plantItemName, display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                                  <PlantThumb item={row.detail} size={24} rounded={6} />
+                                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.name}</span>
+                                </span>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                                  {row.role && <span style={{ fontSize: '0.66rem', fontWeight: 700, color: '#64748B' }}>{row.role}</span>}
+                                  <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#0f172a', minWidth: 30, textAlign: 'right' }}>{row.unit ? `${row.quantity} ${row.unit}` : `× ${row.quantity}`}</span>
+                                </span>
+                              </div>
+                            ))}
+                            {design.adjustments?.length > 0 && (
+                              <div style={{ marginTop: '0.75rem', padding: '8px 10px', borderRadius: '8px', background: '#F1F5F9', fontSize: '0.72rem', color: '#475569', lineHeight: 1.45 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 800, color: '#334155', marginBottom: '2px' }}>
+                                  <Wrench size={11} /> What we adjusted
+                                </div>
+                                {design.adjustments.map((note, ni) => <div key={ni}>• {note}</div>)}
+                              </div>
+                            )}
+                          </section>
+                          <section style={styles.detailsCard} aria-labelledby="design-cost">
+                            <h4 id="design-cost" style={styles.detailsTitle}>Cost estimate</h4>
+                            {design.target_budget && (underUsed(design) ? (
+                              <div style={{ fontSize: '0.75rem', color: '#B45309', fontWeight: 700 }}>
+                                Uses ₱{Number(design.total_cost).toLocaleString()} of ₱{Number(design.target_budget).toLocaleString()} · see why below
+                              </div>
+                            ) : (
+                              <div style={{ fontSize: '0.75rem', color: '#64748B', fontWeight: 600 }}>
+                                Designed for your budget of ₱{Number(design.target_budget).toLocaleString()}
+                              </div>
+                            ))}
+                            {design.cost_breakdown ? (
+                              <div style={{ marginTop: 10 }}>
+                                {(design.cost_breakdown.lines || []).map(line => (
+                                  <div key={line.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '8px', background: line.key === 'plants' ? '#ECFDF5' : '#F8FAFC', marginBottom: '3px' }}>
+                                    <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#334155' }}>{line.label}</span>
+                                    <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#475569', whiteSpace: 'nowrap' }}>₱{Number(line.amount).toLocaleString()}</span>
+                                  </div>
+                                ))}
+                                <div style={{ padding: '10px', borderRadius: '10px', background: '#ECFDF5', border: '1px solid #A7F3D0', marginTop: '6px' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                    <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#047857', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Estimated total</span>
+                                    <span style={{ fontSize: '0.95rem', fontWeight: 800, color: '#0F172A' }}>
+                                      ₱{Number(design.cost_breakdown.low).toLocaleString()}–₱{Number(design.cost_breakdown.high).toLocaleString()}
+                                    </span>
+                                  </div>
+                                  <div style={{ fontSize: '0.68rem', color: '#64748B', marginTop: '3px' }}>Final price confirmed after a site inspection.</div>
+                                </div>
+                              </div>
+                            ) : (
+                              <div style={{ marginTop: 8, fontSize: '1.2rem', fontWeight: 800, color: '#0F172A' }}>≈ ₱{Number(design.total_cost).toLocaleString()}</div>
+                            )}
+                            {design.budget_note && (
+                              <div role="note" style={{ marginTop: '0.6rem', padding: '8px 10px', borderRadius: '8px', fontSize: '0.74rem', lineHeight: 1.45,
+                                ...(underUsed(design) ? { background: '#FFFBEB', border: '1px solid #FDE68A', color: '#78350F' } : { color: '#64748B' }) }}>
+                                <Info size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} />{design.budget_note}
+                              </div>
+                            )}
+                            {(design.plant_breakdown || []).length > 0 && (
+                              <button type="button" onClick={() => toggleBreakdown(design.edit_id)} aria-expanded={open}
+                                style={{ background: 'transparent', border: 'none', color: '#059669', fontSize: '0.78rem', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', padding: '10px 0 0', fontFamily: 'inherit' }}>
+                                {open ? 'Hide itemised prices ▲' : 'Show itemised prices ▼'}
+                              </button>
+                            )}
+                            {open && (
+                              <div style={{ marginTop: '8px', overflowX: 'auto' }} className="fade-in">
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem', textAlign: 'left' }}>
+                                  <thead>
+                                    <tr style={{ borderBottom: '1.5px solid #E2E8F0' }}>
+                                      <th style={{ padding: '6px 4px', color: '#94A3B8', fontWeight: 700 }}>Item</th>
+                                      <th style={{ padding: '6px 4px', color: '#94A3B8', fontWeight: 700, textAlign: 'center' }}>Qty</th>
+                                      <th style={{ padding: '6px 4px', color: '#94A3B8', fontWeight: 700, textAlign: 'right' }}>Unit</th>
+                                      <th style={{ padding: '6px 4px', color: '#94A3B8', fontWeight: 700, textAlign: 'right' }}>Subtotal</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {(design.plant_breakdown || []).map((item, itemIdx) => (
+                                      <tr key={itemIdx} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                                        <td style={{ padding: '8px 4px', fontWeight: 600, color: '#1E293B' }}><span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><PlantThumb item={catalog.find(i => String(i.id) === String(item.plant_id)) || catalog.find(i => i.name === item.name)} size={22} rounded={5} /> {item.name}</span></td>
+                                        <td style={{ padding: '8px 4px', textAlign: 'center', color: '#059669', fontWeight: 700 }}>{item.quantity}{item.unit ? ` ${item.unit}` : ''}</td>
+                                        <td style={{ padding: '8px 4px', textAlign: 'right', color: '#64748B' }}>₱{Number(item.unit_price).toLocaleString()}{item.unit ? ` / ${item.unit}` : ''}</td>
+                                        <td style={{ padding: '8px 4px', textAlign: 'right', fontWeight: 700, color: '#0F172A' }}>₱{Number(item.subtotal).toLocaleString()}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                            {(Number(lotWidth) > LOT_MAX || Number(lotLength) > LOT_MAX) && (
+                              <p style={{ margin: '8px 0 0', fontSize: '0.7rem', color: '#92400E', lineHeight: 1.4 }}>
+                                The 3D Studio handles up to {LOT_MAX} × {LOT_MAX} m: it opens on a {LOT_MAX} m lot and offers to move plants beyond it inside.
+                              </p>
+                            )}
+                          </section>
+                        </div>
+                      );
+                    })()}
 
                     {activeLayout.pricing === 'error' && (
                       <p role="alert" style={{ margin: '10px 0 0', fontSize: '0.8rem', fontWeight: 600, color: '#B91C1C', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>

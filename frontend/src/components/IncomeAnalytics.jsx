@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowDownRight, ArrowUpRight, AlertTriangle, Star, Table2, BarChart3, Download } from 'lucide-react';
+import { ArrowDownRight, ArrowUpRight, AlertTriangle, Star, Table2, ChartLine, Download } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { API_BASE_URL as API_ROOT } from '../config';
 
@@ -15,10 +15,10 @@ const API_BASE_URL = API_ROOT;
    every chart, so identity never changes between views.
    ═══════════════════════════════════════════════════════════════════════ */
 
-// partial: the same hue at 55% on white, for a period the range only partly covers (first / last bar)
+// short: the direct label at the end of a trend line (the legend / share bar carries the full name)
 const SERIES = {
-  landscape: { key: 'landscape', label: 'Landscape services', color: '#2a78d6', track: '#cde2fb', partial: '#8ab5e8' },
-  ecommerce: { key: 'ecommerce', label: 'E-commerce', color: '#eb6834', track: '#fbdccf', partial: '#f4ac8f' },
+  landscape: { key: 'landscape', label: 'Landscape services', short: 'Landscape', color: '#2a78d6', track: '#cde2fb' },
+  ecommerce: { key: 'ecommerce', label: 'E-commerce', short: 'E-commerce', color: '#eb6834', track: '#fbdccf' },
 };
 
 const RANGES = [
@@ -112,8 +112,32 @@ function TooltipRows({ title, rows }) {
   );
 }
 
+/* ── Sparkline: the shape of a total over the range, in a stat tile ───
+   Full periods only: a partial first / current period would read as a slump. Gray line, the
+   latest full period as an ink dot. The trend chart below has the values and the hover. */
+function Sparkline({ values, label }) {
+  const [ref, width] = useWidth();
+  const h = 36;
+  const pad = 4;
+  const max = Math.max(...values, 0) || 1;
+  const x = (i) => pad + (i / (values.length - 1)) * (width - pad * 2);
+  const y = (v) => pad + (h - pad * 2) * (1 - v / max);
+  const d = values.map((v, i) => `${i ? 'L' : 'M'}${x(i)},${y(v)}`).join(' ');
+  const last = values.length - 1;
+  return (
+    <div ref={ref} className="ia-spark">
+      {width > 0 && (
+        <svg width={width} height={h} role="img" aria-label={label}>
+          <path d={d} fill="none" stroke="var(--ia-muted)" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+          <circle cx={x(last)} cy={y(values[last])} r="3.5" fill="var(--ia-text)" stroke="var(--ia-surface)" strokeWidth="2" />
+        </svg>
+      )}
+    </div>
+  );
+}
+
 /* ── Stat tile ──────────────────────────────────────────────────────── */
-function StatTile({ label, value, delta, compare, sub, swatch, hero = false, link = null }) {
+function StatTile({ label, value, delta, compare, sub, swatch, hero = false, link = null, trend = null }) {
   const hasDelta = delta !== null && delta !== undefined;
   const up = hasDelta && delta >= 0;
   return (
@@ -123,6 +147,7 @@ function StatTile({ label, value, delta, compare, sub, swatch, hero = false, lin
         {label}
       </div>
       <div className="ia-tile-value">{value}</div>
+      {trend && trend.values.length > 1 && <Sparkline values={trend.values} label={trend.label} />}
       {hasDelta && compare && (
         <div className={`ia-delta ${up ? 'ia-up' : 'ia-down'}`}>
           {up ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
@@ -170,10 +195,16 @@ function ShareBar({ landscape, ecommerce, tooltip, title = 'Share of earned inco
   );
 }
 
-/* ── Trend: grouped columns per period, one shared y-axis ─────────────
-   series: two { key, label, color, partial } (key = the field on each period row). Used for earned
+/* ── Trend: two lines over time, one shared y-axis from zero ──────────
+   series: two { key, label, short, color } (key = the field on each period row). Used for earned
    income, collected money and demand counts; the colors always follow the stream (blue = landscape,
-   orange = shop). legend: name the series under the chart when no share bar above does it. */
+   orange = shop). legend: name the series under the chart when no share bar above does it.
+   - Straight segments, never smoothed: earned income is lumpy (a project counts in full on
+     sign-off) and a curve would invent values between periods.
+   - A period the range only partly covers (often the first and the current one) gets a hollow
+     point and dashed segments: fewer days, not a drop. The current week can hold ₱0 on a Monday.
+   - One shared axis: landscape is ~4× the shop, and a second axis would hide that.
+   - Hover/focus a period: a crosshair snaps to it and one tooltip lists both series. */
 const INCOME_SERIES = [SERIES.landscape, SERIES.ecommerce];
 
 function TrendChart({ data, granularity, tooltip, series = INCOME_SERIES, fmt = peso, fmtAxis = pesoCompact,
@@ -182,23 +213,34 @@ function TrendChart({ data, granularity, tooltip, series = INCOME_SERIES, fmt = 
   const [hovered, setHovered] = useState(null);
   const [a, b] = series;
   const height = 280;
-  const m = { top: 12, right: 8, bottom: 30, left: 52 };
+  const n = data.length;
+  const roomForEndLabels = width >= 480;
+  const m = { top: 14, right: roomForEndLabels ? 84 : 12, bottom: 30, left: 52 };
   const plotW = Math.max(0, width - m.left - m.right);
   const plotH = height - m.top - m.bottom;
   const { max, ticks } = niceScale(Math.max(0, ...data.flatMap((d) => [d[a.key], d[b.key]])), 4, integer);
-  const band = data.length ? plotW / data.length : 0;
-  const barW = Math.max(2, Math.min(24, (band * 0.7 - 2) / 2));
+  const band = n ? plotW / n : 0;
+  const x = (i) => m.left + band * (i + 0.5);
   const y = (v) => m.top + plotH - (v / max) * plotH;
   const labelEvery = Math.max(1, Math.ceil(56 / Math.max(band, 1)));
 
-  // Column with a 4px rounded data-end and a square baseline
-  const column = (x, v) => {
-    const top = y(v);
-    const h = m.top + plotH - top;
-    if (h <= 0) return null;
-    const r = Math.min(4, h, barW / 2);
-    return `M${x},${m.top + plotH} V${top + r} Q${x},${top} ${x + r},${top} H${x + barW - r} Q${x + barW},${top} ${x + barW},${top + r} V${m.top + plotH} Z`;
+  // The line as runs of solid and dashed segments (dashed where either end is a partial period)
+  const runs = (key) => {
+    const out = [];
+    for (let i = 0; i < n - 1; i += 1) {
+      const dashed = !!(data[i].partial || data[i + 1].partial);
+      const last = out[out.length - 1];
+      const to = `L${x(i + 1)},${y(data[i + 1][key])}`;
+      if (last && last.dashed === dashed) last.d += ` ${to}`;
+      else out.push({ dashed, d: `M${x(i)},${y(data[i][key])} ${to}` });
+    }
+    return out;
   };
+
+  // Direct labels at the line ends, only when they can't be mistaken for each other
+  // (lines that end close together fall back to the legend + tooltip, never nudged apart)
+  const endY = n ? [y(data[n - 1][a.key]), y(data[n - 1][b.key])] : [0, 0];
+  const showEndLabels = roomForEndLabels && n > 1 && Math.abs(endY[0] - endY[1]) >= 16;
 
   const hasPartial = data.some((d) => d.partial);
   const tipFor = (d) => (
@@ -219,22 +261,43 @@ function TrendChart({ data, granularity, tooltip, series = INCOME_SERIES, fmt = 
               <text x={m.left - 8} y={y(t)} dy="0.32em" textAnchor="end" className="ia-axis-text">{fmtAxis(t)}</text>
             </g>
           ))}
+          {data.map((d, i) => i % labelEvery === 0 && (
+            <text key={d.period} x={x(i)} y={height - 10} textAnchor="middle" className="ia-axis-text">
+              {periodLabel(d.period, granularity, false, i === 0 || parseDay(d.period).getMonth() === 0)}
+            </text>
+          ))}
+
+          {/* Crosshair: snaps to the hovered period */}
+          {hovered !== null && (
+            <line x1={x(hovered)} x2={x(hovered)} y1={m.top} y2={m.top + plotH} stroke="var(--ia-axis)" strokeWidth="1" />
+          )}
+
+          {/* Lines: shop first so the landscape line sits on top where they cross */}
+          {[b, a].map((s) => runs(s.key).map((r, k) => (
+            <path key={`${s.key}-${k}`} d={r.d} fill="none" stroke={s.color} strokeWidth="2"
+              strokeLinejoin="round" strokeLinecap="round" strokeDasharray={r.dashed ? '4 5' : undefined} />
+          )))}
+
+          {/* Points: partial periods always (hollow), every point on hover, a lone point always */}
+          {[b, a].map((s) => data.map((d, i) => {
+            const active = hovered === i;
+            if (!active && !d.partial && n > 1) return null;
+            return (
+              <circle key={`${s.key}-${d.period}`} cx={x(i)} cy={y(d[s.key])} r={active ? 5 : 4}
+                fill={d.partial ? 'var(--ia-surface)' : s.color}
+                stroke={d.partial ? s.color : 'var(--ia-surface)'} strokeWidth="2" />
+            );
+          }))}
+
+          {showEndLabels && [a, b].map((s, k) => (
+            <text key={s.key} x={x(n - 1) + 10} y={endY[k]} dy="0.32em" className="ia-end-label">{s.short ?? s.label}</text>
+          ))}
+
           {data.map((d, i) => {
             const gx = m.left + i * band;
-            const x1 = gx + band / 2 - barW - 1;
-            const x2 = gx + band / 2 + 1;
             return (
               <g key={d.period}>
-                {hovered === i && <rect x={gx} y={m.top} width={band} height={plotH} fill="var(--ia-hover)" />}
-                {/* A period the range only partly covers is drawn lighter: it isn't a slump, it's fewer days */}
-                {d[a.key] > 0 && <path d={column(x1, d[a.key])} fill={d.partial ? a.partial : a.color} />}
-                {d[b.key] > 0 && <path d={column(x2, d[b.key])} fill={d.partial ? b.partial : b.color} />}
-                {i % labelEvery === 0 && (
-                  <text x={gx + band / 2} y={height - 10} textAnchor="middle" className="ia-axis-text">
-                    {periodLabel(d.period, granularity, false, i === 0 || parseDay(d.period).getMonth() === 0)}
-                  </text>
-                )}
-                {/* Hit target: the whole period band, not just the painted columns */}
+                {/* Hit target: the whole period band, so the reader aims at a date, not a 2px line */}
                 <rect x={gx} y={m.top} width={band} height={plotH} fill="transparent" tabIndex={0}
                   aria-label={`${periodLabel(d.period, granularity, true)}${d.partial ? ` (${partialNote(d)})` : ''}: ${a.label} ${fmt(d[a.key])}, ${b.label} ${fmt(d[b.key])}`}
                   onPointerMove={(e) => { setHovered(i); tooltip.show(e, tipFor(d)); }}
@@ -249,14 +312,16 @@ function TrendChart({ data, granularity, tooltip, series = INCOME_SERIES, fmt = 
       {(legend || hasPartial) && (
         <div className="ia-legend">
           {legend && series.map((s) => (
-            <span key={s.key} className="ia-legend-item"><span className="ia-swatch" style={{ background: s.color }} />{s.label}</span>
+            <span key={s.key} className="ia-legend-item"><span className="ia-line-key" style={{ background: s.color }} />{s.label}</span>
           ))}
-          {/* Explains the lighter bars */}
+          {/* Explains the dashed segments and hollow points */}
           {hasPartial && (
             <span className="ia-legend-item ia-muted">
-              <span className="ia-swatch" style={{ background: a.partial }} />
-              <span className="ia-swatch" style={{ background: b.partial, marginLeft: -4 }} />
-              Lighter bars: only part of that {granularity} is in the range (fewer days, not a drop)
+              <svg width="26" height="10" aria-hidden="true">
+                <line x1="1" x2="17" y1="5" y2="5" stroke="var(--ia-muted)" strokeWidth="2" strokeDasharray="4 5" strokeLinecap="round" />
+                <circle cx="21" cy="5" r="3.5" fill="var(--ia-surface)" stroke="var(--ia-muted)" strokeWidth="2" />
+              </svg>
+              Dashed / hollow: only part of that {granularity} is in the range (fewer days, not a drop)
             </span>
           )}
         </div>
@@ -463,8 +528,8 @@ const MEASURES = {
 /* ── Demand: requests and orders by the day they were made ─────────── */
 // Requests are landscape demand (blue), orders are shop demand (orange): identity follows the stream
 const DEMAND_SERIES = [
-  { ...SERIES.landscape, key: 'requests', label: 'Booking requests' },
-  { ...SERIES.ecommerce, key: 'orders', label: 'Shop orders' },
+  { ...SERIES.landscape, key: 'requests', label: 'Booking requests', short: 'Requests' },
+  { ...SERIES.ecommerce, key: 'orders', label: 'Shop orders', short: 'Orders' },
 ];
 // What became of the requests: one hue, ordinal (validated --ordinal), cancelled in neutral gray
 const OUTCOMES = [
@@ -514,7 +579,7 @@ function DemandCard({ data, compare, tooltip }) {
         </div>
         <div className="ia-actions">
           <button className="ia-ghost-btn" onClick={() => setShowTable((v) => !v)}>
-            {showTable ? <><BarChart3 size={14} /> View chart</> : <><Table2 size={14} /> View table</>}
+            {showTable ? <><ChartLine size={14} /> View chart</> : <><Table2 size={14} /> View table</>}
           </button>
         </div>
       </div>
@@ -570,6 +635,15 @@ export default function IncomeAnalytics() {
   }, [authTokens, range]);
 
   const rangeMeta = RANGES.find((r) => r.key === range);
+  // Tile sparklines: totals of both streams over the full periods of the range
+  const sparkFor = (keyA, keyB, what) => {
+    if (!data) return null;
+    const full = data.trend.filter((d) => !d.partial);
+    return {
+      values: full.map((d) => d[keyA] + d[keyB]),
+      label: `${what} per ${data.granularity}, ${full.length} full ${data.granularity}s in the range`,
+    };
+  };
 
   return (
     <div className="ia-root">
@@ -605,9 +679,11 @@ export default function IncomeAnalytics() {
           <div className="ia-tiles">
             <StatTile hero label="Earned"
               value={peso(data.landscape.earned + data.ecommerce.earned)}
+              trend={sparkFor('landscape', 'ecommerce', 'Earned income')}
               sub={`${data.landscape.earned_count + data.ecommerce.earned_count} signed-off jobs & paid orders, counted in full whether paid or not`} />
             <StatTile hero label="Collected"
-              value={peso(data.collected.total)} delta={data.collected.total_change_pct} compare={rangeMeta.compare}
+              value={peso(data.collected.total)} trend={sparkFor('landscape_collected', 'ecommerce_collected', 'Money collected')}
+              delta={data.collected.total_change_pct} compare={rangeMeta.compare}
               sub={`Money actually received, net of refunds · ${peso(data.collected.landscape.amount)} projects · ${peso(data.collected.ecommerce.amount)} shop`} />
             <StatTile label="Owed on finished jobs · now"
               value={peso(data.owed.finished)}
@@ -663,7 +739,7 @@ export default function IncomeAnalytics() {
                   ))}
                 </div>
                 <button className="ia-ghost-btn" onClick={() => setShowTable((v) => !v)}>
-                  {showTable ? <><BarChart3 size={14} /> View chart</> : <><Table2 size={14} /> View table</>}
+                  {showTable ? <><ChartLine size={14} /> View chart</> : <><Table2 size={14} /> View table</>}
                 </button>
                 <button className="ia-ghost-btn" onClick={() => exportAnalyticsCsv(data)} disabled={refetching}
                   title="Download the summary, comparison table and breakdowns as CSV">
@@ -801,6 +877,12 @@ const IA_STYLES = `
 .ia-legend-item strong { color: var(--ia-text); }
 
 .ia-axis-text { font-size: 11px; fill: var(--ia-muted); font-variant-numeric: tabular-nums; }
+/* A focused period shows the crosshair, points and tooltip, so no extra browser box around the band */
+.ia-root svg rect[tabindex]:focus { outline: none; }
+.ia-end-label { font-size: 12px; font-weight: 600; fill: var(--ia-text-2); }
+.ia-line-key { width: 14px; height: 2px; border-radius: 1px; display: inline-block; flex-shrink: 0; }
+.ia-spark { width: 100%; max-width: 220px; margin: 2px 0 6px; }
+.ia-spark svg { display: block; overflow: visible; }
 .ia-ghost-btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--ia-border);
   background: #fff; color: var(--ia-text-2); font-size: 12px; font-weight: 600; padding: 6px 12px;
   border-radius: 8px; cursor: pointer; }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Minus, Plus, Sparkles, Box, ArrowRight, Info } from 'lucide-react';
+import { Minus, Plus, Sparkles, Box, ArrowRight, Info, Calculator } from 'lucide-react';
+import SectionEyebrow from './SectionEyebrow';
 import { getQuickEstimate } from '../services/api';
 import { loadStudioDraft, saveStudioDraft, saveAiPrefill } from '../services/guestSession';
 import { prefetchStudio } from '../services/prefetch';
@@ -184,7 +185,7 @@ export default function EstimateTeaser() {
 
       <div className="gs-container">
         <div className="gs-section-header">
-          <div className="gs-section-eyebrow" style={{ marginBottom: 16 }}>Instant estimate</div>
+          <SectionEyebrow icon={Calculator} label="Instant estimate" center />
           <h2 className="gs-section-title">What would your garden cost?</h2>
           <p style={{ fontSize: 17, color: '#64748b', maxWidth: 540, margin: '12px auto 0', lineHeight: 1.65 }}>
             Enter your yard size and get a price range in seconds, worked out from our real plant prices and rates.
